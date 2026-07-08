@@ -1,0 +1,30 @@
+steps:
+
+# بناء صورة Docker
+- name: 'gcr.io/cloud-builders/docker'
+  args:
+    - 'build'
+    - '-t'
+    - 'gcr.io/$PROJECT_ID/kaaseb-world'
+    - '.'
+
+# رفع الصورة إلى Google Container Registry
+- name: 'gcr.io/cloud-builders/docker'
+  args:
+    - 'push'
+    - 'gcr.io/$PROJECT_ID/kaaseb-world'
+
+# نشرها على Cloud Run
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+  entrypoint: gcloud
+  args:
+    - 'run'
+    - 'deploy'
+    - 'kaaseb-world'
+    - '--image'
+    - 'gcr.io/$PROJECT_ID/kaaseb-world'
+    - '--region'
+    - 'me-central1'
+    - '--platform'
+    - 'managed'
+    - '--allow-unauthenticated'
