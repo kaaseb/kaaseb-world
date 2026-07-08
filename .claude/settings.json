@@ -1,0 +1,50 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(*)",
+      "Read(*)",
+      "Edit(*)",
+      "Write(*)",
+      "WebFetch(*)",
+      "WebSearch(*)",
+      "Bash(curl -s *)",
+      "Bash(curl -sI *)",
+      "Bash(curl -s)",
+      "Bash(npx tsc *)",
+      "Bash(npx tsc)",
+      "Bash(identify /Users/elzubair/Desktop/Clients/Ghassl-world/public/logo.jpg)",
+      "Read(//private/tmp/**)",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); [print\\(u.get\\('email'\\),'| id:',u.get\\('id'\\),'| confirmed:',u.get\\('email_confirmed_at'\\),'| banned:',u.get\\('banned_until'\\),'| created:',u.get\\('created_at'\\)\\) for u in d.get\\('users',[]\\)]\")",
+      "Bash(python3 -m json.tool)",
+      "Bash(curl -s -X POST https://kysojiumiwuqvcqakejq.supabase.co/auth/v1/admin/users -H 'apikey: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt5c29qaXVtaXd1cXZjcWFrZWpxIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NTA2NzgwNCwiZXhwIjoyMDkwNjQzODA0fQ.ZRWlfini7BdCQVPMyHcAz6ssqt2_VrNFIMbjH7J7yvQ' -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt5c29qaXVtaXd1cXZjcWFrZWpxIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NTA2NzgwNCwiZXhwIjoyMDkwNjQzODA0fQ.ZRWlfini7BdCQVPMyHcAz6ssqt2_VrNFIMbjH7J7yvQ' -H 'Content-Type: application/json' -d '{\"email\":\"it@ghassl.com\",\"password\":\"Elzubair1\",\"email_confirm\":true,\"user_metadata\":{\"role\":\"super_admin\",\"full_name\":\"IT Admin\"}}')",
+      "Read(//private/var/folders/**)",
+      "Read(//Users/elzubair/Library/**)",
+      "Read(//Users/elzubair/.claude/**)",
+      "Read(//Users/elzubair/Desktop/**)",
+      "Read(//Users/elzubair/Downloads/**)",
+      "Bash(tee /tmp/tsc.txt)",
+      "Read(//tmp/**)",
+      "Bash(psql --version)",
+      "Bash(brew --prefix)",
+      "Read(//opt/homebrew/bin/**)",
+      "Read(//usr/local/bin/**)",
+      "Bash(curl -s 'https://kysojiumiwuqvcqakejq.supabase.co/rest/v1/washhouses?select=id&limit=1' -H 'apikey: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt5c29qaXVtaXd1cXZjcWFrZWpxIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NTA2NzgwNCwiZXhwIjoyMDkwNjQzODA0fQ.ZRWlfini7BdCQVPMyHcAz6ssqt2_VrNFIMbjH7J7yvQ' -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt5c29qaXVtaXd1cXZjcWFrZWpxIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NTA2NzgwNCwiZXhwIjoyMDkwNjQzODA0fQ.ZRWlfini7BdCQVPMyHcAz6ssqt2_VrNFIMbjH7J7yvQ')",
+      "Bash(curl -s -o /dev/null -w '%{http_code}' 'https://kysojiumiwuqvcqakejq.supabase.co/rest/v1/__TRACKED_VAR__?select=id&limit=1' -H 'apikey: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt5c29qaXVtaXd1cXZjcWFrZWpxIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NTA2NzgwNCwiZXhwIjoyMDkwNjQzODA0fQ.ZRWlfini7BdCQVPMyHcAz6ssqt2_VrNFIMbjH7J7yvQ' -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt5c29qaXVtaXd1cXZjcWFrZWpxIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NTA2NzgwNCwiZXhwIjoyMDkwNjQzODA0fQ.ZRWlfini7BdCQVPMyHcAz6ssqt2_VrNFIMbjH7J7yvQ')",
+      "Bash(curl -s 'https://kysojiumiwuqvcqakejq.supabase.co/rest/v1/profiles?select=id&limit=1' -H 'apikey: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt5c29qaXVtaXd1cXZjcWFrZWpxIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NTA2NzgwNCwiZXhwIjoyMDkwNjQzODA0fQ.ZRWlfini7BdCQVPMyHcAz6ssqt2_VrNFIMbjH7J7yvQ' -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt5c29qaXVtaXd1cXZjcWFrZWpxIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NTA2NzgwNCwiZXhwIjoyMDkwNjQzODA0fQ.ZRWlfini7BdCQVPMyHcAz6ssqt2_VrNFIMbjH7J7yvQ')",
+      "Bash(curl -s -X POST https://api.supabase.com/v1/projects/kysojiumiwuqvcqakejq/database/query -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt5c29qaXVtaXd1cXZjcWFrZWpxIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NTA2NzgwNCwiZXhwIjoyMDkwNjQzODA0fQ.ZRWlfini7BdCQVPMyHcAz6ssqt2_VrNFIMbjH7J7yvQ' -H 'Content-Type: application/json' -d '{\"query\":\"SELECT 1;\"}' -w '\\\\nHTTP:%{http_code}\\\\n')",
+      "Bash(curl -s https://kysojiumiwuqvcqakejq.supabase.co/rest/v1/ -H 'apikey: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt5c29qaXVtaXd1cXZjcWFrZWpxIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NTA2NzgwNCwiZXhwIjoyMDkwNjQzODA0fQ.ZRWlfini7BdCQVPMyHcAz6ssqt2_VrNFIMbjH7J7yvQ' -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt5c29qaXVtaXd1cXZjcWFrZWpxIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NTA2NzgwNCwiZXhwIjoyMDkwNjQzODA0fQ.ZRWlfini7BdCQVPMyHcAz6ssqt2_VrNFIMbjH7J7yvQ')",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); tables=list\\(d.get\\('definitions',{}\\).keys\\(\\)\\); washhouse=[t for t in tables if 'washhouse' in t.lower\\(\\)]; print\\('washhouse tables:', washhouse\\); print\\('total tables:', len\\(tables\\)\\)\")",
+      "Bash(curl -s 'https://kysojiumiwuqvcqakejq.supabase.co/rest/v1/__TRACKED_VAR__?select=id&limit=1' -H 'apikey: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt5c29qaXVtaXd1cXZjcWFrZWpxIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NTA2NzgwNCwiZXhwIjoyMDkwNjQzODA0fQ.ZRWlfini7BdCQVPMyHcAz6ssqt2_VrNFIMbjH7J7yvQ' -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt5c29qaXVtaXd1cXZjcWFrZWpxIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NTA2NzgwNCwiZXhwIjoyMDkwNjQzODA0fQ.ZRWlfini7BdCQVPMyHcAz6ssqt2_VrNFIMbjH7J7yvQ')",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); tables=sorted\\(d.get\\('definitions',{}\\).keys\\(\\)\\); wh=[t for t in tables if 'wash' in t.lower\\(\\)]; print\\('washhouse tables found:', wh\\); print\\('total tables:', len\\(tables\\)\\)\")",
+      "Bash(python3 -c ' *)",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); [print\\(u.get\\('email'\\),'| id:',u.get\\('id'\\)\\) for u in d.get\\('users',[]\\)]\")",
+      "Bash(curl -s -X PUT https://tnenloymzcndfccuboff.supabase.co/auth/v1/admin/users/b8800175-5ee6-490f-b688-a767f784c296 -H 'apikey: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRuZW5sb3ltemNuZGZjY3Vib2ZmIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NjY4NjgyMCwiZXhwIjoyMDkyMjYyODIwfQ.gMpFNYtZCv8u-9m_xHWdVli4unf64jHY3muYI7Q6Oc8' -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRuZW5sb3ltemNuZGZjY3Vib2ZmIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NjY4NjgyMCwiZXhwIjoyMDkyMjYyODIwfQ.gMpFNYtZCv8u-9m_xHWdVli4unf64jHY3muYI7Q6Oc8' -H 'Content-Type: application/json' -d '{\"password\":\"Ghassl2030*\",\"email_confirm\":true}')",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); tables=sorted\\(d.get\\('definitions',{}\\).keys\\(\\)\\); print\\('total:', len\\(tables\\)\\); print\\('has washhouses:', 'washhouses' in tables\\); print\\('has profiles:', 'profiles' in tables\\); print\\(tables[:20]\\)\")"
+    ],
+    "additionalDirectories": [
+      "/Users/elzubair/Desktop/Clients/Ghassl-world/src/app/(dashboard)/washhouses",
+      "/Users/elzubair/Desktop/Clients/Ghassl-world/src",
+      "/tmp"
+    ]
+  }
+}

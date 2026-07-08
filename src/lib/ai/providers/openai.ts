@@ -1,0 +1,174 @@
+// OpenAI implementation of AiProvider.
+//
+//   • generateStructured() → Responses API. It's the only OpenAI surface that
+//     ingests PDFs (input_file) alongside images and text in one call, and it
+//     supports strict structured outputs (text.format json_schema), so the
+//     model is guaranteed to return our schema.
+//   • chatWithTools()      → Chat Completions. Text-only with function calling;
+//     the classic, well-trodden tool loop.
+
+import OpenAI from 'openai'
+import type {
+  AiFile,
+  AiProvider,
+  ChatRequest,
+  StructuredRequest,
+} from '../provider'
+
+interface OpenAiProviderOpts {
+  apiKey: string
+  chatModel: string
+  documentModel: string
+}
+
+// GPT-5.x and the o-series are reasoning models: they REJECT `temperature`
+// ("Unsupported parameter") and are steered with `reasoning.effort` instead.
+// gpt-4o and earlier are the opposite. We branch on the model id so either
+// family works without the caller knowing which is configured.
+function isReasoningModel(model: string): boolean {
+  return /^(gpt-5|o\d)/i.test(model)
+}
+
+// Derive a safe filename (with extension) for an input_file block from the
+// caption ("BOQ: floor.pdf" → "floor.pdf"). OpenAI uses the extension to route
+// the parser, so we keep it intact.
+function filenameFromLabel(label: string, fallbackExt: string): string {
+  const after = label.includes(':') ? label.slice(label.indexOf(':') + 1) : label
+  const name = after.trim().replace(/[^\w.\-]+/g, '_') || `file.${fallbackExt}`
+  return /\.[a-z0-9]+$/i.test(name) ? name : `${name}.${fallbackExt}`
+}
+
+// Turn our provider-agnostic files into Responses API content blocks.
+function fileToBlocks(f: AiFile): Array<Record<string, unknown>> {
+  if (f.mimeType.startsWith('image/')) {
+    return [
+      { type: 'input_text', text: f.label },
+      { type: 'input_image', image_url: `data:${f.mimeType};base64,${f.data}` },
+    ]
+  }
+  if (f.mimeType === 'application/pdf') {
+    return [
+      { type: 'input_text', text: f.label },
+      {
+        type: 'input_file',
+        filename: filenameFromLabel(f.label, 'pdf'),
+        file_data: `data:application/pdf;base64,${f.data}`,
+      },
+    ]
+  }
+  if (f.mimeType.startsWith('text/')) {
+    // CSV / plain text — inline it directly so the model reads the table.
+    const text = Buffer.from(f.data, 'base64').toString('utf8')
+    return [{ type: 'input_text', text: `${f.label}\n${text}` }]
+  }
+  // Unknown (doc/docx/octet-stream) — best-effort as a generic file input.
+  return [
+    { type: 'input_text', text: f.label },
+    {
+      type: 'input_file',
+      filename: filenameFromLabel(f.label, 'bin'),
+      file_data: `data:${f.mimeType};base64,${f.data}`,
+    },
+  ]
+}
+
+export class OpenAiProvider implements AiProvider {
+  readonly id = 'openai' as const
+  private client: OpenAI
+  private chatModel: string
+  private documentModel: string
+
+  constructor(opts: OpenAiProviderOpts) {
+    this.client = new OpenAI({ apiKey: opts.apiKey })
+    this.chatModel = opts.chatModel
+    this.documentModel = opts.documentModel
+  }
+
+  async generateStructured<T = unknown>(req: StructuredRequest): Promise<T> {
+    const content: Array<Record<string, unknown>> = []
+    for (const f of req.files) content.push(...fileToBlocks(f))
+    content.push({ type: 'input_text', text: req.userText })
+
+    // Reasoning models (gpt-5.x / o-series) take reasoning.effort and reject
+    // temperature; everything else takes temperature. Sending the wrong one is
+    // a hard 400, so we pick exactly one based on the configured model.
+    const tuning = isReasoningModel(this.documentModel)
+      ? { reasoning: { effort: req.reasoningEffort ?? 'high' } }
+      : { temperature: req.temperature ?? 0.1 }
+
+    const res = await this.client.responses.create({
+      model: this.documentModel,
+      instructions: req.systemInstruction,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      input: [{ role: 'user', content }] as any,
+      ...tuning,
+      text: {
+        format: {
+          type: 'json_schema',
+          name: req.schemaName,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          schema: req.schema as any,
+          strict: true,
+        },
+      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any)
+
+    const raw = (res.output_text || '').trim() || '{}'
+    try {
+      return JSON.parse(raw) as T
+    } catch (e) {
+      throw new Error(`OpenAI returned non-JSON: ${(e as Error).message}\n${raw.slice(0, 400)}`)
+    }
+  }
+
+  async chatWithTools(req: ChatRequest): Promise<string> {
+    const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
+      { role: 'system', content: req.systemInstruction },
+      ...req.history.map((h) => ({ role: h.role, content: h.content }) as OpenAI.Chat.ChatCompletionMessageParam),
+    ]
+
+    const tools: OpenAI.Chat.ChatCompletionTool[] = req.tools.map((t) => ({
+      type: 'function',
+      function: { name: t.name, description: t.description, parameters: t.parameters },
+    }))
+
+    const maxHops = req.maxToolHops ?? 6
+    let lastText = ''
+
+    for (let hop = 0; hop < maxHops; hop++) {
+      const res = await this.client.chat.completions.create({
+        model: this.chatModel,
+        messages,
+        tools,
+        tool_choice: 'auto',
+      })
+
+      const msg = res.choices[0]?.message
+      if (!msg) break
+      messages.push(msg)
+      lastText = msg.content ?? ''
+
+      const calls = msg.tool_calls ?? []
+      if (calls.length === 0) return lastText
+
+      for (const call of calls) {
+        if (call.type !== 'function') continue
+        let result: unknown
+        try {
+          const args = call.function.arguments ? JSON.parse(call.function.arguments) : {}
+          result = await req.executeTool(call.function.name, args as Record<string, unknown>)
+        } catch (e) {
+          result = { error: e instanceof Error ? e.message : String(e) }
+        }
+        messages.push({
+          role: 'tool',
+          tool_call_id: call.id,
+          content: JSON.stringify(result ?? null),
+        })
+      }
+    }
+
+    return lastText
+  }
+}
