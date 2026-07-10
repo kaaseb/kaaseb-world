@@ -11,6 +11,12 @@ FROM node:20-alpine AS builder
 
 WORKDIR /app
 
+ARG NEXT_PUBLIC_SUPABASE_URL
+ARG NEXT_PUBLIC_SUPABASE_ANON_KEY
+
+ENV NEXT_PUBLIC_SUPABASE_URL=$NEXT_PUBLIC_SUPABASE_URL
+ENV NEXT_PUBLIC_SUPABASE_ANON_KEY=$NEXT_PUBLIC_SUPABASE_ANON_KEY
+
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
@@ -28,6 +34,6 @@ COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/package.json ./package.json
 
-EXPOSE 8000
+EXPOSE 8080
 
-CMD ["npm", "start"]
+CMD ["sh", "-c", "npm start -- --hostname 0.0.0.0 --port ${PORT:-8080}"]
