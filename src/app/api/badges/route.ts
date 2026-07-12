@@ -27,7 +27,6 @@ export async function GET() {
     const [
       tasksCompleted,
       dailyTasksCompleted,
-      postsCount,
       ideasCount,
       ideasImplemented,
       votesCount,
@@ -40,7 +39,6 @@ export async function GET() {
         .eq('assigned_user_id', user.id).eq('status', 'done')),
       safeCount(admin.from('daily_tasks').select('*', { count: 'exact', head: true })
         .eq('created_by', user.id).eq('completed', true)),
-      safeCount(admin.from('posts').select('*', { count: 'exact', head: true }).eq('user_id', user.id)),
       safeCount(admin.from('ideas').select('*', { count: 'exact', head: true }).eq('created_by', user.id)),
       safeCount(admin.from('ideas').select('*', { count: 'exact', head: true })
         .eq('created_by', user.id).eq('status', 'implemented')),
@@ -56,7 +54,6 @@ export async function GET() {
       tasksCompleted,
       dailyTasksCompleted,
       totalPoints: profile.total_points ?? 0,
-      postsCount,
       ideasCount,
       ideasImplemented,
       votesCount,

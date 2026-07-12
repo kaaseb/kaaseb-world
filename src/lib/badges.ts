@@ -6,7 +6,6 @@ export type BadgeStats = {
   tasksCompleted: number     // total tasks in `tasks` with status='done' for this user
   dailyTasksCompleted: number // daily_tasks.completed === true
   totalPoints: number
-  postsCount: number
   ideasCount: number
   ideasImplemented: number   // how many of user's ideas reached status='implemented'
   votesCount: number         // ideas the user voted on
@@ -95,15 +94,6 @@ export const BADGES: BadgeDef[] = [
     requirement_en: 'Earn 2000 points',
     requirement_ar: 'جمعت 2000 نقطة',
     progress: (s) => frac(s.totalPoints, 2000),
-  },
-  {
-    key: 'first_post',
-    emoji: '📝',
-    label_en: 'First Post',
-    label_ar: 'أول منشور',
-    requirement_en: 'Publish your first community post',
-    requirement_ar: 'نشرت أول منشور في المجتمع',
-    progress: (s) => frac(s.postsCount, 1),
   },
   {
     key: 'storyteller',
