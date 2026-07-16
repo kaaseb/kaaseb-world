@@ -31,12 +31,14 @@ import {
   STAGE_KEYS,
   categoryLabel,
   isValidCategory,
+  type Opportunity,
   type OpportunityCategory,
   type OpportunityContact,
   type OpportunityStage,
   type ScanTrigger,
 } from './types'
 import { beginRun, finishRun, mergeFindings, type NewOpportunity } from './store'
+import { notifyHighValue } from './notify'
 
 // Per sector. Four sectors → up to 32 finds a day. The list also ACCUMULATES:
 // dedup means every day adds only what's new, so a week is ~200 leads, not 32.
@@ -368,6 +370,7 @@ export async function runScan(opts: { trigger: ScanTrigger; by?: string | null }
     let found = 0
     let added = 0
     const errors: string[] = []
+    const addedRows: Opportunity[] = []
 
     for (let i = 0; i < CATEGORY_KEYS.length; i++) {
       const category = CATEGORY_KEYS[i]
@@ -377,9 +380,10 @@ export async function runScan(opts: { trigger: ScanTrigger; by?: string | null }
         found += rows.length
         // Merge per sector so the page fills in progressively while the rest
         // of the scan is still running.
-        const n = await mergeFindings(rows)
-        added += n
-        log(`sector ${category}: found=${rows.length} added=${n} (${Math.round((Date.now() - t0) / 1000)}s)`)
+        const fresh = await mergeFindings(rows)
+        added += fresh.length
+        addedRows.push(...fresh)
+        log(`sector ${category}: found=${rows.length} added=${fresh.length} (${Math.round((Date.now() - t0) / 1000)}s)`)
       } catch (e) {
         const msg = e instanceof Error ? e.message : 'فشل'
         errors.push(`${categoryLabel(category, 'ar')}: ${msg}`)
@@ -387,6 +391,10 @@ export async function runScan(opts: { trigger: ScanTrigger; by?: string | null }
       }
       if (i < CATEGORY_KEYS.length - 1) await sleep(SECTOR_GAP_MS)
     }
+
+    // One notification for the whole scan, not one per sector — four pings at
+    // 3 AM is how you get an alert everyone mutes.
+    await notifyHighValue(addedRows)
     log(`scan done — found=${found} added=${added} errors=${errors.length}`)
 
     // Only a total wipeout counts as a failed run — partial results are still

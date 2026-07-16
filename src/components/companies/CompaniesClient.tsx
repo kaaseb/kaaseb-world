@@ -8,12 +8,14 @@ import { useState, useMemo, useCallback, useEffect, useRef } from 'react'
 import {
   Building, HardHat, Paintbrush, Landmark, Compass, Mail, Phone, Globe,
   ExternalLink, RefreshCw, Loader2, Trash2, MapPin, AlertCircle, Search, Copy,
+  CheckCircle2, Archive, FileDown,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
+import { Pagination, usePagination } from '@/components/ui/pagination'
 import { cn } from '@/lib/utils'
 import { useLanguage } from '@/contexts/LanguageContext'
 import {
@@ -34,6 +36,13 @@ interface Props {
   initialItems: TargetCompany[]
   initialLastRun: CompanyScanRun | null
 }
+
+type TabKey = 'all' | CompanyCategory | 'contacted' | 'archived'
+
+// Still work = nobody has called them yet. 'client' counts as contacted: they're
+// already ours, they don't belong in the prospecting list.
+const ACTIVE_STATUSES: CompanyStatus[] = ['new', 'saved']
+const CONTACTED_STATUSES: CompanyStatus[] = ['contacted', 'client']
 
 const CATEGORY_ICON: Record<CompanyCategory, LucideIcon> = {
   contractors: HardHat,
@@ -75,11 +84,11 @@ export function CompaniesClient({ initialItems, initialLastRun }: Props) {
 
   const [items, setItems] = useState<TargetCompany[]>(initialItems)
   const [lastRun, setLastRun] = useState<CompanyScanRun | null>(initialLastRun)
-  const [activeTab, setActiveTab] = useState<'all' | CompanyCategory>('all')
-  const [statusFilter, setStatusFilter] = useState<'all' | CompanyStatus>('all')
+  const [activeTab, setActiveTab] = useState<TabKey>('all')
   const [sizeFilter, setSizeFilter] = useState<'all' | CompanySize>('all')
   const [cityFilter, setCityFilter] = useState<string>('all')
   const [search, setSearch] = useState('')
+  const [page, setPage] = useState(1)
   const [starting, setStarting] = useState(false)
   const [noteDrafts, setNoteDrafts] = useState<Record<string, string>>({})
   const [busyId, setBusyId] = useState<string | null>(null)
@@ -229,33 +238,71 @@ export function CompaniesClient({ initialItems, initialLastRun }: Props) {
   const base = useMemo(() => {
     const q = search.trim().toLowerCase()
     return items.filter((c) => {
-      if (statusFilter !== 'all' && c.status !== statusFilter) return false
       if (sizeFilter !== 'all' && c.size !== sizeFilter) return false
       if (cityFilter !== 'all' && c.city !== cityFilter) return false
       if (!q) return true
       return [c.name, c.city, c.summary, c.projects, c.whyRelevant, c.targeting]
         .some((f) => (f || '').toLowerCase().includes(q))
     })
-  }, [items, statusFilter, sizeFilter, cityFilter, search])
+  }, [items, sizeFilter, cityFilter, search])
+
+  const active = useMemo(() => base.filter((c) => ACTIVE_STATUSES.includes(c.status)), [base])
 
   const counts = useMemo(() => {
-    const m: Record<string, number> = { all: base.length }
-    for (const c of COMPANY_CATEGORIES) m[c.key] = base.filter((x) => x.category === c.key).length
+    const m: Record<string, number> = { all: active.length }
+    for (const c of COMPANY_CATEGORIES) m[c.key] = active.filter((x) => x.category === c.key).length
+    m.contacted = base.filter((c) => CONTACTED_STATUSES.includes(c.status)).length
+    m.archived = base.filter((c) => c.status === 'archived').length
     return m
-  }, [base])
+  }, [base, active])
 
-  const filtered = useMemo(
-    () => (activeTab === 'all' ? base : base.filter((c) => c.category === activeTab)),
-    [base, activeTab],
-  )
+  const filtered = useMemo(() => {
+    if (activeTab === 'contacted') return base.filter((c) => CONTACTED_STATUSES.includes(c.status))
+    if (activeTab === 'archived') return base.filter((c) => c.status === 'archived')
+    if (activeTab === 'all') return active
+    return active.filter((c) => c.category === activeTab)
+  }, [base, active, activeTab])
 
-  const tabs: Array<{ key: 'all' | CompanyCategory; label: string; icon: LucideIcon }> = [
+  const paged = usePagination({ items: filtered, perPage: 12, page })
+  useEffect(() => { setPage(1) }, [activeTab, cityFilter, sizeFilter, search])
+
+  async function exportExcel() {
+    if (filtered.length === 0) {
+      toast.error(t('opp_nothing_to_export'))
+      return
+    }
+    const XLSX = await import('xlsx')
+    const rows = filtered.map((c) => ({
+      [t('opp_priority')]: c.score,
+      [t('co_title')]: c.name,
+      'التصنيف': companyCategoryLabel(c.category, lang),
+      'الحجم': companySizeLabel(c.size, lang),
+      'المدينة': c.city,
+      'الحالة': companyStatusLabel(c.status, lang),
+      [t('co_projects')]: c.projects,
+      [t('co_why')]: c.whyRelevant,
+      [t('opp_targeting')]: c.targeting,
+      'إيميلات': c.contacts.map((x) => x.email).filter(Boolean).join(' | '),
+      'أرقام': c.contacts.map((x) => x.phone).filter(Boolean).join(' | '),
+      'المصادر': c.sourceUrls.join(' | '),
+      [t('opp_notes')]: c.notes,
+    }))
+    const ws = XLSX.utils.json_to_sheet(rows)
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, 'الشركات')
+    XLSX.writeFile(wb, `kaaseb-companies-${new Date().toISOString().slice(0, 10)}.xlsx`)
+    toast.success(t('opp_exported'))
+  }
+
+  const tabs: Array<{ key: TabKey; label: string; icon: LucideIcon }> = [
     { key: 'all', label: t('opp_all'), icon: Building },
     ...COMPANY_CATEGORIES.map((c) => ({
-      key: c.key as CompanyCategory,
+      key: c.key as TabKey,
       label: c[lang],
       icon: CATEGORY_ICON[c.key],
     })),
+    { key: 'contacted', label: t('opp_tab_contacted'), icon: CheckCircle2 },
+    { key: 'archived', label: t('opp_tab_archived'), icon: Archive },
   ]
 
   return (
@@ -272,19 +319,25 @@ export function CompaniesClient({ initialItems, initialLastRun }: Props) {
           </div>
         </div>
 
-        <Button onClick={startScan} disabled={isScanning || starting} className="gap-2">
-          {isScanning || starting ? (
-            <>
-              <Loader2 className="w-4 h-4 animate-spin" />
-              {t('opp_scanning')}
-            </>
-          ) : (
-            <>
-              <RefreshCw className="w-4 h-4" />
-              {t('opp_refresh')}
-            </>
-          )}
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" onClick={exportExcel} className="gap-2">
+            <FileDown className="w-4 h-4" />
+            {t('opp_export')}
+          </Button>
+          <Button onClick={startScan} disabled={isScanning || starting} className="gap-2">
+            {isScanning || starting ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" />
+                {t('opp_scanning')}
+              </>
+            ) : (
+              <>
+                <RefreshCw className="w-4 h-4" />
+                {t('opp_refresh')}
+              </>
+            )}
+          </Button>
+        </div>
       </div>
 
       {/* Last-run strip */}
@@ -356,16 +409,6 @@ export function CompaniesClient({ initialItems, initialLastRun }: Props) {
             />
           </div>
           <select
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value as 'all' | CompanyStatus)}
-            className="h-9 rounded-md border border-input bg-transparent px-3 text-sm"
-          >
-            <option value="all">{t('opp_all_statuses')}</option>
-            {COMPANY_STATUSES.map((s) => (
-              <option key={s.key} value={s.key}>{s[lang]}</option>
-            ))}
-          </select>
-          <select
             value={sizeFilter}
             onChange={(e) => setSizeFilter(e.target.value as 'all' | CompanySize)}
             className="h-9 rounded-md border border-input bg-transparent px-3 text-sm"
@@ -403,7 +446,7 @@ export function CompaniesClient({ initialItems, initialLastRun }: Props) {
         </Card>
       ) : (
         <div className="grid gap-4 md:grid-cols-2">
-          {filtered.map((c) => {
+          {paged.slice.map((c) => {
             const Icon = CATEGORY_ICON[c.category]
             const draft = noteDrafts[c.id]
             const dirty = draft !== undefined && draft !== c.notes
@@ -588,6 +631,19 @@ export function CompaniesClient({ initialItems, initialLastRun }: Props) {
               </Card>
             )
           })}
+        </div>
+      )}
+
+      {paged.pageCount > 1 && (
+        <div className="mt-4">
+          <Pagination
+            page={paged.safePage}
+            pageCount={paged.pageCount}
+            total={paged.total}
+            perPage={12}
+            onChange={setPage}
+            isRtl={isRtl}
+          />
         </div>
       )}
     </div>

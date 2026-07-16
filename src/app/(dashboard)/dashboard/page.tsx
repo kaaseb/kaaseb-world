@@ -3,6 +3,11 @@ import { redirect } from 'next/navigation'
 import { CommunityDashboard } from '@/components/community/CommunityDashboard'
 import type { Profile, Story, Post, PostPollOption } from '@/types'
 import { BADGES } from '@/lib/badges'
+import { hasPermission } from '@/lib/permissions'
+import { getEffectivePermissions } from '@/lib/profile'
+import { getState as getOpportunitiesState } from '@/lib/opportunities/store'
+import { getCompaniesState } from '@/lib/companies/store'
+import type { ScoutStats } from '@/components/dashboard/ScoutSummary'
 
 type StoryWithAuthor = Story & {
   profiles: Pick<Profile, 'id' | 'full_name' | 'email' | 'avatar_url' | 'title'> | null
@@ -175,9 +180,34 @@ export default async function HomePage() {
 
   const viewedStoryIds = myStoryViews.map(v => v.story_id)
 
+  // Scout summary — only counts what's still UNWORKED (new/saved). A total that
+  // only grows tells you nothing; "12 leads nobody has called" tells you to act.
+  // Wrapped like every other block here so an S3 hiccup can't blank the page.
+  const permissions = await getEffectivePermissions(supabase, profile)
+  const canOpp = hasPermission(profile, permissions, 'page.opportunities')
+  const canCompanies = hasPermission(profile, permissions, 'page.companies')
+  let scoutStats: ScoutStats = { oppActive: 0, oppHot: 0, companiesActive: 0, companiesHot: 0 }
+  try {
+    const [opps, cos] = await Promise.all([
+      canOpp ? getOpportunitiesState() : Promise.resolve({ items: [] }),
+      canCompanies ? getCompaniesState() : Promise.resolve({ items: [] }),
+    ])
+    const oppActive = opps.items.filter(o => o.status === 'new' || o.status === 'saved')
+    const coActive = cos.items.filter(c => c.status === 'new' || c.status === 'saved')
+    scoutStats = {
+      oppActive: oppActive.length,
+      oppHot: oppActive.filter(o => o.score >= 80).length,
+      companiesActive: coActive.length,
+      companiesHot: coActive.filter(c => c.score >= 80).length,
+    }
+  } catch { /* S3 unreachable — render zeros rather than break the dashboard */ }
+
   return (
     <CommunityDashboard
       profile={profile}
+      scoutStats={scoutStats}
+      canOpp={canOpp}
+      canCompanies={canCompanies}
       initStories={stories}
       initPosts={enrichedPosts}
       likedPostIds={likedPostIds}

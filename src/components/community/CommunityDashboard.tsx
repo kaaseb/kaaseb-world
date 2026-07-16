@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react'
 import type { Profile, Story, Post, PostPollOption } from '@/types'
 import { useLanguage } from '@/contexts/LanguageContext'
+import { ScoutSummary, type ScoutStats } from '@/components/dashboard/ScoutSummary'
 import { StoriesRow } from './StoriesRow'
 import { PostComposer } from './PostComposer'
 import { PostCard } from './PostCard'
@@ -39,10 +40,14 @@ interface Props {
     overdueTasks: number
     pendingTasks: number
   }
+  scoutStats: ScoutStats
+  canOpp: boolean
+  canCompanies: boolean
 }
 
 export function CommunityDashboard({
   profile, initStories, initPosts, likedPostIds, likeCounts, commentCounts, pollVotesByPost, viewedStoryIds, latestBadge, stats,
+  scoutStats, canOpp, canCompanies,
 }: Props) {
   const { t, isRtl } = useLanguage()
   const [stories, setStories] = useState(initStories)
@@ -62,6 +67,10 @@ export function CommunityDashboard({
 
   return (
     <div className="p-6 md:p-8 max-w-6xl mx-auto" dir={isRtl ? 'rtl' : 'ltr'}>
+      {/* What the robot found while you slept — first thing on the page, because
+          a scout nobody opens is a scout that doesn't exist. */}
+      <ScoutSummary stats={scoutStats} canOpp={canOpp} canCompanies={canCompanies} />
+
       {/* Hero */}
       <div className="flex items-start justify-between gap-4 mb-6">
         <div className="min-w-0">

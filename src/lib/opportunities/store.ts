@@ -218,18 +218,21 @@ export type NewOpportunity = Omit<
   'id' | 'status' | 'notes' | 'fingerprint' | 'createdAt' | 'updatedAt'
 >
 
-// Adds only the genuinely new finds. A candidate is a duplicate when it shares
-// a fingerprint (same project + same owner) OR any source URL with something we
-// already hold — daily scans re-surface the same news constantly, and the team
-// must never open this page to a wall of repeats.
-export async function mergeFindings(found: NewOpportunity[]): Promise<number> {
+// Adds only the genuinely new finds and RETURNS them — the caller needs the
+// rows themselves, not a tally, to decide what's worth notifying about.
+//
+// A candidate is a duplicate when it shares a fingerprint (same project + same
+// owner) OR any source URL with something we already hold — daily scans
+// re-surface the same news constantly, and the team must never open this page
+// to a wall of repeats.
+export async function mergeFindings(found: NewOpportunity[]): Promise<Opportunity[]> {
   const state = await readState()
 
   const seenPrints = new Set(state.items.map((o) => o.fingerprint))
   const seenUrls = new Set(state.items.flatMap((o) => (o.sourceUrls || []).map(canonicalUrl)))
 
   const now = new Date().toISOString()
-  let added = 0
+  const added: Opportunity[] = []
 
   for (const f of found) {
     const fingerprint = fingerprintOf(f.title, f.owner)
@@ -239,7 +242,7 @@ export async function mergeFindings(found: NewOpportunity[]): Promise<number> {
     const urls = (f.sourceUrls || []).map(canonicalUrl)
     if (urls.some((u) => u && seenUrls.has(u))) continue
 
-    state.items.unshift({
+    const row: Opportunity = {
       ...f,
       id: randomUUID(),
       status: 'new',
@@ -247,12 +250,13 @@ export async function mergeFindings(found: NewOpportunity[]): Promise<number> {
       fingerprint,
       createdAt: now,
       updatedAt: now,
-    })
+    }
+    state.items.unshift(row)
+    added.push(row)
     seenPrints.add(fingerprint)
     urls.forEach((u) => u && seenUrls.add(u))
-    added++
   }
 
-  if (added > 0) await writeState(state)
+  if (added.length > 0) await writeState(state)
   return added
 }

@@ -7,15 +7,18 @@
 // as the rest of the feature: light by default.
 
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react'
+import { useRouter } from 'next/navigation'
 import {
   Radar, Building2, Landmark, Hotel, Crown, Mail, Phone, Globe, ExternalLink,
   RefreshCw, Loader2, Trash2, MapPin, CalendarDays, AlertCircle, Search, Copy,
+  CheckCircle2, Archive, FileDown, Briefcase,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
+import { Pagination, usePagination } from '@/components/ui/pagination'
 import { cn } from '@/lib/utils'
 import { useLanguage } from '@/contexts/LanguageContext'
 import {
@@ -34,6 +37,13 @@ interface Props {
   initialItems: Opportunity[]
   initialLastRun: ScanRun | null
 }
+
+// 'all' + the sectors = the working list. 'contacted'/'archived' are where rows
+// go to stop cluttering it.
+type TabKey = 'all' | OpportunityCategory | 'contacted' | 'archived'
+
+// A row is "still work" until someone has actually called them.
+const ACTIVE_STATUSES: OpportunityStatus[] = ['new', 'saved']
 
 const CATEGORY_ICON: Record<OpportunityCategory, LucideIcon> = {
   government: Landmark,
@@ -82,18 +92,24 @@ function formatDate(iso: string | null, lang: string): string {
 
 export function OpportunitiesClient({ initialItems, initialLastRun }: Props) {
   const { t, lang, isRtl } = useLanguage()
+  const router = useRouter()
 
   const [items, setItems] = useState<Opportunity[]>(initialItems)
   const [lastRun, setLastRun] = useState<ScanRun | null>(initialLastRun)
-  const [activeTab, setActiveTab] = useState<'all' | OpportunityCategory>('all')
-  const [statusFilter, setStatusFilter] = useState<'all' | OpportunityStatus>('all')
+  // The workflow tabs ARE the status split now: the sector tabs show only what
+  // you still have to work (new/saved), and anything you've called moves to its
+  // own tab. Otherwise the working list just grows into an archive you scroll
+  // past every morning.
+  const [activeTab, setActiveTab] = useState<TabKey>('all')
   const [cityFilter, setCityFilter] = useState<string>('all')
   const [dateFilter, setDateFilter] = useState<'all' | '7' | '30' | '90'>('all')
   const [search, setSearch] = useState('')
+  const [page, setPage] = useState(1)
   const [starting, setStarting] = useState(false)
   const [noteDrafts, setNoteDrafts] = useState<Record<string, string>>({})
   const [busyId, setBusyId] = useState<string | null>(null)
   const [huntingId, setHuntingId] = useState<string | null>(null)
+  const [convertingId, setConvertingId] = useState<string | null>(null)
 
   const isScanning = lastRun?.status === 'running'
 
@@ -212,6 +228,28 @@ export function OpportunitiesClient({ initialItems, initialLastRun }: Props) {
     }
   }
 
+  // Lead → client project. From there /furn's import card can pull it into a
+  // quotation, which is how a scouted row eventually turns into money.
+  async function convertToProject(id: string) {
+    setConvertingId(id)
+    try {
+      const res = await fetch(`/api/opportunities/${id}/convert`, { method: 'POST' })
+      const j = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        toast.error(j.error || t('opp_scan_failed'), { duration: 10000 })
+        return
+      }
+      // The server also flips it to 'contacted' so it leaves the working list.
+      setItems((list) => list.map((o) => (o.id === id ? { ...o, status: 'contacted' as const } : o)))
+      toast.success(t('opp_converted'))
+      if (j.project?.id) router.push(`/projects/${j.project.id}`)
+    } catch {
+      toast.error(t('opp_scan_failed'))
+    } finally {
+      setConvertingId(null)
+    }
+  }
+
   async function remove(id: string) {
     if (!confirm(t('opp_delete_confirm'))) return
     const prev = items
@@ -242,13 +280,12 @@ export function OpportunitiesClient({ initialItems, initialLastRun }: Props) {
     [items],
   )
 
-  // Status/city/date/text filters first, so the tab counts reflect what you'd
-  // actually see if you clicked the tab.
+  // City/date/text filters first, so the tab counts reflect what you'd actually
+  // see if you clicked the tab.
   const base = useMemo(() => {
     const q = search.trim().toLowerCase()
     const cutoff = dateFilter === 'all' ? 0 : Date.now() - Number(dateFilter) * 24 * 60 * 60 * 1000
     return items.filter((o) => {
-      if (statusFilter !== 'all' && o.status !== statusFilter) return false
       if (cityFilter !== 'all' && o.city !== cityFilter) return false
       if (cutoff) {
         // Fall back to when we scouted it when the article carried no date —
@@ -260,26 +297,73 @@ export function OpportunitiesClient({ initialItems, initialLastRun }: Props) {
       return [o.title, o.owner, o.city, o.summary, o.relevance, o.targeting]
         .some((f) => (f || '').toLowerCase().includes(q))
     })
-  }, [items, statusFilter, cityFilter, dateFilter, search])
+  }, [items, cityFilter, dateFilter, search])
+
+  const active = useMemo(() => base.filter((o) => ACTIVE_STATUSES.includes(o.status)), [base])
 
   const counts = useMemo(() => {
-    const m: Record<string, number> = { all: base.length }
-    for (const c of OPPORTUNITY_CATEGORIES) m[c.key] = base.filter((o) => o.category === c.key).length
+    const m: Record<string, number> = { all: active.length }
+    for (const c of OPPORTUNITY_CATEGORIES) m[c.key] = active.filter((o) => o.category === c.key).length
+    m.contacted = base.filter((o) => o.status === 'contacted').length
+    m.archived = base.filter((o) => o.status === 'archived').length
     return m
-  }, [base])
+  }, [base, active])
 
-  const filtered = useMemo(
-    () => (activeTab === 'all' ? base : base.filter((o) => o.category === activeTab)),
-    [base, activeTab],
-  )
+  const filtered = useMemo(() => {
+    if (activeTab === 'contacted') return base.filter((o) => o.status === 'contacted')
+    if (activeTab === 'archived') return base.filter((o) => o.status === 'archived')
+    if (activeTab === 'all') return active
+    return active.filter((o) => o.category === activeTab)
+  }, [base, active, activeTab])
 
-  const tabs: Array<{ key: 'all' | OpportunityCategory; label: string; icon: LucideIcon }> = [
+  // 12 cards is about a screen and a half. Without this the page renders every
+  // row it has ever scouted — fine at 13, painful at the 200+ this accumulates
+  // into within a month.
+  const paged = usePagination({ items: filtered, perPage: 12, page })
+  useEffect(() => { setPage(1) }, [activeTab, cityFilter, dateFilter, search])
+
+  // Excel, because that is where a sales team actually lives. Exports what's on
+  // screen (current tab + filters), not the whole store — if you filtered to
+  // Riyadh, you want the Riyadh list.
+  async function exportExcel() {
+    if (filtered.length === 0) {
+      toast.error(t('opp_nothing_to_export'))
+      return
+    }
+    // Lazy-loaded: xlsx is heavy and most visits never export.
+    const XLSX = await import('xlsx')
+    const rows = filtered.map((o) => ({
+      [t('opp_priority')]: o.score,
+      [t('opp_title')]: o.title,
+      [t('opp_owner')]: o.owner,
+      'التصنيف': categoryLabel(o.category, lang),
+      'المرحلة': stageLabel(o.stage, lang),
+      'المدينة': o.city,
+      'التاريخ': o.publishedAt || '',
+      'الحالة': statusLabel(o.status, lang),
+      [t('opp_relevance')]: o.relevance,
+      [t('opp_targeting')]: o.targeting,
+      'إيميلات': o.contacts.map((c) => c.email).filter(Boolean).join(' | '),
+      'أرقام': o.contacts.map((c) => c.phone).filter(Boolean).join(' | '),
+      'المصادر': o.sourceUrls.join(' | '),
+      [t('opp_notes')]: o.notes,
+    }))
+    const ws = XLSX.utils.json_to_sheet(rows)
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, 'الفرص')
+    XLSX.writeFile(wb, `kaaseb-opportunities-${new Date().toISOString().slice(0, 10)}.xlsx`)
+    toast.success(t('opp_exported'))
+  }
+
+  const tabs: Array<{ key: TabKey; label: string; icon: LucideIcon }> = [
     { key: 'all', label: t('opp_all'), icon: Radar },
     ...OPPORTUNITY_CATEGORIES.map((c) => ({
-      key: c.key as OpportunityCategory,
+      key: c.key as TabKey,
       label: c[lang],
       icon: CATEGORY_ICON[c.key],
     })),
+    { key: 'contacted', label: t('opp_tab_contacted'), icon: CheckCircle2 },
+    { key: 'archived', label: t('opp_tab_archived'), icon: Archive },
   ]
 
   return (
@@ -296,19 +380,25 @@ export function OpportunitiesClient({ initialItems, initialLastRun }: Props) {
           </div>
         </div>
 
-        <Button onClick={startScan} disabled={isScanning || starting} className="gap-2">
-          {isScanning || starting ? (
-            <>
-              <Loader2 className="w-4 h-4 animate-spin" />
-              {t('opp_scanning')}
-            </>
-          ) : (
-            <>
-              <RefreshCw className="w-4 h-4" />
-              {t('opp_refresh')}
-            </>
-          )}
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" onClick={exportExcel} className="gap-2">
+            <FileDown className="w-4 h-4" />
+            {t('opp_export')}
+          </Button>
+          <Button onClick={startScan} disabled={isScanning || starting} className="gap-2">
+            {isScanning || starting ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" />
+                {t('opp_scanning')}
+              </>
+            ) : (
+              <>
+                <RefreshCw className="w-4 h-4" />
+                {t('opp_refresh')}
+              </>
+            )}
+          </Button>
+        </div>
       </div>
 
       {/* Last-run strip */}
@@ -382,17 +472,6 @@ export function OpportunitiesClient({ initialItems, initialLastRun }: Props) {
             />
           </div>
           <select
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value as 'all' | OpportunityStatus)}
-            className="h-9 rounded-md border border-input bg-transparent px-3 text-sm"
-          >
-            <option value="all">{t('opp_all_statuses')}</option>
-            {OPPORTUNITY_STATUSES.map((s) => (
-              <option key={s.key} value={s.key}>{s[lang]}</option>
-            ))}
-          </select>
-
-          <select
             value={cityFilter}
             onChange={(e) => setCityFilter(e.target.value)}
             className="h-9 rounded-md border border-input bg-transparent px-3 text-sm"
@@ -431,7 +510,7 @@ export function OpportunitiesClient({ initialItems, initialLastRun }: Props) {
         </Card>
       ) : (
         <div className="grid gap-4 md:grid-cols-2">
-          {filtered.map((o) => {
+          {paged.slice.map((o) => {
             const Icon = CATEGORY_ICON[o.category]
             const draft = noteDrafts[o.id]
             const dirty = draft !== undefined && draft !== o.notes
@@ -615,6 +694,20 @@ export function OpportunitiesClient({ initialItems, initialLastRun }: Props) {
 
                   {/* Actions */}
                   <div className="flex items-center gap-2 pt-2 border-t">
+                    <Button
+                      variant="outline"
+                      size="xs"
+                      onClick={() => convertToProject(o.id)}
+                      disabled={convertingId === o.id}
+                      className="gap-1.5 h-8"
+                    >
+                      {convertingId === o.id ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <Briefcase className="w-3.5 h-3.5" />
+                      )}
+                      {t('opp_to_project')}
+                    </Button>
                     <select
                       value={o.status}
                       onChange={(e) => setStatus(o.id, e.target.value as OpportunityStatus)}
@@ -639,6 +732,19 @@ export function OpportunitiesClient({ initialItems, initialLastRun }: Props) {
               </Card>
             )
           })}
+        </div>
+      )}
+
+      {paged.pageCount > 1 && (
+        <div className="mt-4">
+          <Pagination
+            page={paged.safePage}
+            pageCount={paged.pageCount}
+            total={paged.total}
+            perPage={12}
+            onChange={setPage}
+            isRtl={isRtl}
+          />
         </div>
       )}
     </div>
