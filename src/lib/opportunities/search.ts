@@ -64,6 +64,9 @@ const MAX_URLS = 4
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
+// Same tag the scheduler uses, so `pm2 logs | grep الفرص` shows the whole story.
+const log = (msg: string) => console.log(`[الفرص] ${msg}`)
+
 // gpt-5.x / o-series reject `temperature` and take `reasoning.effort` instead —
 // same branch the shared OpenAI provider makes (src/lib/ai/providers/openai.ts).
 function isReasoningModel(model: string): boolean {
@@ -453,6 +456,10 @@ export async function runScan(opts: { trigger: ScanTrigger; by?: string | null }
 
     const model = await resolveModel(apiKey)
     const client = new OpenAI({ apiKey })
+    // Log to pm2 as we go. Without this the whole scan is invisible on the
+    // server and the only evidence of a failure is a string in S3 — which is
+    // useless when you're trying to work out WHY it failed.
+    log(`scan start — trigger=${opts.trigger} model=${model}`)
 
     let found = 0
     let added = 0
@@ -460,17 +467,23 @@ export async function runScan(opts: { trigger: ScanTrigger; by?: string | null }
 
     for (let i = 0; i < CATEGORY_KEYS.length; i++) {
       const category = CATEGORY_KEYS[i]
+      const t0 = Date.now()
       try {
         const rows = await scanSector(client, model, category)
         found += rows.length
         // Merge per sector so the page fills in progressively while the rest
         // of the scan is still running.
-        added += await mergeFindings(rows)
+        const n = await mergeFindings(rows)
+        added += n
+        log(`sector ${category}: found=${rows.length} added=${n} (${Math.round((Date.now() - t0) / 1000)}s)`)
       } catch (e) {
-        errors.push(`${categoryLabel(category, 'ar')}: ${e instanceof Error ? e.message : 'فشل'}`)
+        const msg = e instanceof Error ? e.message : 'فشل'
+        errors.push(`${categoryLabel(category, 'ar')}: ${msg}`)
+        log(`sector ${category} FAILED (${Math.round((Date.now() - t0) / 1000)}s): ${msg}`)
       }
       if (i < CATEGORY_KEYS.length - 1) await sleep(SECTOR_GAP_MS)
     }
+    log(`scan done — found=${found} added=${added} errors=${errors.length}`)
 
     // Only a total wipeout counts as a failed run — partial results are still
     // results, and the team should see them.
