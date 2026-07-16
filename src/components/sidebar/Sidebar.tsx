@@ -26,6 +26,7 @@ import {
   FileSignature,
   Wand2,
   Radar,
+  Building,
   X,
   // ↓ kept-but-commented icons (Approvals/Points/Store/Ideas) — restore later when the features come back.
   // ShoppingBag,
@@ -71,6 +72,7 @@ export function Sidebar({ profile, permissions, onLock, drawerOpen = false, onDr
     { href: '/pre-qualifications', icon: FileSignature,   label: t('nav_pre_qualifications'), perm: 'page.pre_qualifications' },
     { href: '/visualize',          icon: Wand2,           label: t('nav_visualize'),          perm: 'page.visualize' },
     { href: '/opportunities',      icon: Radar,           label: t('nav_opportunities'),      perm: 'page.opportunities' },
+    { href: '/companies',          icon: Building,        label: t('nav_companies'),          perm: 'page.companies' },
     { href: '/ai',                 icon: Bot,             label: t('nav_ghassl_ai'),          perm: 'page.ai' },
     { href: '/goals',              icon: Target,          label: t('nav_goals'),              perm: 'page.goals' },
     { href: '/departments',        icon: Building2,       label: t('nav_departments'),        perm: 'page.departments' },

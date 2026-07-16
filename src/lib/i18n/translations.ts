@@ -1392,6 +1392,19 @@ const translations = {
   nav_pre_qualifications:   { en: 'Pre-qualifications', ar: 'البري كوالفيكيشن' },
   nav_visualize:            { en: 'Magic Tunnel', ar: 'النفق السحري' },
   nav_opportunities:        { en: 'Opportunities', ar: 'الفرص' },
+  nav_companies:            { en: 'Target Companies', ar: 'شركات مستهدفة' },
+
+  // ─── Target Companies (شركات مستهدفة) — the account list ──────────────────
+  co_title:                 { en: 'Target Companies',     ar: 'شركات مستهدفة' },
+  co_subtitle:              { en: 'Saudi companies that buy marble for a living — your permanent account list', ar: 'شركات سعودية تشتري رخام بحكم عملها — قائمة عملائك الدائمة' },
+  co_empty:                 { en: 'No companies yet',      ar: 'ما فيه شركات بعد' },
+  co_empty_hint:            { en: 'The robot builds the list every day at 3 AM. Press "Refresh now" to build it immediately.', ar: 'النظام يبني القائمة تلقائياً كل يوم ٣ الفجر. اضغط "تحديث الآن" لو تبي فوراً.' },
+  co_no_results:            { en: 'No matching companies', ar: 'ما فيه شركات مطابقة' },
+  co_search_placeholder:    { en: 'Search companies…',     ar: 'ابحث في الشركات…' },
+  co_projects:              { en: 'Projects they built',   ar: 'مشاريعهم' },
+  co_why:                   { en: 'Marble they consume',   ar: 'الرخام اللي يستهلكونه' },
+  co_all_sizes:             { en: 'All sizes',             ar: 'كل الأحجام' },
+  co_count:                 { en: 'companies',             ar: 'شركة' },
 
   // ─── Opportunities (الفرص) — the daily project scout ──────────────────────
   opp_title:                { en: 'Opportunities',        ar: 'الفرص' },

@@ -17,9 +17,14 @@
 import cron from 'node-cron'
 import { getState, lastSuccessfulRunAt } from './store'
 import { runScan } from './search'
+import { getCompaniesState, lastSuccessfulCompanyRunAt } from '@/lib/companies/store'
+import { runCompanyScan } from '@/lib/companies/search'
 
 // 03:00 every day, Riyadh time — node-cron does the DST/offset maths for us.
 const CRON_EXPRESSION = '0 3 * * *'
+// The account list runs half an hour later so the two scans never share a
+// tokens-per-minute window. Same reason the sectors inside a scan are spaced.
+const COMPANIES_CRON_EXPRESSION = '30 3 * * *'
 const TIMEZONE = 'Asia/Riyadh'
 
 // Give the server a moment to finish booting before a catch-up scan.
@@ -54,6 +59,16 @@ async function shouldCatchUp(): Promise<boolean> {
   return Date.now() - last.getTime() > MISSED_AFTER_MS
 }
 
+async function shouldCatchUpCompanies(): Promise<boolean> {
+  const { lastRun } = await getCompaniesState()
+  if (lastRun?.status === 'running') return false
+  if (lastRun && Date.now() - new Date(lastRun.startedAt).getTime() < COOLDOWN_MS) return false
+
+  const last = await lastSuccessfulCompanyRunAt()
+  if (!last) return true
+  return Date.now() - last.getTime() > MISSED_AFTER_MS
+}
+
 export function startOpportunityScheduler(): void {
   if (globalRef.__kaasebOpportunityCron) return
   if (!enabled()) return
@@ -69,7 +84,17 @@ export function startOpportunityScheduler(): void {
     { timezone: TIMEZONE },
   )
 
+  cron.schedule(
+    COMPANIES_CRON_EXPRESSION,
+    () => {
+      void runCompanyScan({ trigger: 'schedule' }).catch(() => {})
+    },
+    { timezone: TIMEZONE },
+  )
+
   // Boot catch-up — the safety net for "the server was down at 03:00".
+  // Sequential, not parallel: two web_search scans at once is exactly the token
+  // spike we spent the afternoon designing out.
   setTimeout(() => {
     void (async () => {
       try {
@@ -77,8 +102,14 @@ export function startOpportunityScheduler(): void {
       } catch {
         /* never let the safety net take the server down */
       }
+      try {
+        if (await shouldCatchUpCompanies()) await runCompanyScan({ trigger: 'schedule' })
+      } catch {
+        /* same */
+      }
     })()
   }, BOOT_DELAY_MS).unref?.()
 
   console.log(`[الفرص] daily scan scheduled — ${CRON_EXPRESSION} (${TIMEZONE})`)
+  console.log(`[شركات] daily scan scheduled — ${COMPANIES_CRON_EXPRESSION} (${TIMEZONE})`)
 }

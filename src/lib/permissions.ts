@@ -25,6 +25,7 @@ export const PERMISSIONS = [
   { key: 'page.pre_qualifications', label: 'Pre-qualifications', group: 'Pages' },
   { key: 'page.visualize',        label: 'Magic Tunnel (visualizer)', group: 'Pages' },
   { key: 'page.opportunities',    label: 'Opportunities (الفرص)', group: 'Pages' },
+  { key: 'page.companies',        label: 'Target Companies (شركات مستهدفة)', group: 'Pages' },
 
   // Hidden pages — kept here so existing custom roles keep working without
   // throwing type errors. They simply won't render in the sidebar.
@@ -92,7 +93,7 @@ export const DEFAULT_PERMISSIONS: Record<'super_admin' | 'project_manager' | 'em
     'page.notifications', 'page.settings',
     'page.client_projects', 'page.tannoor', 'page.tannoor_products',
     'page.important_docs', 'page.pre_qualifications', 'page.visualize',
-    'page.opportunities',
+    'page.opportunities', 'page.companies',
     'furn.projects.create', 'furn.pricing.edit', 'furn.quotation.export',
     'client_projects.create', 'client_projects.edit', 'client_projects.delete',
     'tannoor.projects.create', 'tannoor.quotation.export',
