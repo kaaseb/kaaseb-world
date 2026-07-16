@@ -30,7 +30,13 @@ const MAX_ITEMS = 300
 
 // A run that claims to be 'running' for longer than this is treated as dead
 // (server restarted mid-scan), so a stuck flag can never block scans forever.
-const STALE_RUN_MS = 15 * 60 * 1000
+//
+// Sized against the WORST case a real scan can take, not the typical one: four
+// sectors, each able to retry a 429 a couple of times with a backoff wait, plus
+// the gaps between sectors. A healthy scan is 2-5 minutes; this must sit well
+// above the pathological tail or we declare a working scan dead and confuse the
+// team (which is exactly what a 15-minute window did in production).
+const STALE_RUN_MS = 30 * 60 * 1000
 
 const EMPTY: OpportunitiesState = { items: [], lastRun: null }
 

@@ -367,8 +367,10 @@ async function createWithRetry(
       const err = e as { status?: number; message?: string }
       if (err.status !== 429 || i === attempts - 1) throw e
       const m = /try again in ([\d.]+)\s*s/i.exec(err.message || '')
-      const waitMs = m ? Math.ceil(parseFloat(m[1]) * 1000) + 2000 : (i + 1) * 20_000
-      await sleep(Math.min(waitMs, 90_000))
+      const waitMs = m ? Math.ceil(parseFloat(m[1]) * 1000) + 2000 : (i + 1) * 10_000
+      // Hard ceiling: a TPM window is 60s, so waiting longer than ~30s buys
+      // nothing and only drags the whole scan toward the stale threshold.
+      await sleep(Math.min(waitMs, 30_000))
     }
   }
   throw lastErr
