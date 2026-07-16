@@ -87,10 +87,13 @@ export function OpportunitiesClient({ initialItems, initialLastRun }: Props) {
   const [lastRun, setLastRun] = useState<ScanRun | null>(initialLastRun)
   const [activeTab, setActiveTab] = useState<'all' | OpportunityCategory>('all')
   const [statusFilter, setStatusFilter] = useState<'all' | OpportunityStatus>('all')
+  const [cityFilter, setCityFilter] = useState<string>('all')
+  const [dateFilter, setDateFilter] = useState<'all' | '7' | '30' | '90'>('all')
   const [search, setSearch] = useState('')
   const [starting, setStarting] = useState(false)
   const [noteDrafts, setNoteDrafts] = useState<Record<string, string>>({})
   const [busyId, setBusyId] = useState<string | null>(null)
+  const [huntingId, setHuntingId] = useState<string | null>(null)
 
   const isScanning = lastRun?.status === 'running'
 
@@ -188,6 +191,27 @@ export function OpportunitiesClient({ initialItems, initialLastRun }: Props) {
     }
   }
 
+  // The dedicated contact hunt. Awaited (not polled) because it's one short
+  // search and the user is watching this specific card.
+  async function findContacts(id: string) {
+    setHuntingId(id)
+    try {
+      const res = await fetch(`/api/opportunities/${id}/contacts`, { method: 'POST' })
+      const j = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        toast.error(j.error || t('opp_scan_failed'), { duration: 10000 })
+        return
+      }
+      if (j.item) setItems((list) => list.map((o) => (o.id === id ? j.item : o)))
+      if (j.found > 0) toast.success(`${j.found} ${t('opp_contacts_found')}`)
+      else toast.info(t('opp_contacts_none_found'))
+    } catch {
+      toast.error(t('opp_scan_failed'))
+    } finally {
+      setHuntingId(null)
+    }
+  }
+
   async function remove(id: string) {
     if (!confirm(t('opp_delete_confirm'))) return
     const prev = items
@@ -211,17 +235,32 @@ export function OpportunitiesClient({ initialItems, initialLastRun }: Props) {
     }
   }
 
-  // Status + text filter first, so the tab counts reflect what you'd actually
-  // see if you clicked the tab.
+  // Every city we've actually scouted, so the dropdown only ever offers filters
+  // that can return something.
+  const cities = useMemo(
+    () => Array.from(new Set(items.map((o) => o.city).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'ar')),
+    [items],
+  )
+
+  // Status/city/date/text filters first, so the tab counts reflect what you'd
+  // actually see if you clicked the tab.
   const base = useMemo(() => {
     const q = search.trim().toLowerCase()
+    const cutoff = dateFilter === 'all' ? 0 : Date.now() - Number(dateFilter) * 24 * 60 * 60 * 1000
     return items.filter((o) => {
       if (statusFilter !== 'all' && o.status !== statusFilter) return false
+      if (cityFilter !== 'all' && o.city !== cityFilter) return false
+      if (cutoff) {
+        // Fall back to when we scouted it when the article carried no date —
+        // otherwise undated finds would silently vanish from every date filter.
+        const when = new Date(o.publishedAt || o.createdAt).getTime()
+        if (Number.isNaN(when) || when < cutoff) return false
+      }
       if (!q) return true
       return [o.title, o.owner, o.city, o.summary, o.relevance, o.targeting]
         .some((f) => (f || '').toLowerCase().includes(q))
     })
-  }, [items, statusFilter, search])
+  }, [items, statusFilter, cityFilter, dateFilter, search])
 
   const counts = useMemo(() => {
     const m: Record<string, number> = { all: base.length }
@@ -352,6 +391,28 @@ export function OpportunitiesClient({ initialItems, initialLastRun }: Props) {
               <option key={s.key} value={s.key}>{s[lang]}</option>
             ))}
           </select>
+
+          <select
+            value={cityFilter}
+            onChange={(e) => setCityFilter(e.target.value)}
+            className="h-9 rounded-md border border-input bg-transparent px-3 text-sm"
+          >
+            <option value="all">{t('opp_all_cities')}</option>
+            {cities.map((c) => (
+              <option key={c} value={c}>{c}</option>
+            ))}
+          </select>
+
+          <select
+            value={dateFilter}
+            onChange={(e) => setDateFilter(e.target.value as 'all' | '7' | '30' | '90')}
+            className="h-9 rounded-md border border-input bg-transparent px-3 text-sm"
+          >
+            <option value="all">{t('opp_all_dates')}</option>
+            <option value="7">{t('opp_last_week')}</option>
+            <option value="30">{t('opp_last_month')}</option>
+            <option value="90">{t('opp_last_3months')}</option>
+          </select>
         </CardContent>
       </Card>
 
@@ -445,9 +506,36 @@ export function OpportunitiesClient({ initialItems, initialLastRun }: Props) {
 
                   {/* Contacts */}
                   <div>
-                    <p className="text-xs font-semibold text-gray-700 mb-1.5">{t('opp_contacts')}</p>
+                    <div className="flex items-center justify-between gap-2 mb-1.5">
+                      <p className="text-xs font-semibold text-gray-700">{t('opp_contacts')}</p>
+                      {/* The hunt is on-demand: most rows are never chased, so
+                          paying to find a number for all of them is waste. */}
+                      {o.owner && (
+                        <Button
+                          variant="outline"
+                          size="xs"
+                          onClick={() => findContacts(o.id)}
+                          disabled={huntingId === o.id}
+                          className="gap-1.5 h-7"
+                        >
+                          {huntingId === o.id ? (
+                            <>
+                              <Loader2 className="w-3 h-3 animate-spin" />
+                              {t('opp_finding_contacts')}
+                            </>
+                          ) : (
+                            <>
+                              <Search className="w-3 h-3" />
+                              {o.contactsFetchedAt ? t('opp_contacts_retry') : t('opp_find_contacts')}
+                            </>
+                          )}
+                        </Button>
+                      )}
+                    </div>
                     {o.contacts.length === 0 ? (
-                      <p className="text-xs text-muted-foreground">{t('opp_no_contacts')}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {o.contactsFetchedAt ? t('opp_contacts_none_found') : t('opp_no_contacts')}
+                      </p>
                     ) : (
                       <div className="space-y-1.5">
                         {o.contacts.map((c, i) => (

@@ -1425,6 +1425,16 @@ const translations = {
   opp_status_updated:       { en: 'Status updated',       ar: 'تم تحديث الحالة' },
   opp_priority:             { en: 'Priority',             ar: 'الأولوية' },
   opp_copied:               { en: 'Copied',               ar: 'تم النسخ' },
+  opp_find_contacts:        { en: 'Find contacts',        ar: 'جيب التواصل' },
+  opp_finding_contacts:     { en: 'Searching…',           ar: 'أدوّر…' },
+  opp_contacts_found:       { en: 'contact(s) found',     ar: 'جهة تواصل' },
+  opp_contacts_none_found:  { en: 'Searched — nothing published publicly', ar: 'بحثنا — ما فيه تواصل منشور' },
+  opp_contacts_retry:       { en: 'Search again',         ar: 'دوّر مرة ثانية' },
+  opp_all_cities:           { en: 'All cities',           ar: 'كل المدن' },
+  opp_all_dates:            { en: 'Any date',             ar: 'أي تاريخ' },
+  opp_last_week:            { en: 'Last 7 days',          ar: 'آخر أسبوع' },
+  opp_last_month:           { en: 'Last 30 days',         ar: 'آخر شهر' },
+  opp_last_3months:         { en: 'Last 90 days',         ar: 'آخر ٣ شهور' },
 
   // ─── Client Projects ─────────────────────────────────────────────────────
   cp_title:                 { en: 'Client Projects',    ar: 'المشاريع' },

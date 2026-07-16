@@ -94,6 +94,10 @@ export interface Opportunity {
   // Who is behind it
   owner: string // developer / contractor / government entity
   contacts: OpportunityContact[]
+  // When we last ran the dedicated contact hunt for `owner`. Optional because
+  // records created before the feature existed simply won't have it. null/absent
+  // = never hunted (so the card shows the button rather than "none found").
+  contactsFetchedAt?: string | null
   // Why we care + how to go after it
   relevance: string // the marble/granite scope we could win
   targeting: string // suggested approach, concrete steps

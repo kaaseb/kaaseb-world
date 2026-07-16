@@ -17,6 +17,7 @@ import { readJson, writeJson } from '@/lib/s3'
 import type {
   Opportunity,
   OpportunitiesState,
+  OpportunityContact,
   ScanRun,
   ScanTrigger,
 } from './types'
@@ -132,6 +133,27 @@ export async function updateOpportunity(
   const idx = state.items.findIndex((o) => o.id === id)
   if (idx < 0) return null
   state.items[idx] = { ...state.items[idx], ...patch, updatedAt: new Date().toISOString() }
+  await writeState(state)
+  return state.items[idx]
+}
+
+export async function getOpportunity(id: string): Promise<Opportunity | null> {
+  const state = await readState()
+  return state.items.find((o) => o.id === id) ?? null
+}
+
+// Result of the dedicated contact hunt. Stamped even when nothing was found, so
+// the card can say "we looked, there's nothing published" instead of offering
+// the button again and burning another search on the same dead end.
+export async function setContacts(
+  id: string,
+  contacts: OpportunityContact[],
+): Promise<Opportunity | null> {
+  const state = await readState()
+  const idx = state.items.findIndex((o) => o.id === id)
+  if (idx < 0) return null
+  const now = new Date().toISOString()
+  state.items[idx] = { ...state.items[idx], contacts, contactsFetchedAt: now, updatedAt: now }
   await writeState(state)
   return state.items[idx]
 }
