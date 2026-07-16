@@ -256,18 +256,64 @@ export interface ScanResult {
   skipped?: boolean // a scan was already running
 }
 
-// Resolve which OpenAI model does the searching. Honour the configured chat
-// model when OpenAI is the active provider; otherwise fall back to the same
-// default the rest of the app uses, since web_search is an OpenAI-only tool.
-async function resolveModel(): Promise<string> {
-  if (process.env.OPPORTUNITIES_MODEL) return process.env.OPPORTUNITIES_MODEL
+// Models we'd happily run the scout on, best first. All are Responses-API
+// models that support the web_search tool.
+const PREFERRED_MODELS = [
+  'gpt-5.4-mini', 'gpt-5.4', 'gpt-5.5-mini', 'gpt-5.5',
+  'gpt-4.1-mini', 'gpt-4.1', 'gpt-4o-mini', 'gpt-4o',
+]
+
+// Not text/chat models — never pick these as a last resort.
+const NOT_CHAT = /(image|audio|tts|realtime|whisper|embedding|moderation|dall|transcrib|sora|computer-use)/i
+
+// What the account can ACTUALLY call. Mirrors src/app/api/ai/models/route.ts.
+async function listAvailableModels(apiKey: string): Promise<Set<string>> {
+  try {
+    const r = await fetch('https://api.openai.com/v1/models', {
+      headers: { Authorization: `Bearer ${apiKey}` },
+    })
+    if (!r.ok) return new Set()
+    const j = (await r.json()) as { data?: Array<{ id: string }> }
+    return new Set((j.data || []).map((m) => m.id))
+  } catch {
+    return new Set()
+  }
+}
+
+// Pick the model to search with.
+//
+// WHY WE DON'T JUST TRUST ai_settings: the Settings dropdown merges the live
+// catalogue with a hard-coded fallback list (api/ai/models/route.ts), so it can
+// offer — and save — a model id this account cannot actually call. That is a
+// real thing that happened: `gpt-5.5-mini` was configured and every scan died
+// with "400 The requested model does not exist". So we verify against the live
+// list and degrade to something real instead of failing.
+async function resolveModel(apiKey: string): Promise<string> {
+  const prefs: string[] = []
+  if (process.env.OPPORTUNITIES_MODEL) prefs.push(process.env.OPPORTUNITIES_MODEL)
   try {
     const cfg = await getAiConfig()
-    if (cfg.provider === 'openai' && cfg.chatModel) return cfg.chatModel
+    if (cfg.provider === 'openai' && cfg.chatModel) prefs.push(cfg.chatModel)
   } catch {
-    /* settings unreadable — use the default below */
+    /* settings unreadable — the preference list below still stands */
   }
-  return 'gpt-5.4-mini'
+  prefs.push(...PREFERRED_MODELS)
+
+  const available = await listAvailableModels(apiKey)
+  // Couldn't read the catalogue (network/permission) — don't block the scan,
+  // just take the top preference and let any error surface normally.
+  if (available.size === 0) return prefs[0] || PREFERRED_MODELS[0]
+
+  for (const p of prefs) if (p && available.has(p)) return p
+
+  // Nothing we know about is available — take the newest generic gpt-* model
+  // the account does have rather than giving up.
+  const generic = [...available]
+    .filter((id) => /^gpt-/i.test(id) && !NOT_CHAT.test(id))
+    .sort((a, b) => b.localeCompare(a, undefined, { numeric: true }))
+  if (generic[0]) return generic[0]
+
+  throw new Error('ما فيه أي موديل OpenAI متاح لهذا المفتاح — راجع إعدادات الذكاء.')
 }
 
 export async function runScan(opts: { trigger: ScanTrigger; by?: string | null }): Promise<ScanResult> {
@@ -278,7 +324,7 @@ export async function runScan(opts: { trigger: ScanTrigger; by?: string | null }
     const apiKey = await getOpenAiKey()
     if (!apiKey) throw new Error('مفتاح OpenAI غير مضبوط — افتح الإعدادات وأضفه.')
 
-    const model = await resolveModel()
+    const model = await resolveModel(apiKey)
     const client = new OpenAI({ apiKey })
 
     const tuning = isReasoningModel(model)
