@@ -1,14 +1,23 @@
 // "الفرص" (Opportunities) — the scout.
 //
-// ONE OpenAI Responses call per scan, with the built-in `web_search` tool and a
-// strict json_schema response. That single call is the entire internet budget:
-// the model runs its own searches, reads what it needs, and hands back clean
-// rows. No scraping, no crawler, no third-party search key, nothing to maintain.
+// ONE small OpenAI Responses call PER SECTOR, each with the built-in
+// `web_search` tool and a strict json_schema response. No scraping, no crawler,
+// no third-party search key.
+//
+// WHY PER-SECTOR AND NOT ONE BIG CALL (learned the hard way, in production):
+// a single combined request reserved ~46-67k tokens against the org's 200k
+// tokens-per-minute ceiling — mostly because an uncapped `max_output_tokens`
+// makes OpenAI reserve the model's whole output budget up front. Retries then
+// reserved it again, and the scan strangled itself with 429s. Four focused
+// requests, each capped and spaced apart, never come close to the ceiling.
+// They also search better: each sector gets its own sources, and one sector
+// failing no longer loses the entire run.
 //
 // Cost control (the owner's explicit ask — "خفيفة والسحب قليل"):
 //   • one scan per day (plus the occasional manual click)
-//   • MAX_RESULTS caps what comes back
-//   • search_context_size: 'medium' — enough to read an article, not a library
+//   • MAX_PER_SECTOR caps what comes back
+//   • MAX_OUTPUT_TOKENS caps the reservation AND the bill
+//   • reasoning effort 'low' — this is extraction, not deep thought
 //   • beginRun() in the store refuses to stack a second scan on a running one
 //
 // Everything the model returns is treated as untrusted: validated, clamped and
@@ -19,6 +28,7 @@ import { getAiConfig, getOpenAiKey } from '@/lib/ai/config'
 import {
   CATEGORY_KEYS,
   STAGE_KEYS,
+  categoryLabel,
   isValidCategory,
   type OpportunityCategory,
   type OpportunityContact,
@@ -27,9 +37,14 @@ import {
 } from './types'
 import { beginRun, finishRun, mergeFindings, type NewOpportunity } from './store'
 
-// How many finds we accept from one scan. Ten good leads a day is already more
-// than a sales team works through; more would just burn tokens.
-const MAX_RESULTS = 10
+// Per sector. Four sectors → at most 16 finds a day, which is already more than
+// a sales team works through.
+const MAX_PER_SECTOR = 4
+
+// The single most important number here. Without it OpenAI reserves the model's
+// full output budget against your TPM limit and one scan can eat a third of the
+// minute. 6k is comfortably more than 4 opportunities of JSON.
+const MAX_OUTPUT_TOKENS = 6000
 
 // How far back the news sweep looks. Wider than the daily cadence on purpose —
 // dedup in the store kills the overlap, and it means a missed day self-heals.
@@ -38,10 +53,16 @@ const LOOKBACK_DAYS = 14
 // 'low' | 'medium' | 'high' — how much of the page text the tool pulls in.
 const SEARCH_CONTEXT: 'low' | 'medium' | 'high' = 'medium'
 
+// Breathing room between sectors so four requests never land in the same TPM
+// window as each other.
+const SECTOR_GAP_MS = 10_000
+
 // Field caps. The model is told to be brief; this is the hard stop.
 const MAX_LEN = { title: 160, summary: 600, relevance: 400, targeting: 700, city: 80, owner: 160, contact: 200 }
 const MAX_CONTACTS = 4
 const MAX_URLS = 4
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
 // gpt-5.x / o-series reject `temperature` and take `reasoning.effort` instead —
 // same branch the shared OpenAI provider makes (src/lib/ai/providers/openai.ts).
@@ -59,7 +80,7 @@ const RESPONSE_SCHEMA = {
   properties: {
     opportunities: {
       type: 'array',
-      description: `Up to ${MAX_RESULTS} verified opportunities. Fewer is better than invented.`,
+      description: `Up to ${MAX_PER_SECTOR} verified opportunities. Fewer is better than invented.`,
       items: {
         type: 'object',
         additionalProperties: false,
@@ -69,14 +90,14 @@ const RESPONSE_SCHEMA = {
         ],
         properties: {
           title: { type: 'string', description: 'Project name as published. Arabic or English, as found.' },
-          summary: { type: 'string', description: '1-3 sentences: what the project is, size/value if published.' },
+          summary: { type: 'string', description: '1-3 sentences: what the project is, size/value if published, and the other party (owner or contractor).' },
           category: { type: 'string', enum: CATEGORY_KEYS },
           stage: { type: 'string', enum: STAGE_KEYS },
           city: { type: 'string', description: 'City/region in Saudi Arabia. Empty string if not stated.' },
           owner: {
             type: 'string',
             description:
-              'WHO WE TARGET. Prefer the main contractor (the actual marble buyer) when known; otherwise the developer/government entity. Name the other party in summary.',
+              'WHO WE TARGET. Prefer the main contractor (the actual marble buyer) when known; otherwise the developer/government entity.',
           },
           contacts: {
             type: 'array',
@@ -121,89 +142,63 @@ interface RawOpportunity {
   publishedAt?: unknown
 }
 
-// ─── prompt ─────────────────────────────────────────────────────────────────
+// ─── prompts ────────────────────────────────────────────────────────────────
 
-function buildInstruction(): string {
+// Where each sector actually lives on the Saudi web. Keeping these per-sector
+// (instead of one giant source dump) is what makes each small request hit.
+const SECTOR_BRIEF: Record<OpportunityCategory, string> = {
+  government: `**اعتماد (etimad.sa)** — بوابة المنافسات والمشتريات الحكومية، المصدر الأول للمناقصات.
+**الهيئة الملكية لمدينة الرياض (rcrc.gov.sa)** • **وزارة الشؤون البلدية والقروية والإسكان (momrah.gov.sa)** • **صندوق الاستثمارات العامة (pif.gov.sa)**.
+المشاريع العملاقة: **نيوم (neom.com)** • **القدية (qiddiya.com)** • **الدرعية (diriyah.sa)** • **البحر الأحمر (redseaglobal.com)** • **المربع الجديد (newmurabba.com)** • أمالا • السودة للتطوير • مسار مكة • مطار الملك سلمان الدولي.
+حسابات X الرسمية: @Etimad_sa @NEOM @Qiddiya @Diriyah @RedSeaGlobal @PIF_ar @MOMRAHSA.`,
+
+  developers: `**روشن (roshn.sa)** @ROSHN_SA • **الوطنية للإسكان (nhc.sa)** @NHC_SA • **دار الأركان** • **رتال (retal.com.sa)** • **الأندلس العقارية** • **سمو العقارية** • **مدينة الملك عبدالله الاقتصادية (KAEC)** • **إعمار المدينة الاقتصادية**.
+والأهم: **إفصاحات تداول/أرقام** عن عقود إنشاء أبراج ومجمّعات وكمباوندات سكنية — ابحث "ترسية عقد" + "أبراج/مجمع سكني".`,
+
+  commercial: `**إفصاحات أرقام (argaam.com) وتداول (tadawul.com.sa)** عن عقود مولات وفنادق ومستشفيات ومطارات — هنا تلقى اسم المقاول الفائز.
+مطار الملك سلمان الدولي • وزارة الصحة (مستشفيات) • سلاسل الفنادق والمجموعات الفندقية • شركات التطوير التجاري • **الاقتصادية (aleqt.com)** و**مباشر** • MEED و Zawya Projects.`,
+
+  landmark: `مشاريع **توسعة الحرمين الشريفين** • **جبل عمر (jabalomar.com.sa)** • **رؤى المدينة** • **رؤى الحرم** • هيئة تطوير مكة المكرمة وهيئة تطوير المدينة المنورة • مشاريع المساجد الكبرى • القصور الخاصة والواجهات الحجرية الفاخرة.
+هذي المشاريع أعلى استهلاكاً للرخام الفاخر — انتبه لها.`,
+}
+
+function buildInstruction(category: OpportunityCategory): string {
   return `أنت محلل تطوير أعمال لشركة "كاسب" السعودية، متخصصة في **توريد وتركيب الرخام والجرانيت الطبيعي**.
-مهمتك: تبحث في الإنترنت عن **مشاريع جديدة في السعودية فقط** نقدر نوردّ لها رخام أو جرانيت، وترجّع صفوف نظيفة وموثّقة.
+مهمتك الآن: قسم **"${categoryLabel(category, 'ar')}"** فقط، في **السعودية فقط**.
 
 ## 🎯 المنطق الأهم — مين يشتري الرخام فعلاً؟
 **ليس مالك المشروع — بل المقاول الرئيسي أو مقاول التشطيبات.** لما تُعلن جهة عن مشروع، الجهة ما تشتري الرخام؛ **المقاول اللي ترسّى عليه العقد** هو اللي يشتري ويتعاقد مع الموردين.
 
-لذلك:
-1. **أثمن إشارة على الإطلاق = ترسية عقد (ترسية / توقيع عقد / إسناد).** ابحث عنها بإلحاح.
-2. في حقل \`owner\` ضع **الجهة اللي نستهدفها فعلاً**: المقاول الرئيسي لو معروف، وإلا المطوّر/المالك. واذكر الطرف الآخر في \`summary\`.
-3. **التوقيت الذهبي:** الرخام يُشترى في **مرحلة التشطيب** — أي بعد ١٢-٢٤ شهر من بدء التنفيذ. فمشروع ترسّى قبل سنة أو سنتين ودخل التشطيب **أثمن** من مشروع أُعلن أمس ولسه ما بدأ. اعكس هذا في \`score\`.
+1. **أثمن إشارة = ترسية عقد** (ترسية / توقيع عقد / إسناد). الشركات المدرجة في **تداول ملزمة نظاماً** بالإفصاح عنها في **أرقام (argaam.com)** — اسم المقاول + المشروع + القيمة + المدة. هذا عميلنا بالاسم والتاريخ.
+2. في \`owner\` ضع **الجهة اللي نستهدفها**: المقاول الرئيسي لو معروف، وإلا المطوّر/المالك. واذكر الطرف الآخر في \`summary\`.
+3. **التوقيت الذهبي:** الرخام يُشترى في **مرحلة التشطيب** — بعد ١٢-٢٤ شهر من بدء التنفيذ. مشروع ترسّى قبل سنة ودخل التشطيب **أثمن** من مشروع أُعلن أمس. اعكس هذا في \`score\`.
 
-## 📚 المصادر اللي لازم تغطيها (بالأولوية)
+## 📚 مصادر هذا القسم
+${SECTOR_BRIEF[category]}
 
-### ١. ترسيات العقود — أعلى إشارة (هنا المشتري الحقيقي، باسم وتاريخ ورقم)
-- **تداول (tadawul.com.sa) و أرقام (argaam.com)**: الشركات المدرجة **ملزمة نظاماً** بالإفصاح عن ترسية أي عقد جوهري — اسم المقاول + المشروع + القيمة + المدة. ابحث بكلمات: "ترسية" "توقيع عقد" "إسناد مشروع" "أمر تغييري" "عقد إنشاء".
-- **الهيئة السعودية للمقاولين (sca.sa)**.
-
-### ٢. المناقصات الحكومية الرسمية
-- **اعتماد (etimad.sa)** — بوابة المنافسات والمشتريات الحكومية الرسمية. المصدر الأول للمناقصات.
-- **وزارة الشؤون البلدية والقروية والإسكان (momrah.gov.sa)**.
-- **الهيئة الملكية لمدينة الرياض (rcrc.gov.sa)**.
-
-### ٣. المشاريع العملاقة والمطوّرون (المواقع والحسابات الرسمية)
-نيوم neom.com | روشن roshn.sa | القدية qiddiya.com | الدرعية diriyah.sa | البحر الأحمر redseaglobal.com | المربع الجديد newmurabba.com | الوطنية للإسكان nhc.sa | صندوق الاستثمارات العامة pif.gov.sa | مدينة الملك عبدالله الاقتصادية (KAEC) | السودة للتطوير | أمالا | مسار مكة | رؤى المدينة | جبل عمر | دار الأركان | رتال | الأندلس العقارية.
-
-### ٤. الأخبار الاقتصادية والعقارية السعودية
-الاقتصادية (aleqt.com) | أرقام (argaam.com) | مباشر | العربية بزنس | MEED | Zawya Projects | Construction Week Middle East.
-
-### ٥. حسابات التواصل الاجتماعي — **مصدر معتبر، وكثير إعلانات تنزل فيه أولاً**
-- **X (تويتر):** @Etimad_sa، @Argaam، @aleqtisadiah، @Tadawul_SA، @SaudiContractors، @MOMRAHSA، @ROSHN_SA، @NEOM، @Qiddiya، @Diriyah، @RedSeaGlobal، @PIF_ar، @NHC_SA.
-- **LinkedIn:** صفحات المقاولين والمطوّرين — كثير منهم يعلنون فوزهم بالمشاريع، وأحياناً ينشرون طلبات توريد.
-- **حسابات كبار المقاولين:** البواني، نسما وشركاه، الفوزان القابضة، الخضري، محمد المجدوعي، الراشد للتجارة والمقاولات، شبه الجزيرة، الحبيب.
-
-> السوشيل ميديا **مقبول كمصدر** بشرط أن يكون **حساباً رسمياً موثّقاً للجهة نفسها** (أو صحيفة اقتصادية معتبرة)، وتعطي رابط المنشور في \`sourceUrls\`. لا تأخذ من حسابات مجهولة أو إشاعات.
+**سوشيل ميديا مقبول** بشرط أن يكون **حساباً رسمياً موثّقاً للجهة نفسها** أو صحيفة اقتصادية معتبرة، مع رابط المنشور في \`sourceUrls\`. ممنوع الحسابات المجهولة والإشاعات.
 
 ## القواعد الصارمة
-1. **السعودية فقط.** أي مشروع خارج المملكة يُرفض تماماً — لا تُرجعه إطلاقاً.
-2. **أخبار حديثة فقط** — خلال آخر ${LOOKBACK_DAYS} يوم. لا تُرجع مشاريع قديمة أو مكتملة.
-3. **لا تخترع أبداً.** كل معلومة لازم تكون منشورة فعلاً في مصدر تقدر تعطي رابطه. إذا ما لقيت معلومة، اترك الحقل نصاً فارغاً (أو null للتاريخ). **صفوف أقل وموثّقة أفضل بكثير من صفوف كثيرة مخترعة.**
-4. **جهات التواصل: معلومات أعمال عامة فقط** — إيميل/هاتف/موقع منشور رسمياً من الجهة نفسها (موقعها الرسمي، بوابة مناقصات، بيان صحفي). على مستوى الشركة أو الإدارة (مثل "إدارة المشتريات"). **ممنوع تماماً**: بيانات شخصية خاصة، أو أرقام/إيميلات مخمّنة أو مركّبة. إذا ما فيه تواصل منشور → أرجع مصفوفة فارغة.
-5. **الصلة بالرخام شرط.** المشروع لازم يكون فيه نطاق تشطيبات حجرية محتمل (أرضيات، واجهات، درج، حمامات، لوبيات). لو المشروع ما له علاقة (مثل شبكة كهرباء أو مشروع برمجي) → لا ترجعه.
-6. **الأولوية للتوقيت الصح**: المشاريع في مرحلة **المناقصة أو ما بعد الترسية أو قرب التشطيب** هي الأثمن (هذا وقت شراء الرخام). أعطها درجة أعلى من مشروع لسه "معلن" فقط.
-7. **درجة الأولوية (score) صادقة**: 80-100 = فرصة ضخمة وقريبة وواضحة الجهة. 50-79 = جيدة. 1-49 = ضعيفة أو معلومات ناقصة. لا تعطي كل الصفوف درجات عالية.
-8. أقصى عدد: **${MAX_RESULTS}** فرص.
+1. **السعودية فقط.** أي مشروع خارج المملكة يُرفض تماماً.
+2. **أخبار آخر ${LOOKBACK_DAYS} يوم** (الخبر حديث؛ المشروع نفسه ممكن يكون بدأ قبل فترة وهذا مطلوب).
+3. **لا تخترع أبداً.** كل معلومة لازم تكون منشورة فعلاً مع رابط. ما لقيت؟ اترك الحقل فارغاً (أو null للتاريخ). **صفوف أقل وموثّقة أفضل بكثير من صفوف مخترعة.**
+4. **جهات التواصل: معلومات أعمال عامة فقط** — منشورة رسمياً من الجهة (موقعها، بوابة مناقصات، بيان صحفي)، على مستوى الشركة أو الإدارة. **ممنوع** بيانات شخصية خاصة أو أرقام/إيميلات مخمّنة. ما فيه تواصل منشور؟ أرجع مصفوفة فارغة.
+5. **الصلة بالرخام شرط** — لازم يكون فيه نطاق تشطيبات حجرية محتمل (أرضيات، واجهات، درج، حمامات، لوبيات).
+6. **\`category\` لازم يكون \`${category}\`** لكل الصفوف.
+7. **\`score\` صادق**: 80-100 = فرصة ضخمة وقريبة وواضحة الجهة. 50-79 = جيدة. 1-49 = ضعيفة أو ناقصة. لا تعطي الكل درجات عالية.
+8. أقصى عدد: **${MAX_PER_SECTOR}** فرص.
 
-## التصنيف (category) — اختر واحداً بالضبط
-- \`government\`: مشاريع حكومية وعملاقة (نيوم، روشن، القدية، أمانات، وزارات، مشاريع الدولة الكبرى).
-- \`developers\`: مطوّرون عقاريون، أبراج سكنية/تجارية، كمباوندات، مجمّعات سكنية.
-- \`commercial\`: مولات، فنادق، مستشفيات، مطارات، مكاتب، منشآت تجارية وضيافة.
-- \`landmark\`: مساجد، قصور خاصة، واجهات حجرية ومعالم.
-
-## الحقول
-- \`title\`: اسم المشروع كما نُشر.
-- \`summary\`: ٢-٣ جمل: إيش المشروع، وحجمه/قيمته إذا منشورة.
-- \`stage\`: من القائمة المحددة فقط.
-- \`city\`: المدينة/المنطقة في السعودية.
-- \`owner\`: الجهة المالكة/المطوّر/المقاول الرئيسي.
-- \`relevance\`: **نطاق الرخام تحديداً** اللي ممكن نكسبه هنا (مثال: "أرضيات لوبي + واجهات حجرية + درج رخام لـ ٣ أبراج").
-- \`targeting\`: **خطوات عملية بالعربي** للدخول معهم (مين نكلّم، وش نجهّز، وش التوقيت الصح). كن محدداً ومفيداً، لا كلام عام.
-- \`sourceUrls\`: روابط حقيقية شغّالة تثبت الصف.
-- \`publishedAt\`: تاريخ الخبر بصيغة YYYY-MM-DD أو null.
-
-اكتب \`summary\` و \`relevance\` و \`targeting\` **بالعربي**. أرجع JSON فقط مطابقاً للمخطط.`
+اكتب \`summary\` و\`relevance\` و\`targeting\` **بالعربي**. \`targeting\` لازم يكون **خطوات عملية محددة** (مين نكلّم، وش نجهّز، وش التوقيت) لا كلام عام. أرجع JSON فقط.`
 }
 
-function buildUserText(): string {
+function buildUserText(category: OpportunityCategory): string {
   const today = new Date().toISOString().slice(0, 10)
   return `تاريخ اليوم: ${today}.
-ابحث الآن في الإنترنت عن فرص توريد وتركيب رخام/جرانيت في **السعودية**، من أخبار آخر ${LOOKBACK_DAYS} يوم.
+ابحث الآن في الإنترنت عن فرص توريد وتركيب رخام/جرانيت في السعودية ضمن قسم **"${categoryLabel(category, 'ar')}"**، من أخبار آخر ${LOOKBACK_DAYS} يوم.
 
-نفّذ بحثاً متعدد الزوايا — لا تكتفِ ببحث واحد:
-1. **ترسيات العقود** (الأهم): ابحث في أرقام/تداول عن "ترسية عقد" و"توقيع عقد إنشاء" و"إسناد مشروع" لمقاولين سعوديين. هؤلاء المقاولون = عملاؤنا المباشرون.
-2. **المناقصات**: اعتماد (etimad.sa) — منافسات مباني/تشطيبات/أعمال حجر.
-3. **إعلانات المطوّرين والمشاريع العملاقة**: نيوم، روشن، القدية، الدرعية، البحر الأحمر، المربع الجديد، الوطنية للإسكان.
-4. **الأخبار الاقتصادية**: الاقتصادية، أرقام، مباشر.
-5. **الحسابات الرسمية على X و LinkedIn** لهذه الجهات والمقاولين.
+ابدأ بالبحث عن **ترسيات العقود** في أرقام/تداول، ثم غطِّ مصادر القسم المذكورة. استهدف **المقاول**، وقيّم حسب قرب مرحلة التشطيب.
 
-لكل فرصة: وثّقها برابط حقيقي، واستخرج جهات التواصل العامة المنشورة فقط، واقترح طريقة استهداف عملية ومحددة.
-
-**تذكّر:** استهدف **المقاول**، وقيّم حسب قرب مرحلة التشطيب. أرجع JSON فقط.`
+أرجع حتى ${MAX_PER_SECTOR} فرص موثّقة بروابط حقيقية. JSON فقط.`
 }
 
 // ─── sanitising the model's output ──────────────────────────────────────────
@@ -256,12 +251,13 @@ function sanitizeContacts(v: unknown): OpportunityContact[] {
   return out
 }
 
-function sanitize(raw: RawOpportunity): NewOpportunity | null {
+function sanitize(raw: RawOpportunity, expected: OpportunityCategory): NewOpportunity | null {
   const title = str(raw.title, MAX_LEN.title)
   const owner = str(raw.owner, MAX_LEN.owner)
   if (!title) return null // a row with no project name is unusable
 
-  const category: OpportunityCategory = isValidCategory(raw.category) ? raw.category : 'developers'
+  // Trust the sector we asked for over whatever the model labelled it.
+  const category: OpportunityCategory = isValidCategory(raw.category) ? raw.category : expected
   const stage = (STAGE_KEYS as string[]).includes(raw.stage as string)
     ? (raw.stage as OpportunityStage)
     : 'unknown'
@@ -289,15 +285,7 @@ function sanitize(raw: RawOpportunity): NewOpportunity | null {
   }
 }
 
-// ─── the scan ───────────────────────────────────────────────────────────────
-
-export interface ScanResult {
-  ok: boolean
-  found: number
-  added: number
-  error: string | null
-  skipped?: boolean // a scan was already running
-}
+// ─── model selection ────────────────────────────────────────────────────────
 
 // Models we'd happily run the scout on, best first. All are Responses-API
 // models that support the web_search tool.
@@ -359,10 +347,11 @@ async function resolveModel(apiKey: string): Promise<string> {
   throw new Error('ما فيه أي موديل OpenAI متاح لهذا المفتاح — راجع إعدادات الذكاء.')
 }
 
-// A web_search request is token-heavy (it pulls page text in), so it can trip
-// the org's per-minute token ceiling — especially if another feature is mid-call.
-// OpenAI answers 429 and tells us exactly how long to wait ("try again in 13.7s"),
-// so we honour that instead of failing a scan that would have worked seconds later.
+// ─── one sector ─────────────────────────────────────────────────────────────
+
+// A web_search request can still collide with whatever else the org is doing,
+// so honour the exact wait OpenAI hands back in a 429 rather than failing a
+// sector that would have worked seconds later.
 async function createWithRetry(
   client: OpenAI,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -378,11 +367,78 @@ async function createWithRetry(
       const err = e as { status?: number; message?: string }
       if (err.status !== 429 || i === attempts - 1) throw e
       const m = /try again in ([\d.]+)\s*s/i.exec(err.message || '')
-      const waitMs = m ? Math.ceil(parseFloat(m[1]) * 1000) + 1500 : (i + 1) * 20_000
-      await new Promise((r) => setTimeout(r, Math.min(waitMs, 90_000)))
+      const waitMs = m ? Math.ceil(parseFloat(m[1]) * 1000) + 2000 : (i + 1) * 20_000
+      await sleep(Math.min(waitMs, 90_000))
     }
   }
   throw lastErr
+}
+
+async function scanSector(
+  client: OpenAI,
+  model: string,
+  category: OpportunityCategory,
+): Promise<NewOpportunity[]> {
+  const tuning = isReasoningModel(model)
+    ? { reasoning: { effort: 'low' as const } }
+    : { temperature: 0.2 }
+
+  const res = await createWithRetry(client, {
+    model,
+    instructions: buildInstruction(category),
+    input: buildUserText(category),
+    max_output_tokens: MAX_OUTPUT_TOKENS,
+    tools: [
+      {
+        type: 'web_search',
+        search_context_size: SEARCH_CONTEXT,
+        // Biases the tool's own searches toward Saudi sources/results, which
+        // is exactly the scope the owner asked for.
+        user_location: {
+          type: 'approximate',
+          country: 'SA',
+          city: 'Riyadh',
+          region: 'Riyadh',
+          timezone: 'Asia/Riyadh',
+        },
+      },
+    ],
+    ...tuning,
+    text: {
+      format: {
+        type: 'json_schema',
+        name: 'opportunity_scan',
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        schema: RESPONSE_SCHEMA as any,
+        strict: true,
+      },
+    },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  } as any)
+
+  const rawText = ((res as { output_text?: string }).output_text || '').trim() || '{}'
+  let parsed: { opportunities?: unknown }
+  try {
+    parsed = JSON.parse(rawText)
+  } catch {
+    throw new Error(`رد غير صالح: ${rawText.slice(0, 150)}`)
+  }
+
+  const list = Array.isArray(parsed.opportunities) ? parsed.opportunities : []
+  return list
+    .slice(0, MAX_PER_SECTOR)
+    .map((r) => sanitize(r as RawOpportunity, category))
+    .filter((o): o is NewOpportunity => o !== null)
+}
+
+// ─── the scan ───────────────────────────────────────────────────────────────
+
+export interface ScanResult {
+  ok: boolean
+  found: number
+  added: number
+  error: string | null
+  skipped?: boolean // a scan was already running
 }
 
 export async function runScan(opts: { trigger: ScanTrigger; by?: string | null }): Promise<ScanResult> {
@@ -396,59 +452,30 @@ export async function runScan(opts: { trigger: ScanTrigger; by?: string | null }
     const model = await resolveModel(apiKey)
     const client = new OpenAI({ apiKey })
 
-    const tuning = isReasoningModel(model)
-      ? { reasoning: { effort: 'medium' as const } }
-      : { temperature: 0.2 }
+    let found = 0
+    let added = 0
+    const errors: string[] = []
 
-    const res = await createWithRetry(client, {
-      model,
-      instructions: buildInstruction(),
-      input: buildUserText(),
-      tools: [
-        {
-          type: 'web_search',
-          search_context_size: SEARCH_CONTEXT,
-          // Biases the tool's own searches toward Saudi sources/results, which
-          // is exactly the scope the owner asked for.
-          user_location: {
-            type: 'approximate',
-            country: 'SA',
-            city: 'Riyadh',
-            region: 'Riyadh',
-            timezone: 'Asia/Riyadh',
-          },
-        },
-      ],
-      ...tuning,
-      text: {
-        format: {
-          type: 'json_schema',
-          name: 'opportunity_scan',
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          schema: RESPONSE_SCHEMA as any,
-          strict: true,
-        },
-      },
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any)
-
-    const rawText = ((res as { output_text?: string }).output_text || '').trim() || '{}'
-    let parsed: { opportunities?: unknown }
-    try {
-      parsed = JSON.parse(rawText)
-    } catch {
-      throw new Error(`الذكاء رجّع رداً غير صالح: ${rawText.slice(0, 200)}`)
+    for (let i = 0; i < CATEGORY_KEYS.length; i++) {
+      const category = CATEGORY_KEYS[i]
+      try {
+        const rows = await scanSector(client, model, category)
+        found += rows.length
+        // Merge per sector so the page fills in progressively while the rest
+        // of the scan is still running.
+        added += await mergeFindings(rows)
+      } catch (e) {
+        errors.push(`${categoryLabel(category, 'ar')}: ${e instanceof Error ? e.message : 'فشل'}`)
+      }
+      if (i < CATEGORY_KEYS.length - 1) await sleep(SECTOR_GAP_MS)
     }
 
-    const list = Array.isArray(parsed.opportunities) ? parsed.opportunities : []
-    const clean = list
-      .slice(0, MAX_RESULTS)
-      .map((r) => sanitize(r as RawOpportunity))
-      .filter((o): o is NewOpportunity => o !== null)
-
-    const added = await mergeFindings(clean)
-    await finishRun({ status: 'done', found: clean.length, added, error: null })
-    return { ok: true, found: clean.length, added, error: null }
+    // Only a total wipeout counts as a failed run — partial results are still
+    // results, and the team should see them.
+    const allFailed = errors.length === CATEGORY_KEYS.length
+    const error = errors.length ? errors.join(' • ') : null
+    await finishRun({ status: allFailed ? 'failed' : 'done', found, added, error })
+    return { ok: !allFailed, found, added, error }
   } catch (e) {
     const error = e instanceof Error ? e.message : 'فشل البحث عن الفرص'
     await finishRun({ status: 'failed', error })
