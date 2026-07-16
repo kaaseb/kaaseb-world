@@ -73,7 +73,11 @@ const RESPONSE_SCHEMA = {
           category: { type: 'string', enum: CATEGORY_KEYS },
           stage: { type: 'string', enum: STAGE_KEYS },
           city: { type: 'string', description: 'City/region in Saudi Arabia. Empty string if not stated.' },
-          owner: { type: 'string', description: 'Developer / main contractor / government entity behind it.' },
+          owner: {
+            type: 'string',
+            description:
+              'WHO WE TARGET. Prefer the main contractor (the actual marble buyer) when known; otherwise the developer/government entity. Name the other party in summary.',
+          },
           contacts: {
             type: 'array',
             description: 'PUBLIC business contact points only. Empty array if none published.',
@@ -123,6 +127,38 @@ function buildInstruction(): string {
   return `أنت محلل تطوير أعمال لشركة "كاسب" السعودية، متخصصة في **توريد وتركيب الرخام والجرانيت الطبيعي**.
 مهمتك: تبحث في الإنترنت عن **مشاريع جديدة في السعودية فقط** نقدر نوردّ لها رخام أو جرانيت، وترجّع صفوف نظيفة وموثّقة.
 
+## 🎯 المنطق الأهم — مين يشتري الرخام فعلاً؟
+**ليس مالك المشروع — بل المقاول الرئيسي أو مقاول التشطيبات.** لما تُعلن جهة عن مشروع، الجهة ما تشتري الرخام؛ **المقاول اللي ترسّى عليه العقد** هو اللي يشتري ويتعاقد مع الموردين.
+
+لذلك:
+1. **أثمن إشارة على الإطلاق = ترسية عقد (ترسية / توقيع عقد / إسناد).** ابحث عنها بإلحاح.
+2. في حقل \`owner\` ضع **الجهة اللي نستهدفها فعلاً**: المقاول الرئيسي لو معروف، وإلا المطوّر/المالك. واذكر الطرف الآخر في \`summary\`.
+3. **التوقيت الذهبي:** الرخام يُشترى في **مرحلة التشطيب** — أي بعد ١٢-٢٤ شهر من بدء التنفيذ. فمشروع ترسّى قبل سنة أو سنتين ودخل التشطيب **أثمن** من مشروع أُعلن أمس ولسه ما بدأ. اعكس هذا في \`score\`.
+
+## 📚 المصادر اللي لازم تغطيها (بالأولوية)
+
+### ١. ترسيات العقود — أعلى إشارة (هنا المشتري الحقيقي، باسم وتاريخ ورقم)
+- **تداول (tadawul.com.sa) و أرقام (argaam.com)**: الشركات المدرجة **ملزمة نظاماً** بالإفصاح عن ترسية أي عقد جوهري — اسم المقاول + المشروع + القيمة + المدة. ابحث بكلمات: "ترسية" "توقيع عقد" "إسناد مشروع" "أمر تغييري" "عقد إنشاء".
+- **الهيئة السعودية للمقاولين (sca.sa)**.
+
+### ٢. المناقصات الحكومية الرسمية
+- **اعتماد (etimad.sa)** — بوابة المنافسات والمشتريات الحكومية الرسمية. المصدر الأول للمناقصات.
+- **وزارة الشؤون البلدية والقروية والإسكان (momrah.gov.sa)**.
+- **الهيئة الملكية لمدينة الرياض (rcrc.gov.sa)**.
+
+### ٣. المشاريع العملاقة والمطوّرون (المواقع والحسابات الرسمية)
+نيوم neom.com | روشن roshn.sa | القدية qiddiya.com | الدرعية diriyah.sa | البحر الأحمر redseaglobal.com | المربع الجديد newmurabba.com | الوطنية للإسكان nhc.sa | صندوق الاستثمارات العامة pif.gov.sa | مدينة الملك عبدالله الاقتصادية (KAEC) | السودة للتطوير | أمالا | مسار مكة | رؤى المدينة | جبل عمر | دار الأركان | رتال | الأندلس العقارية.
+
+### ٤. الأخبار الاقتصادية والعقارية السعودية
+الاقتصادية (aleqt.com) | أرقام (argaam.com) | مباشر | العربية بزنس | MEED | Zawya Projects | Construction Week Middle East.
+
+### ٥. حسابات التواصل الاجتماعي — **مصدر معتبر، وكثير إعلانات تنزل فيه أولاً**
+- **X (تويتر):** @Etimad_sa، @Argaam، @aleqtisadiah، @Tadawul_SA، @SaudiContractors، @MOMRAHSA، @ROSHN_SA، @NEOM، @Qiddiya، @Diriyah، @RedSeaGlobal، @PIF_ar، @NHC_SA.
+- **LinkedIn:** صفحات المقاولين والمطوّرين — كثير منهم يعلنون فوزهم بالمشاريع، وأحياناً ينشرون طلبات توريد.
+- **حسابات كبار المقاولين:** البواني، نسما وشركاه، الفوزان القابضة، الخضري، محمد المجدوعي، الراشد للتجارة والمقاولات، شبه الجزيرة، الحبيب.
+
+> السوشيل ميديا **مقبول كمصدر** بشرط أن يكون **حساباً رسمياً موثّقاً للجهة نفسها** (أو صحيفة اقتصادية معتبرة)، وتعطي رابط المنشور في \`sourceUrls\`. لا تأخذ من حسابات مجهولة أو إشاعات.
+
 ## القواعد الصارمة
 1. **السعودية فقط.** أي مشروع خارج المملكة يُرفض تماماً — لا تُرجعه إطلاقاً.
 2. **أخبار حديثة فقط** — خلال آخر ${LOOKBACK_DAYS} يوم. لا تُرجع مشاريع قديمة أو مكتملة.
@@ -156,11 +192,18 @@ function buildInstruction(): string {
 function buildUserText(): string {
   const today = new Date().toISOString().slice(0, 10)
   return `تاريخ اليوم: ${today}.
-ابحث الآن في الإنترنت عن أحدث المشاريع الإنشائية والعقارية المعلنة في **السعودية** خلال آخر ${LOOKBACK_DAYS} يوم، واللي فيها فرصة توريد وتركيب رخام/جرانيت.
+ابحث الآن في الإنترنت عن فرص توريد وتركيب رخام/جرانيت في **السعودية**، من أخبار آخر ${LOOKBACK_DAYS} يوم.
 
-غطِّ مصادر متنوعة: الأخبار الاقتصادية والعقارية السعودية، إعلانات المطوّرين، بوابات المناقصات الحكومية (مثل اعتماد/منافسات)، بيانات الترسيات، وأخبار المقاولين.
+نفّذ بحثاً متعدد الزوايا — لا تكتفِ ببحث واحد:
+1. **ترسيات العقود** (الأهم): ابحث في أرقام/تداول عن "ترسية عقد" و"توقيع عقد إنشاء" و"إسناد مشروع" لمقاولين سعوديين. هؤلاء المقاولون = عملاؤنا المباشرون.
+2. **المناقصات**: اعتماد (etimad.sa) — منافسات مباني/تشطيبات/أعمال حجر.
+3. **إعلانات المطوّرين والمشاريع العملاقة**: نيوم، روشن، القدية، الدرعية، البحر الأحمر، المربع الجديد، الوطنية للإسكان.
+4. **الأخبار الاقتصادية**: الاقتصادية، أرقام، مباشر.
+5. **الحسابات الرسمية على X و LinkedIn** لهذه الجهات والمقاولين.
 
-لكل فرصة: وثّقها برابط، واستخرج جهات التواصل العامة المنشورة فقط، واقترح طريقة استهداف عملية. أرجع JSON فقط.`
+لكل فرصة: وثّقها برابط حقيقي، واستخرج جهات التواصل العامة المنشورة فقط، واقترح طريقة استهداف عملية ومحددة.
+
+**تذكّر:** استهدف **المقاول**، وقيّم حسب قرب مرحلة التشطيب. أرجع JSON فقط.`
 }
 
 // ─── sanitising the model's output ──────────────────────────────────────────
@@ -316,6 +359,32 @@ async function resolveModel(apiKey: string): Promise<string> {
   throw new Error('ما فيه أي موديل OpenAI متاح لهذا المفتاح — راجع إعدادات الذكاء.')
 }
 
+// A web_search request is token-heavy (it pulls page text in), so it can trip
+// the org's per-minute token ceiling — especially if another feature is mid-call.
+// OpenAI answers 429 and tells us exactly how long to wait ("try again in 13.7s"),
+// so we honour that instead of failing a scan that would have worked seconds later.
+async function createWithRetry(
+  client: OpenAI,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  params: any,
+  attempts = 3,
+): Promise<unknown> {
+  let lastErr: unknown
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await client.responses.create(params)
+    } catch (e) {
+      lastErr = e
+      const err = e as { status?: number; message?: string }
+      if (err.status !== 429 || i === attempts - 1) throw e
+      const m = /try again in ([\d.]+)\s*s/i.exec(err.message || '')
+      const waitMs = m ? Math.ceil(parseFloat(m[1]) * 1000) + 1500 : (i + 1) * 20_000
+      await new Promise((r) => setTimeout(r, Math.min(waitMs, 90_000)))
+    }
+  }
+  throw lastErr
+}
+
 export async function runScan(opts: { trigger: ScanTrigger; by?: string | null }): Promise<ScanResult> {
   const run = await beginRun(opts.trigger, opts.by ?? null)
   if (!run) return { ok: false, found: 0, added: 0, error: null, skipped: true }
@@ -331,7 +400,7 @@ export async function runScan(opts: { trigger: ScanTrigger; by?: string | null }
       ? { reasoning: { effort: 'medium' as const } }
       : { temperature: 0.2 }
 
-    const res = await client.responses.create({
+    const res = await createWithRetry(client, {
       model,
       instructions: buildInstruction(),
       input: buildUserText(),
