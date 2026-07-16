@@ -71,8 +71,27 @@ function markStaleRun(run: CompanyScanRun | null): CompanyScanRun | null {
   return {
     ...run,
     status: 'failed',
-    error: run.error || 'توقف البحث قبل ما يكمل (السيرفر أعاد التشغيل).',
+    error: run.error || 'البحث تجاوز نصف ساعة ولم يكتمل. أي نتائج ظهرت محفوظة — اضغط "تحديث الآن" لإكمال الباقي.',
   }
+}
+
+// Names we already hold, newest first — fed to the model as a "don't bring me
+// these" list.
+//
+// WHY THIS MATTERS MORE THAN ANY OTHER TUNING: asking "who are Saudi Arabia's
+// big contractors?" every single day gets البواني/نسما/الفوزان every single day.
+// The store then throws all of it away as duplicates and the run reports
+// added=0 — we paid for the search and learned nothing. Telling the model what
+// we already have turns a wasted call into a productive one, at a cost of a few
+// hundred tokens.
+export async function existingNames(limit = 80): Promise<string[]> {
+  const state = await readState()
+  return state.items
+    .slice()
+    .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''))
+    .slice(0, limit)
+    .map((c) => c.name)
+    .filter(Boolean)
 }
 
 export async function getCompany(id: string): Promise<TargetCompany | null> {

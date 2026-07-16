@@ -119,7 +119,10 @@ function markStaleRun(run: ScanRun | null): ScanRun | null {
     ...run,
     status: 'failed',
     finishedAt: run.finishedAt,
-    error: run.error || 'توقف البحث قبل ما يكمل (السيرفر أعاد التشغيل).',
+    // Say what we KNOW, not what we guess. The old wording blamed a server
+    // restart, which sent the owner hunting through server logs for a restart
+    // that never happened. All we actually know is that it overran.
+    error: run.error || 'البحث تجاوز نصف ساعة ولم يكتمل. أي نتائج ظهرت محفوظة — اضغط "تحديث الآن" لإكمال الباقي.',
   }
 }
 
@@ -135,6 +138,19 @@ export async function updateOpportunity(
   state.items[idx] = { ...state.items[idx], ...patch, updatedAt: new Date().toISOString() }
   await writeState(state)
   return state.items[idx]
+}
+
+// Project titles we already hold, newest first — fed to the model as a "don't
+// bring me these" list. Same reasoning as the companies store: re-finding the
+// same news every morning and binning it as duplicates is a bill for nothing.
+export async function existingTitles(limit = 60): Promise<string[]> {
+  const state = await readState()
+  return state.items
+    .slice()
+    .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''))
+    .slice(0, limit)
+    .map((o) => (o.owner ? `${o.title} — ${o.owner}` : o.title))
+    .filter(Boolean)
 }
 
 export async function getOpportunity(id: string): Promise<Opportunity | null> {

@@ -22,7 +22,7 @@ import {
   type CompanySize,
   type CompanyScanTrigger,
 } from './types'
-import { beginCompanyRun, finishCompanyRun, mergeCompanies, type NewCompany } from './store'
+import { beginCompanyRun, finishCompanyRun, mergeCompanies, existingNames, type NewCompany } from './store'
 
 const MAX_PER_SECTOR = 8
 const MAX_OUTPUT_TOKENS = 10_000
@@ -35,6 +35,38 @@ const MAX_URLS = 4
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 const log = (msg: string) => console.log(`[شركات] ${msg}`)
+
+// The Saudi market, sliced into places you can actually search.
+//
+// WHY ROTATE: "who are Saudi Arabia's big contractors" has one answer, and the
+// model gives you the same famous names forever. Pointing each run at a
+// different region asks a question that has a NEW answer every time, so a month
+// of scans walks the whole map instead of re-reading the same page 30 times.
+// Costs nothing extra — same four calls, better question.
+const REGIONS = [
+  'الرياض',
+  'جدة',
+  'الدمام والخبر والظهران',
+  'مكة المكرمة',
+  'المدينة المنورة',
+  'القصيم وبريدة وعنيزة',
+  'الأحساء والهفوف',
+  'أبها وخميس مشيط وعسير',
+  'تبوك',
+  'حائل',
+  'الطائف',
+  'ينبع',
+  'الجبيل',
+  'جازان',
+  'نجران والباحة',
+]
+
+// Each sector gets a different region on the same day, so one run covers four
+// slices of the map, not one.
+function regionForToday(sectorIndex: number): string {
+  const day = Math.floor(Date.now() / 86_400_000)
+  return REGIONS[(day * COMPANY_CATEGORY_KEYS.length + sectorIndex) % REGIONS.length]
+}
 
 const RESPONSE_SCHEMA = {
   type: 'object',
@@ -139,12 +171,25 @@ ${SECTOR_BRIEF[category]}
 اكتب \`summary\` و\`projects\` و\`whyRelevant\` و\`targeting\` **بالعربي**. أرجع JSON فقط.`
 }
 
-function buildUserText(category: CompanyCategory): string {
+function buildUserText(category: CompanyCategory, region: string, known: string[]): string {
+  // The exclusion list is the difference between a productive scan and paying
+  // to rediscover البواني for the thirtieth time.
+  const exclusion =
+    known.length > 0
+      ? `\n\n## 🚫 عندنا هؤلاء بالفعل — **لا ترجع أياً منهم إطلاقاً**، ابحث عن شركات **غيرهم**:
+${known.map((n) => `- ${n}`).join('\n')}
+
+لو كل اللي تلقاه من القائمة أعلاه، **وسّع بحثك**: شركات أصغر، مدن أصغر داخل المنطقة، تخصصات فرعية. **صف واحد جديد أفضل من ثمانية مكررة.**`
+      : ''
+
   return `ابحث الآن في الإنترنت عن شركات سعودية حقيقية ضمن قسم **"${companyCategoryLabel(category, 'ar')}"** تصلح كعملاء لتوريد وتركيب الرخام والجرانيت.
+
+## 📍 ركّز على منطقة: **${region}**
+ابحث عن الشركات اللي مقرها أو نشاطها الرئيسي في **${region}**. لو ما لقيت ما يكفي فيها، وسّع للمناطق المجاورة — بس ابدأ منها.${exclusion}
 
 لكل شركة: اسمها الرسمي، مقرها، حجمها، مشاريعها الفعلية (إثبات)، وكم رخام تستهلك واقعياً، وطريقة عملية للدخول عليها. وثّق كل شركة برابط.
 
-أرجع حتى ${MAX_PER_SECTOR} شركات. JSON فقط.`
+أرجع حتى ${MAX_PER_SECTOR} شركات **جديدة**. JSON فقط.`
 }
 
 function str(v: unknown, max: number): string {
@@ -218,6 +263,8 @@ async function scanSector(
   client: OpenAI,
   model: string,
   category: CompanyCategory,
+  region: string,
+  known: string[],
 ): Promise<NewCompany[]> {
   const tuning = isReasoningModel(model)
     ? { reasoning: { effort: 'low' as const } }
@@ -226,7 +273,7 @@ async function scanSector(
   const res = await createWithRetry(client, {
     model,
     instructions: buildInstruction(category),
-    input: buildUserText(category),
+    input: buildUserText(category, region, known),
     max_output_tokens: MAX_OUTPUT_TOKENS,
     tools: [
       {
@@ -296,15 +343,20 @@ export async function runCompanyScan(opts: {
     let added = 0
     const errors: string[] = []
 
+    // Read once, not per sector — the list barely moves inside a single run.
+    const known = await existingNames()
+    log(`excluding ${known.length} known compan(ies) from this scan`)
+
     for (let i = 0; i < COMPANY_CATEGORY_KEYS.length; i++) {
       const category = COMPANY_CATEGORY_KEYS[i]
+      const region = regionForToday(i)
       const t0 = Date.now()
       try {
-        const rows = await scanSector(client, model, category)
+        const rows = await scanSector(client, model, category, region, known)
         found += rows.length
         const n = await mergeCompanies(rows)
         added += n
-        log(`sector ${category}: found=${rows.length} added=${n} (${Math.round((Date.now() - t0) / 1000)}s)`)
+        log(`sector ${category} [${region}]: found=${rows.length} added=${n} (${Math.round((Date.now() - t0) / 1000)}s)`)
       } catch (e) {
         const msg = e instanceof Error ? e.message : 'فشل'
         errors.push(`${companyCategoryLabel(category, 'ar')}: ${msg}`)

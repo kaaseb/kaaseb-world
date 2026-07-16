@@ -37,7 +37,7 @@ import {
   type OpportunityStage,
   type ScanTrigger,
 } from './types'
-import { beginRun, finishRun, mergeFindings, type NewOpportunity } from './store'
+import { beginRun, finishRun, mergeFindings, existingTitles, type NewOpportunity } from './store'
 import { notifyHighValue } from './notify'
 
 // Per sector. Four sectors → up to 32 finds a day. The list also ACCUMULATES:
@@ -191,14 +191,24 @@ ${SECTOR_BRIEF[category]}
 اكتب \`summary\` و\`relevance\` و\`targeting\` **بالعربي**. \`targeting\` لازم يكون **خطوات عملية محددة** (مين نكلّم، وش نجهّز، وش التوقيت) لا كلام عام. أرجع JSON فقط.`
 }
 
-function buildUserText(category: OpportunityCategory): string {
+function buildUserText(category: OpportunityCategory, known: string[]): string {
   const today = new Date().toISOString().slice(0, 10)
+  // Without this the scan re-reads yesterday's headlines, we bin them all as
+  // duplicates, and the run honestly reports "added 0" after paying full price.
+  const exclusion =
+    known.length > 0
+      ? `\n\n## 🚫 عندنا هذي الفرص بالفعل — **لا ترجع أياً منها**، ابحث عن **غيرها**:
+${known.map((n) => `- ${n}`).join('\n')}
+
+لو كل اللي تلقاه من القائمة أعلاه، **وسّع بحثك**: مصادر أقل شهرة، مشاريع أصغر، مدن ثانية، ترسيات أقدم شوي دخلت التشطيب. **فرصة واحدة جديدة أفضل من ثمانية مكررة.**`
+      : ''
+
   return `تاريخ اليوم: ${today}.
 ابحث الآن في الإنترنت عن فرص توريد وتركيب رخام/جرانيت في السعودية ضمن قسم **"${categoryLabel(category, 'ar')}"**، من أخبار آخر ${LOOKBACK_DAYS} يوم.
 
-ابدأ بالبحث عن **ترسيات العقود** في أرقام/تداول، ثم غطِّ مصادر القسم المذكورة. استهدف **المقاول**، وقيّم حسب قرب مرحلة التشطيب.
+ابدأ بالبحث عن **ترسيات العقود** في أرقام/تداول، ثم غطِّ مصادر القسم المذكورة. استهدف **المقاول**، وقيّم حسب قرب مرحلة التشطيب.${exclusion}
 
-أرجع حتى ${MAX_PER_SECTOR} فرص موثّقة بروابط حقيقية. JSON فقط.`
+أرجع حتى ${MAX_PER_SECTOR} فرص **جديدة** موثّقة بروابط حقيقية. JSON فقط.`
 }
 
 // ─── sanitising the model's output ──────────────────────────────────────────
@@ -289,6 +299,7 @@ async function scanSector(
   client: OpenAI,
   model: string,
   category: OpportunityCategory,
+  known: string[],
 ): Promise<NewOpportunity[]> {
   const tuning = isReasoningModel(model)
     ? { reasoning: { effort: 'low' as const } }
@@ -297,7 +308,7 @@ async function scanSector(
   const res = await createWithRetry(client, {
     model,
     instructions: buildInstruction(category),
-    input: buildUserText(category),
+    input: buildUserText(category, known),
     max_output_tokens: MAX_OUTPUT_TOKENS,
     tools: [
       {
@@ -372,11 +383,15 @@ export async function runScan(opts: { trigger: ScanTrigger; by?: string | null }
     const errors: string[] = []
     const addedRows: Opportunity[] = []
 
+    // Read once, not per sector — the list barely moves inside a single run.
+    const known = await existingTitles()
+    log(`excluding ${known.length} known opportunit(ies) from this scan`)
+
     for (let i = 0; i < CATEGORY_KEYS.length; i++) {
       const category = CATEGORY_KEYS[i]
       const t0 = Date.now()
       try {
-        const rows = await scanSector(client, model, category)
+        const rows = await scanSector(client, model, category, known)
         found += rows.length
         // Merge per sector so the page fills in progressively while the rest
         // of the scan is still running.
