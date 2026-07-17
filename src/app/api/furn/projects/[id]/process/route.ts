@@ -15,6 +15,7 @@ import { createClient } from '@/lib/supabase/server'
 import { verifyOrigin } from '@/lib/csrf'
 import { analyzeBoq } from '@/lib/furn/boq'
 import { setProjectItemSources } from '@/lib/furn/item-sources'
+import { guardItem } from '@/lib/boq/department-guard'
 
 export const maxDuration = 300 // 5 min — Gemini extractions can be slow on large BOQs
 
@@ -70,10 +71,51 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     // stay out of the editable `details` field and the customer PDF.
     const sourceMap: Record<string, string> = {}
 
-    if (result.items.length > 0) {
+    // LAST LINE OF DEFENCE before a manufactured look-alike reaches the pricing
+    // table and then a customer PDF as stone. The prompt already forbids these,
+    // and the model already answers `department_match` — but a prompt rule can be
+    // ignored and, until now, that answer was parsed and thrown away. This gate
+    // is deterministic and cannot be talked out of it.
+    // See src/lib/boq/department-guard.ts for the failure it exists to stop.
+    // Both the English and Arabic names count as "ours" — the model is told the
+    // pair and may answer with either.
+    const coveredNames = coveredDepartments.flatMap((d) => [d.name_en, d.name_ar]).filter(Boolean)
+    const rejected: Array<{ description: string; reason: string }> = []
+    const extraDepartments = new Set<string>()
+
+    const keptItems = result.items.filter((it) => {
+      const verdict = guardItem(
+        `${it.description || ''} ${it.details || ''}`,
+        it.department_match,
+        coveredNames,
+      )
+      if (!verdict.disqualified) return true
+      rejected.push({ description: it.description, reason: verdict.reason || '' })
+      // The model told us which department it really is — record it instead of
+      // silently dropping the knowledge, so the team sees what was excluded.
+      if (verdict.realDepartment) extraDepartments.add(verdict.realDepartment)
+      return false
+    })
+    if (rejected.length > 0) {
+      console.log(`[furn] guard dropped ${rejected.length} non-stone item(s) from project ${id}:`)
+      for (const r of rejected) console.log(`  • "${r.description}" — ${r.reason}`)
+    }
+
+    // Case-insensitive union: AGENTS.md forbids emitting both "Marble" and
+    // "marble", and the AI's own list was never deduped for case.
+    const departmentsOut = Array.from(
+      new Map(
+        [...result.detected_departments, ...extraDepartments]
+          .map((d) => (d || '').trim())
+          .filter(Boolean)
+          .map((d) => [d.toLowerCase(), d]),
+      ).values(),
+    )
+
+    if (keptItems.length > 0) {
       // `details` holds ONLY the AI's descriptive line (finish/thickness/dims).
       // `notes` stays NULL for the team. The source lives in the S3 map.
-      const rows = result.items.map((it, idx) => ({
+      const rows = keptItems.map((it, idx) => ({
         project_id: id,
         position: idx + 1,
         description: it.description,
@@ -88,7 +130,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
         .from('furn_items').insert(rows).select('id, position')
       if (insErr) throw new Error(`Failed to persist items: ${insErr.message}`)
 
-      const sourceByPos = new Map(result.items.map((it, idx) => [idx + 1, it.source || '']))
+      const sourceByPos = new Map(keptItems.map((it, idx) => [idx + 1, it.source || '']))
       for (const r of inserted || []) {
         const s = sourceByPos.get(r.position as number)
         if (s) sourceMap[r.id as string] = s
@@ -101,7 +143,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     await supabase.from('furn_projects').update({
       subject: result.subject,
       ai_summary: result.notes,
-      ai_detected_departments: result.detected_departments,
+      ai_detected_departments: departmentsOut,
       ai_error: null,
       stage: 'pricing',
       status: 'in_progress',
@@ -111,8 +153,12 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     return NextResponse.json({
       ok: true,
       subject: result.subject,
-      items_count: result.items.length,
-      detected_departments: result.detected_departments,
+      items_count: keptItems.length,
+      detected_departments: departmentsOut,
+      // Surfaced so the UI can tell the team WHAT was excluded and why, instead
+      // of them wondering why the BOQ had 40 lines and the table has 31.
+      rejected_count: rejected.length,
+      rejected,
       notes: result.notes,
     })
   } catch (e) {

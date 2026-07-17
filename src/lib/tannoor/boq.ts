@@ -199,7 +199,17 @@ PROJECT CONTEXT
         : 0.5,
       source: it.source ? String(it.source).trim() : '',
     }
-  }).filter(it => it.description && it.quantity > 0)
+    // Keep rows whose quantity is 0 — mirrors furn/boq.ts, and for the same
+    // reason: a 0 means the AI found the BOQ line but couldn't resolve a
+    // quantity, which is information the team needs, not a row to delete.
+    //
+    // Dropping them here was actively dangerous in Tannoor specifically: the
+    // caller computes `hasMissing` from this already-filtered list, so a binned
+    // line couldn't raise the flag and the project auto-advanced to
+    // stage='quoted', status='completed' — a BOQ line that exists in no table
+    // and no UI, on a quotation nobody was asked to review. Furn survives the
+    // same mistake only because a human prices every row.
+  }).filter(it => it.description) // only drop rows the AI emitted with no description
 
   return parsed
 }

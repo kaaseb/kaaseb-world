@@ -14,6 +14,7 @@ import { createClient } from '@/lib/supabase/server'
 import { verifyOrigin } from '@/lib/csrf'
 import { analyzeTannoorBoq } from '@/lib/tannoor/boq'
 import { setProjectItemSources } from '@/lib/tannoor/item-sources'
+import { guardItem } from '@/lib/boq/department-guard'
 import { getColors } from '@/lib/tannoor/colors'
 import type { TannoorProduct, FurnDepartment } from '@/types'
 
@@ -37,6 +38,10 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     supabase.from('tannoor_products').select('*'),
     supabase.from('furn_departments').select('*').eq('enabled', true),
   ])
+
+  // Both language names count as ours — the model may answer with either.
+  const coveredNames = (departments || []).flatMap((d: { name_en?: string; name_ar?: string }) =>
+    [d.name_en, d.name_ar]).filter((n): n is string => !!n)
 
   if (!products || products.length === 0) {
     return NextResponse.json({
@@ -75,17 +80,47 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       const productMap = new Map(
         (products as TannoorProduct[]).map(p => [p.id, p])
       )
-      const rows = result.items.map((it, idx) => {
+      // Seed prices in the currency the project will actually be quoted in.
+      const projectCurrency: 'SAR' | 'USD' = project.pricing_currency === 'USD' ? 'USD' : 'SAR'
+
+      // The same deterministic gate Furn runs. Tannoor needs it MORE, not less:
+      // Furn has a human pricing step that would catch a concrete line before it
+      // reaches a customer — Tannoor auto-prices and auto-completes, so nobody
+      // ever looks. Until now this engine had no compound-name rule at all, in
+      // its prompt or its code.
+      const rejected: Array<{ description: string; reason: string }> = []
+      const extraDepartments = new Set<string>()
+      const keptItems = result.items.filter((it) => {
+        const verdict = guardItem(it.description || '', null, coveredNames)
+        if (!verdict.disqualified) return true
+        rejected.push({ description: it.description, reason: verdict.reason || '' })
+        if (verdict.realDepartment) extraDepartments.add(verdict.realDepartment)
+        return false
+      })
+      if (rejected.length > 0) {
+        console.log(`[tannoor] guard dropped ${rejected.length} non-stone item(s) from project ${id}:`)
+        for (const r of rejected) console.log(`  • "${r.description}" — ${r.reason}`)
+      }
+      const rows = keptItems.map((it, idx) => {
         const product = it.product_id ? productMap.get(it.product_id) : null
         return {
           project_id:    id,
           position:      idx + 1,
           description:   it.description,
           quantity:      it.quantity,
-          unit:          product?.unit || it.unit,
+          // KEEP THE CUSTOMER'S UNIT. This used to be `product?.unit || it.unit`,
+          // so a BOQ line reading "120 m²" matched to a per-metre product silently
+          // became "120 m" priced per metre — the quantity was never converted,
+          // only the label. AGENTS.md is explicit: never silently convert units.
+          unit:          it.unit || product?.unit || '',
           product_id:    it.product_id,
-          unit_price:    product?.price_sar ?? null,
-          currency:      'SAR' as const,
+          // Seed the price in the PROJECT'S currency, not always SAR. The old
+          // line was `product?.price_sar ?? null` unconditionally, and since
+          // unit_price is then never null, the `?? fallback` in quote/route.ts
+          // could never fire — every USD quotation was billed with SAR numbers
+          // (~3.75× under) while the PDF printed a USD header.
+          unit_price:    (projectCurrency === 'USD' ? product?.price_usd : product?.price_sar) ?? null,
+          currency:      projectCurrency,
           // `notes` is the TEAM's column — the AI must never write here (mirrors
           // Furn). The match explanation lives in ai_missing_items for unmatched
           // lines; matched lines leave notes empty so staff can flag rows clean.
@@ -99,7 +134,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       if (insErr) throw new Error(`Failed to persist items: ${insErr.message}`)
 
       // Map each new item id → its audit source (matched by position).
-      const sourceByPos = new Map(result.items.map((it, idx) => [idx + 1, it.source || '']))
+      const sourceByPos = new Map(keptItems.map((it, idx) => [idx + 1, it.source || '']))
       for (const r of inserted || []) {
         const s = sourceByPos.get(r.position as number)
         if (s) sourceMap[r.id as string] = s
@@ -109,7 +144,12 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     // Replace the project's source map (cleared when there are no items).
     await setProjectItemSources(id, sourceMap)
 
-    const hasMissing = result.items.some(it => it.is_missing) || (result.missing_items?.length || 0) > 0
+    // A zero-quantity line is NOT ready to quote — the AI found the row but
+    // couldn't resolve how much. Tannoor auto-completes with no human gate, so
+    // this must hold the project back exactly like an unmatched product does.
+    const hasMissing =
+      result.items.some(it => it.is_missing || !(it.quantity > 0)) ||
+      (result.missing_items?.length || 0) > 0
 
     await supabase.from('tannoor_projects').update({
       subject:                 result.subject,
