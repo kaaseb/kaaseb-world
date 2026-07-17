@@ -1,7 +1,46 @@
 -- ════════════════════════════════════════════════════════════════════════════
--- KAASEB — canonical database schema
+-- ☠️☠️☠️  STOP. DO NOT RUN THIS FILE AGAINST THE LIVE DATABASE.  ☠️☠️☠️
 -- ════════════════════════════════════════════════════════════════════════════
--- Run ONCE in Supabase SQL Editor. Drops and rebuilds the public schema.
+--
+-- Line ~24 is `DROP SCHEMA IF EXISTS public CASCADE`. Running this file on
+-- production DELETES EVERY TABLE AND EVERY ROW — every project, every
+-- quotation, every user. There is no undo.
+--
+-- ── WHY YOU ARE PROBABLY READING THIS ───────────────────────────────────────
+-- You went looking for `tannoor_products.color_en` / `finish` / `thickness_mm`,
+-- found them declared below, and are about to run this to "add the missing
+-- columns". THAT IS THE TRAP. This file is the ONLY place those columns are
+-- written correctly, which is exactly why it's the file people reach for.
+--
+-- ── THIS FILE IS NOT WHAT IS DEPLOYED ───────────────────────────────────────
+-- It is a greenfield rebuild script that has drifted into fiction. The LIVE
+-- database is:
+--        base tables  +  ADD_TANNOOR_PRODUCT_VARIANTS.sql   ← only this one ran
+-- `ADD_TANNOOR_PRODUCT_ATTRS.sql` was NEVER run. So in production
+-- `tannoor_products` HAS `size_w_mm`, `size_l_mm`, `availability` and does NOT
+-- have `color_en`, `color_ar`, `finish`, `thickness_mm` — those four live in the
+-- S3 extras store (`app-data/tannoor-colors.json`, see src/lib/tannoor/colors.ts).
+--
+-- Proof, from a colleague who already hit the PostgREST 400 —
+--   src/app/(dashboard)/visualize/page.tsx:
+--   "Only select columns that exist on the table (color_en/ar + finish live in
+--    the S3 extras store, not the DB — selecting them errors out the query)."
+--
+-- AGENTS.md's variant/SKU section documents the shape BELOW, not the shape that
+-- exists. Trust the running database, not this file and not that doc.
+--
+-- ── WHAT TO DO INSTEAD ──────────────────────────────────────────────────────
+-- Need a column? Write a small, additive `ALTER TABLE ... ADD COLUMN IF NOT
+-- EXISTS ...` in its own file, run THAT, and commit it next to the others.
+-- Never re-run this script to reconcile a difference.
+--
+-- Safe uses of this file: reading it as a rough map, or bootstrapping a brand
+-- new EMPTY project. Nothing else.
+-- ════════════════════════════════════════════════════════════════════════════
+--
+-- KAASEB — original bootstrap schema (historical; see the warning above)
+-- ════════════════════════════════════════════════════════════════════════════
+-- Ran ONCE, long ago, in the Supabase SQL Editor to create the project.
 -- After running, the user `elzubair.mail@gmail.com` is auto-promoted to
 -- super_admin if their auth.users row exists.
 -- ════════════════════════════════════════════════════════════════════════════

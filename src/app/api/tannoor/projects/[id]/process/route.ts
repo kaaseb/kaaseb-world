@@ -49,9 +49,23 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     }, { status: 400 })
   }
 
-  await supabase.from('tannoor_projects')
+  // Atomic compare-and-set lock — see the twin in the Furn process route for the
+  // full reasoning. The stale escape releases a lock orphaned by a crash/deploy.
+  const STALE_LOCK_MS = 30 * 60 * 1000
+  const staleCutoff = new Date(Date.now() - STALE_LOCK_MS).toISOString()
+  const { data: locked } = await supabase.from('tannoor_projects')
     .update({ status: 'in_progress', ai_error: null, updated_at: new Date().toISOString() })
     .eq('id', id)
+    .or(`status.neq.in_progress,updated_at.lt.${staleCutoff}`)
+    .select('id')
+    .maybeSingle()
+
+  if (!locked) {
+    return NextResponse.json(
+      { error: 'المشروع قيد المعالجة بالفعل — انتظر لين تخلص التشغيلة الحالية.' },
+      { status: 409 },
+    )
+  }
 
   try {
     const colorStore = await getColors()

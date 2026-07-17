@@ -35,6 +35,13 @@ export async function GET(request: Request) {
   return NextResponse.json({ projects: data || [] })
 }
 
+// Per-bucket storage cap. Deliberately generous: a real Saudi BOQ package ships
+// 200+ files and the owner has said cost is not the constraint ("خليه يرفع 200
+// PDF ما يهم"). What bounds the AI bill is MAX_FILES in lib/furn/boq.ts, not
+// this — so store everything the team sends and let the engine choose what to
+// read. Silently discarding a customer drawing is the expensive failure.
+const BUCKET_CAP = 250
+
 export async function POST(request: Request) {
   const csrfError = verifyOrigin(request)
   if (csrfError) return csrfError
@@ -102,9 +109,15 @@ export async function POST(request: Request) {
     special_conditions_ar: body.special_conditions_ar?.trim() || null,
     boq_url: body.boq_url,
     boq_filename: body.boq_filename || 'BOQ',
-    spec_files: Array.isArray(body.spec_files) ? body.spec_files.slice(0, 20) : [],
-    drawing_files: Array.isArray(body.drawing_files) ? body.drawing_files.slice(0, 20) : [],
-    other_files: Array.isArray(body.other_files) ? body.other_files.slice(0, 20) : [],
+    // Raised from 20. AGENTS.md promises "a real project can ship 200+
+    // attachments", and the team confirms it: a job can genuinely arrive as 200
+    // PDFs. The old cap silently threw away 140 of them — no error, no warning,
+    // just a success toast and a project holding 20 of the user's 80 drawings.
+    // The AI-side ceiling (MAX_FILES in lib/furn/boq.ts) is what bounds cost per
+    // run; storing the files is cheap and losing the customer's drawings is not.
+    spec_files: Array.isArray(body.spec_files) ? body.spec_files.slice(0, BUCKET_CAP) : [],
+    drawing_files: Array.isArray(body.drawing_files) ? body.drawing_files.slice(0, BUCKET_CAP) : [],
+    other_files: Array.isArray(body.other_files) ? body.other_files.slice(0, BUCKET_CAP) : [],
     source_client_project_id: body.source_client_project_id || null,
     stage: 'processing' as const,
     status: 'pending' as const,

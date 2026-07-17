@@ -22,6 +22,15 @@ export interface BoqAnalysisInput {
   boqFilename: string
   specFiles: { url: string; name: string }[]
   drawingFiles: { url: string; name: string }[]
+  // The 4th bucket. It was collected by the form, stored on the row, promised by
+  // AGENTS.md ("contracts, approvals, photos — use if a primary file is silent")
+  // and then never passed here, so the model never saw a byte of it.
+  //
+  // That silently broke the headline rule — "the BOQ is a router, not the source
+  // of truth". A line saying "qty per Sold.pdf p.40" could not be resolved if the
+  // team had dropped Sold.pdf in Other; the model would emit quantity: 0 and
+  // blame a missing reference that was uploaded, stored, and sitting right there.
+  otherFiles: { url: string; name: string }[]
   coveredDepartments: { name_en: string; name_ar: string }[]
   projectName: string
   companyName: string
@@ -50,6 +59,10 @@ export interface BoqAnalysisResult {
   detected_departments: string[]
   items: BoqExtractedItem[]
   notes: string | null
+  /** Files the team uploaded that never reached the model, and why. */
+  skippedFiles: SkippedFile[]
+  /** How many files the model actually received (BOQ included). */
+  filesSent: number
 }
 
 // Standard JSON Schema (single source of truth for both providers). OpenAI
@@ -95,7 +108,17 @@ const RESPONSE_SCHEMA: JsonSchema = {
 // PDFs become compact text (cheap), so 100 mixed files is affordable.
 const SPEC_CAP = 60
 const DRAWING_CAP = 50
+const OTHER_CAP = 30
 const MAX_FILES = 100
+
+// A file we tried to send and couldn't. Surfaced to the caller instead of being
+// swallowed: the model is instructed to write "Searched all N attachments" into
+// `details`, and the team is told to trust that line — so it must never claim to
+// have searched a file that silently never arrived.
+export interface SkippedFile {
+  name: string
+  reason: string
+}
 
 export async function analyzeBoq(input: BoqAnalysisInput): Promise<BoqAnalysisResult> {
   if (input.coveredDepartments.length === 0) {
@@ -108,18 +131,42 @@ export async function analyzeBoq(input: BoqAnalysisInput): Promise<BoqAnalysisRe
   files.push(...await fetchAiFiles(input.boqUrl, `BOQ: ${input.boqFilename}`))
 
   const supporting = [
-    ...input.specFiles.slice(0, SPEC_CAP).map(f => ({ url: f.url, label: `SPEC: ${f.name}`, visual: false })),
+    ...input.specFiles.slice(0, SPEC_CAP).map(f => ({ url: f.url, label: `SPEC: ${f.name}`, name: f.name, visual: false })),
     // Drawings go in as images — a plan's meaning is its geometry, not its text.
-    ...input.drawingFiles.slice(0, DRAWING_CAP).map(f => ({ url: f.url, label: `DRAWING: ${f.name}`, visual: true })),
+    ...input.drawingFiles.slice(0, DRAWING_CAP).map(f => ({ url: f.url, label: `DRAWING: ${f.name}`, name: f.name, visual: true })),
+    // Other: contracts/approvals/photos. Lowest priority (last, so the MAX_FILES
+    // ceiling sacrifices these first) but no longer invisible — a BOQ row that
+    // points at a file the team filed here must be resolvable.
+    ...(input.otherFiles || []).slice(0, OTHER_CAP).map(f => ({ url: f.url, label: `OTHER: ${f.name}`, name: f.name, visual: false })),
   ]
+
+  const skipped: SkippedFile[] = []
   for (const f of supporting) {
-    if (files.length >= MAX_FILES) break
+    if (files.length >= MAX_FILES) {
+      skipped.push({ name: f.name, reason: `تجاوز الحد الأقصى (${MAX_FILES} ملف)` })
+      continue
+    }
     try {
-      for (const af of await fetchAiFiles(f.url, f.label, { visual: f.visual })) {
+      const fetched = await fetchAiFiles(f.url, f.label, { visual: f.visual })
+      // fetchAiFiles returns [] for formats it can't read (.docx, corrupt ZIP).
+      // That used to be indistinguishable from success.
+      if (fetched.length === 0) {
+        skipped.push({ name: f.name, reason: 'صيغة غير مقروءة (مثل .docx) أو ملف تالف' })
+        continue
+      }
+      for (const af of fetched) {
         if (files.length >= MAX_FILES) break
         files.push(af)
       }
-    } catch { /* skip unreachable file */ }
+    } catch {
+      // Was a bare `catch { /* skip */ }` — an expired or 404 URL produced no
+      // signal at all, and the run still reported success.
+      skipped.push({ name: f.name, reason: 'تعذّر تحميل الملف (رابط منتهي أو غير موجود)' })
+    }
+  }
+  if (skipped.length > 0) {
+    console.log(`[furn] ${skipped.length} file(s) NOT sent to the AI:`)
+    for (const s of skipped) console.log(`  • ${s.name} — ${s.reason}`)
   }
 
   const coveredList = input.coveredDepartments
@@ -225,12 +272,19 @@ PROJECT CONTEXT
   parsed.items = (parsed.items || []).map(it => ({
     description: String(it.description || '').trim(),
     details: it.details ? String(it.details).trim() : null,
-    quantity: Number.isFinite(Number(it.quantity)) ? Number(it.quantity) : 0,
+    // Clamp to >= 0. `Number.isFinite(-5)` is true, so a negative sailed through
+    // to an INSERT that `CHECK (quantity >= 0)` rejects — and by then the old
+    // items are already deleted, so one bad number from the model wipes an
+    // afternoon of pricing. The JSON schema constrains the type, not the sign.
+    quantity: Number.isFinite(Number(it.quantity)) ? Math.max(0, Number(it.quantity)) : 0,
     unit: String(it.unit || 'm').trim(),
     department_match: it.department_match ? String(it.department_match).trim() : null,
     ai_confidence: Number.isFinite(Number(it.ai_confidence)) ? Math.max(0, Math.min(1, Number(it.ai_confidence))) : 0.5,
     source: it.source ? String(it.source).trim() : null,
   })).filter(it => it.description) // only drop rows the AI emitted with no description
+
+  parsed.skippedFiles = skipped
+  parsed.filesSent = files.length
 
   return parsed
 }

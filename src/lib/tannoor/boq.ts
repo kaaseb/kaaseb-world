@@ -189,7 +189,10 @@ PROJECT CONTEXT
     const isMissing = pid === null || !!it.is_missing
     return {
       description: String(it.description || '').trim(),
-      quantity: Number.isFinite(Number(it.quantity)) ? Number(it.quantity) : 0,
+      // Clamp to >= 0 — see the twin in furn/boq.ts. A negative passes
+      // Number.isFinite, fails the DB CHECK, and takes the whole batch with it
+      // after the old rows were already deleted.
+      quantity: Number.isFinite(Number(it.quantity)) ? Math.max(0, Number(it.quantity)) : 0,
       unit: String(it.unit || 'm').trim(),
       product_id: pid,
       is_missing: isMissing,

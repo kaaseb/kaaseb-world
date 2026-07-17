@@ -68,6 +68,34 @@ Every BOQ line becomes one `furn_items` row with these fields filled — never n
 
 # Tannoor products — variants, not master records
 
+> ## ⚠️ READ THIS BEFORE THE SECTION BELOW — it describes a schema that does not exist
+>
+> This section is **aspirational**. It was written as a spec and the migration was never run.
+> Code written against it will fail at runtime or silently match on `undefined`.
+>
+> **What is actually in the live `tannoor_products` table:**
+>
+> | Column | Live? | Where it really lives |
+> | --- | --- | --- |
+> | `name_en/ar`, `description_en/ar`, `department_id`, `unit`, `price_sar`, `price_usd` | ✅ yes | the table |
+> | `size_w_mm`, `size_l_mm`, `availability` | ✅ yes | the table — **but never sent to the AI**, so no rule below can use them |
+> | `color_en`, `color_ar`, `finish`, `thickness_mm` | ❌ **NO** | S3 only — `app-data/tannoor-colors.json` via `src/lib/tannoor/colors.ts` |
+>
+> `src/types/index.ts` declares those four on `TannoorProduct` anyway, so `p.finish`
+> **compiles fine and is `undefined` forever**. Selecting them in a Supabase query
+> returns a PostgREST 400 (see the comment in `src/app/(dashboard)/visualize/page.tsx`).
+>
+> **Consequences for the rules below:** the `department + color + finish + thickness + size + unit`
+> key is not evaluable by any query in this codebase. "Size matching is bidirectional"
+> and "include availability in `details`" are unimplementable as written — the model is
+> never shown size or availability, and `tannoor_items` has no `details` column at all.
+>
+> **Do NOT "fix" this by running `SCHEMA.sql`** — it opens with `DROP SCHEMA public CASCADE`
+> and will delete the entire database. Write a targeted `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`.
+>
+> Until the migration is run, treat everything below as **a description of the intended
+> design, not of the running system.**
+
 Each row in `tannoor_products` is a **VARIANT** (effectively a SKU). The same base material — say "Black Galaxy Granite" — typically has 10-20+ rows in the catalogue, one per combination of attributes, each with its own price. The combination of `department_id + color + finish + thickness_mm + size_w_mm + size_l_mm + unit` identifies a specific variant; `availability` colours how confident the sales team can be in delivering that variant on a normal lead time.
 
 ## The variant attributes the AI MUST match on

@@ -48,9 +48,33 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     }, { status: 400 })
   }
 
-  await supabase.from('furn_projects')
+  // ── LOCK ──────────────────────────────────────────────────────────────────
+  // Atomic compare-and-set: claim the project only if it isn't already being
+  // processed. Postgres evaluates the WHERE and the SET in one statement, so two
+  // callers cannot both win.
+  //
+  // Without this, two tabs (or the retry button double-clicked) interleave as:
+  //   A deletes → B deletes → A inserts 1..40 → B inserts 1..40  = 80 rows,
+  // duplicate positions, and the customer is quoted for everything twice. The
+  // button's `disabled` prop is local React state and guards nothing.
+  //
+  // The `updated_at` escape hatch releases a lock left behind by a crash or a
+  // deploy mid-run, so a stuck project can never be permanently unprocessable.
+  const STALE_LOCK_MS = 30 * 60 * 1000
+  const staleCutoff = new Date(Date.now() - STALE_LOCK_MS).toISOString()
+  const { data: locked } = await supabase.from('furn_projects')
     .update({ status: 'in_progress', ai_error: null, updated_at: new Date().toISOString() })
     .eq('id', id)
+    .or(`status.neq.in_progress,updated_at.lt.${staleCutoff}`)
+    .select('id')
+    .maybeSingle()
+
+  if (!locked) {
+    return NextResponse.json(
+      { error: 'المشروع قيد المعالجة بالفعل — انتظر لين تخلص التشغيلة الحالية.' },
+      { status: 409 },
+    )
+  }
 
   try {
     const result = await analyzeBoq({
@@ -58,6 +82,9 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       boqFilename: project.boq_filename || 'BOQ',
       specFiles: Array.isArray(project.spec_files) ? project.spec_files : [],
       drawingFiles: Array.isArray(project.drawing_files) ? project.drawing_files : [],
+      // The 4th bucket, finally wired through — it was collected and stored but
+      // never reached the model, which quietly broke the "BOQ is a router" rule.
+      otherFiles: Array.isArray(project.other_files) ? project.other_files : [],
       coveredDepartments,
       projectName: project.project_name,
       companyName: project.company_name,
@@ -159,6 +186,10 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       // of them wondering why the BOQ had 40 lines and the table has 31.
       rejected_count: rejected.length,
       rejected,
+      // The team is told to trust the AI's "Searched all N attachments" line, so
+      // they must also be told when a file never made it to the AI at all.
+      files_sent: result.filesSent,
+      skipped_files: result.skippedFiles,
       notes: result.notes,
     })
   } catch (e) {
