@@ -1309,6 +1309,7 @@ const translations = {
 
   furn_processing_running: { en: 'AI is analyzing your BOQ — typically 1-2 minutes, longer for large projects with many attached drawings or specs.', ar: 'الذكاء الاصطناعي يحلل ملف الـ BOQ — عادةً ١-٢ دقيقة، وأطول قليلاً للمشاريع الكبيرة بملفات رسومات أو مواصفات كثيرة.' },
   furn_processing_failed: { en: 'AI processing failed', ar: 'فشلت معالجة الذكاء الاصطناعي' },
+  furn_items_extracted:    { en: 'items extracted', ar: 'بند مُستخرج' },
   furn_processing_retry: { en: 'Retry', ar: 'إعادة المحاولة' },
   furn_detected_departments: { en: 'Detected departments', ar: 'الأقسام التي تم اكتشافها' },
   furn_unsupported_dept_warning: { en: 'Some departments aren\'t covered yet. Add them in Settings to include their items.', ar: 'بعض الأقسام غير مغطّاة بعد. أضفها في الإعدادات لتشمل بنودها.' },

@@ -1,6 +1,6 @@
 # BOQ Router — corrected design (NOT YET BUILT)
 
-> **Status: design only. No code implements this yet.** Read this before writing any.
+> **Status: IMPLEMENTED for Furn (2026-07) — see .** Tannoor still runs the single-call engine; port it after Furn proves itself in production. The autopsy below remains the contract: none of the three fatal ideas may return.
 > A first attempt was written and **deleted** — its two core mechanisms were proven
 > wrong before it shipped. The autopsy is below so nobody rebuilds them.
 

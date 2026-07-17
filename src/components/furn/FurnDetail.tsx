@@ -105,23 +105,76 @@ export function FurnDetail({ project: initialProject, initialItems, initialQuota
     setQuotations(j.quotations || [])
   }
 
+  // Router progress line ("فهرسة الملفات 34/200…") shown under the running
+  // banner. Comes from app-data/furn-runs/<id>.json via the progress endpoint.
+  const [runMessage, setRunMessage] = useState('')
+
+  // The process endpoint now returns 202 and runs the router pipeline in the
+  // background (indexing 200 attachments takes minutes — no HTTP request
+  // survives that). We poll the project + the progress file until the status
+  // leaves in_progress-processing, then land exactly where the old flow did.
+  async function pollUntilDone() {
+    for (;;) {
+      await new Promise(r => setTimeout(r, 4000))
+      try {
+        const [pRes, gRes] = await Promise.all([
+          fetch(`/api/furn/projects/${project.id}`),
+          fetch(`/api/furn/projects/${project.id}/process/progress`),
+        ])
+        if (gRes.ok) {
+          const g = await gRes.json()
+          if (g.progress?.message) setRunMessage(g.progress.message)
+        }
+        if (!pRes.ok) continue
+        const j = await pRes.json()
+        const p = j.project
+        if (!p) continue
+        // Done: the job flips stage to 'pricing' on success, or status to
+        // 'rejected' on failure. Both leave the "running" condition.
+        if (p.status === 'rejected' || p.stage !== 'processing') {
+          setProject(p)
+          setItems(j.items || [])
+          setQuotations(j.quotations || [])
+          setProcessing(false)
+          setRunMessage('')
+          if (p.status === 'rejected') {
+            toast.error(p.ai_error || t('furn_processing_failed'), { duration: 12000 })
+          } else {
+            toast.success(`${(j.items || []).length} ${t('furn_items_extracted')}`)
+            await loadItemSources()
+            setTab('pricing')
+          }
+          return
+        }
+      } catch { /* transient — next tick */ }
+    }
+  }
+
   async function runProcessing() {
     setProcessing(true)
+    setRunMessage('')
     const res = await fetch(`/api/furn/projects/${project.id}/process`, { method: 'POST' })
-    const j = await res.json()
-    setProcessing(false)
+    const j = await res.json().catch(() => ({}))
     if (!res.ok) {
+      setProcessing(false)
       toast.error(j.error || 'Processing failed')
       await refreshProject()
       return
     }
-    toast.success(`${j.items_count} items extracted`)
-    await refreshProject()
-    await loadItemSources()
-    // Slide into pricing once the AI has produced items — that's where the
-    // user is going to spend their attention next.
-    setTab('pricing')
+    // 202 — the router is running in the background; watch it.
+    await pollUntilDone()
   }
+
+  // Resume watching after a page reload mid-run: the server marks the project
+  // in_progress+processing while the router works, so re-attach the poller
+  // instead of showing a dead spinner that never resolves.
+  useEffect(() => {
+    if (initialProject.status === 'in_progress' && initialProject.stage === 'processing') {
+      setProcessing(true)
+      void pollUntilDone()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   function patchItem(id: string, patch: Partial<FurnItem>) {
     setItems(prev => prev.map(it => it.id === id ? { ...it, ...patch } : it))
@@ -308,8 +361,13 @@ export function FurnDetail({ project: initialProject, initialItems, initialQuota
               </div>
             ) : processing && (
               <div className="p-4 rounded-lg border border-amber-200 bg-amber-50 flex items-center gap-3">
-                <Loader2 className="w-5 h-5 animate-spin text-amber-600" />
-                <p className="text-sm text-amber-800">{t('furn_processing_running')}</p>
+                <Loader2 className="w-5 h-5 animate-spin text-amber-600 flex-shrink-0" />
+                <div className="min-w-0">
+                  <p className="text-sm text-amber-800">{t('furn_processing_running')}</p>
+                  {/* Live router coverage — "فهرسة الملفات 34/200…". Honest
+                      progress beats a spinner that could mean anything. */}
+                  {runMessage && <p className="text-xs text-amber-700/80 mt-0.5">{runMessage}</p>}
+                </div>
               </div>
             )}
 

@@ -1,23 +1,39 @@
 // POST /api/furn/projects/[id]/process
 //
-// Kicks off the AI pipeline:
-//   1. Mark project status as in_progress
-//   2. Pull covered departments
-//   3. Send BOQ + specs + drawings to Gemini for structured extraction
-//   4. Wipe & repopulate furn_items with extracted lines
-//   5. Persist subject + detected_departments back onto the project
-//   6. Advance stage to "pricing"
+// Kicks off the ROUTER pipeline (see src/lib/boq/router/*):
+//   1. Claim the project with an atomic lock, return 202 immediately.
+//   2. In the background: read the BOQ alone → index the ~200 attachments
+//      (content-hash cached) → route every row → read ONLY the routed pages
+//      (text = quote-verified, scans = double-read vision) → assemble.
+//   3. Guard + wipe & repopulate furn_items, persist subject/departments.
+//   4. Advance stage to "pricing"; on error status=rejected + ai_error.
 //
-// On error: status=rejected, ai_error stored on project.
+// WHY 202 + BACKGROUND: indexing a real 200-file project takes minutes — far
+// past any HTTP timeout. This deployment is a long-lived Node process on a VM
+// (same reason the visualize renders can be fire-and-forget), and the client
+// polls the project + the progress endpoint. Progress lives in S3 at
+// app-data/furn-runs/<id>.json so coverage is reported honestly.
 
 import { NextResponse } from 'next/server'
+import type { SupabaseClient } from '@supabase/supabase-js'
 import { createClient } from '@/lib/supabase/server'
 import { verifyOrigin } from '@/lib/csrf'
-import { analyzeBoq } from '@/lib/furn/boq'
 import { setProjectItemSources } from '@/lib/furn/item-sources'
 import { guardItem } from '@/lib/boq/department-guard'
+import { runBoqRouter, type RouterInput, type RouterResult } from '@/lib/boq/router/pipeline'
 
-export const maxDuration = 300 // 5 min — Gemini extractions can be slow on large BOQs
+export const maxDuration = 300
+
+interface FurnProjectRow {
+  id: string
+  boq_url: string | null
+  boq_filename: string | null
+  spec_files: unknown
+  drawing_files: unknown
+  other_files: unknown
+  project_name: string
+  company_name: string
+}
 
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const csrfError = verifyOrigin(request)
@@ -50,17 +66,10 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
 
   // ── LOCK ──────────────────────────────────────────────────────────────────
   // Atomic compare-and-set: claim the project only if it isn't already being
-  // processed. Postgres evaluates the WHERE and the SET in one statement, so two
-  // callers cannot both win.
-  //
-  // Without this, two tabs (or the retry button double-clicked) interleave as:
-  //   A deletes → B deletes → A inserts 1..40 → B inserts 1..40  = 80 rows,
-  // duplicate positions, and the customer is quoted for everything twice. The
-  // button's `disabled` prop is local React state and guards nothing.
-  //
-  // The `updated_at` escape hatch releases a lock left behind by a crash or a
-  // deploy mid-run, so a stuck project can never be permanently unprocessable.
-  const STALE_LOCK_MS = 30 * 60 * 1000
+  // processed (or its lock went stale after a crash/deploy). Two tabs cannot
+  // both win — without this, interleaved delete+insert doubles every item and
+  // the customer gets quoted twice.
+  const STALE_LOCK_MS = 45 * 60 * 1000 // router runs are longer than the old single call
   const staleCutoff = new Date(Date.now() - STALE_LOCK_MS).toISOString()
   const { data: locked } = await supabase.from('furn_projects')
     .update({ status: 'in_progress', ai_error: null, updated_at: new Date().toISOString() })
@@ -76,22 +85,39 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     )
   }
 
-  try {
-    const result = await analyzeBoq({
-      boqUrl: project.boq_url,
-      boqFilename: project.boq_filename || 'BOQ',
-      specFiles: Array.isArray(project.spec_files) ? project.spec_files : [],
-      drawingFiles: Array.isArray(project.drawing_files) ? project.drawing_files : [],
-      // The 4th bucket, finally wired through — it was collected and stored but
-      // never reached the model, which quietly broke the "BOQ is a router" rule.
-      otherFiles: Array.isArray(project.other_files) ? project.other_files : [],
-      coveredDepartments,
-      projectName: project.project_name,
-      companyName: project.company_name,
-    })
+  const input: RouterInput = {
+    projectId: id,
+    boqUrl: project.boq_url,
+    boqFilename: project.boq_filename || 'BOQ',
+    specFiles: Array.isArray(project.spec_files) ? project.spec_files : [],
+    drawingFiles: Array.isArray(project.drawing_files) ? project.drawing_files : [],
+    otherFiles: Array.isArray(project.other_files) ? project.other_files : [],
+    coveredDepartments,
+    projectName: project.project_name,
+    companyName: project.company_name,
+  }
 
-    // Replace items: delete the old set, insert the new one. Avoids stale rows
-    // from a previous extraction sticking around if the user re-runs.
+  // Fire-and-forget — the Node server keeps the promise alive after the
+  // response returns (VM deployment, PM2). The client polls.
+  void runProcessJob(supabase, project as FurnProjectRow, input, coveredDepartments).catch(() => {})
+
+  return NextResponse.json({ started: true }, { status: 202 })
+}
+
+// ─── the background job ─────────────────────────────────────────────────────
+
+async function runProcessJob(
+  supabase: SupabaseClient,
+  project: FurnProjectRow,
+  input: RouterInput,
+  coveredDepartments: { name_en: string; name_ar: string }[],
+): Promise<void> {
+  const id = project.id
+  try {
+    const result: RouterResult = await runBoqRouter(input)
+
+    // ONLY NOW touch the items table — the risky work is done, so a mid-run
+    // failure can no longer leave the project stripped of its previous items.
     await supabase.from('furn_items').delete().eq('project_id', id)
 
     // Audit sources kept in a separate S3 map (keyed by new item id) so they
@@ -99,13 +125,9 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     const sourceMap: Record<string, string> = {}
 
     // LAST LINE OF DEFENCE before a manufactured look-alike reaches the pricing
-    // table and then a customer PDF as stone. The prompt already forbids these,
-    // and the model already answers `department_match` — but a prompt rule can be
-    // ignored and, until now, that answer was parsed and thrown away. This gate
-    // is deterministic and cannot be talked out of it.
-    // See src/lib/boq/department-guard.ts for the failure it exists to stop.
-    // Both the English and Arabic names count as "ours" — the model is told the
-    // pair and may answer with either.
+    // table and then a customer PDF as stone. The prompt already forbids these
+    // and the model answers `department_match` — but a prompt rule can drift;
+    // this gate is deterministic and cannot be talked out of it.
     const coveredNames = coveredDepartments.flatMap((d) => [d.name_en, d.name_ar]).filter(Boolean)
     const rejected: Array<{ description: string; reason: string }> = []
     const extraDepartments = new Set<string>()
@@ -118,8 +140,6 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       )
       if (!verdict.disqualified) return true
       rejected.push({ description: it.description, reason: verdict.reason || '' })
-      // The model told us which department it really is — record it instead of
-      // silently dropping the knowledge, so the team sees what was excluded.
       if (verdict.realDepartment) extraDepartments.add(verdict.realDepartment)
       return false
     })
@@ -128,8 +148,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       for (const r of rejected) console.log(`  • "${r.description}" — ${r.reason}`)
     }
 
-    // Case-insensitive union: AGENTS.md forbids emitting both "Marble" and
-    // "marble", and the AI's own list was never deduped for case.
+    // Case-insensitive union — never emit both "Marble" and "marble".
     const departmentsOut = Array.from(
       new Map(
         [...result.detected_departments, ...extraDepartments]
@@ -140,8 +159,6 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     )
 
     if (keptItems.length > 0) {
-      // `details` holds ONLY the AI's descriptive line (finish/thickness/dims).
-      // `notes` stays NULL for the team. The source lives in the S3 map.
       const rows = keptItems.map((it, idx) => ({
         project_id: id,
         position: idx + 1,
@@ -164,7 +181,6 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       }
     }
 
-    // Replace the project's source map (cleared when there are no items).
     await setProjectItemSources(id, sourceMap)
 
     await supabase.from('furn_projects').update({
@@ -177,28 +193,19 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       updated_at: new Date().toISOString(),
     }).eq('id', id)
 
-    return NextResponse.json({
-      ok: true,
-      subject: result.subject,
-      items_count: keptItems.length,
-      detected_departments: departmentsOut,
-      // Surfaced so the UI can tell the team WHAT was excluded and why, instead
-      // of them wondering why the BOQ had 40 lines and the table has 31.
-      rejected_count: rejected.length,
-      rejected,
-      // The team is told to trust the AI's "Searched all N attachments" line, so
-      // they must also be told when a file never made it to the AI at all.
-      files_sent: result.filesSent,
-      skipped_files: result.skippedFiles,
-      notes: result.notes,
-    })
+    console.log(
+      `[furn] router done for ${id}: ${keptItems.length} items, ` +
+      `${result.coverage.rowsResolved} resolved, ${result.coverage.rowsConflict} conflicts, ` +
+      `${result.coverage.pagesRead} pages read (${result.coverage.visualReads} visual), ` +
+      `index ${result.coverage.filesIndexed}/${result.coverage.filesTotal} (cache ${result.coverage.filesFromCache})`,
+    )
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
+    console.log(`[furn] router FAILED for ${id}: ${msg}`)
     await supabase.from('furn_projects').update({
       status: 'rejected',
       ai_error: msg.slice(0, 1000),
       updated_at: new Date().toISOString(),
     }).eq('id', id)
-    return NextResponse.json({ error: msg }, { status: 500 })
   }
 }
