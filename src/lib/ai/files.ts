@@ -38,11 +38,15 @@ const VIDEO_EXTS = new Set(['mp4', 'mov', 'avi', 'mkv', 'webm', 'flv', 'wmv', 'm
 const MIN_PAGE_TEXT_CHARS = 80
 
 // If fewer than this share of pages carry real text, treat the PDF as a scan
-// and send it to vision instead. 0.7 keeps normal digital docs (which often
-// have a blank divider or two) on the cheap text path, while a mixed
-// cover+scan file — the case that was silently losing 99% of its content —
-// correctly falls through to vision.
-const MIN_TEXT_PAGE_RATIO = 0.7
+// and send it to vision instead.
+//
+// Deliberately conservative at 0.5 — only flip when the MAJORITY of the file is
+// unreadable as text. A healthy digital spec routinely has blank section
+// dividers or an image-only appendix, and pushing those to vision would make a
+// working file slower and dearer for no gain. The failure this exists to catch
+// isn't subtle: the real case was 3 text pages out of 403 (0.7%), nowhere near
+// this line. When in doubt, leave the current behaviour alone.
+const MIN_TEXT_PAGE_RATIO = 0.5
 
 export function extOf(name: string): string {
   return name.toLowerCase().split('?')[0].split('.').pop() || ''

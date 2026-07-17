@@ -65,6 +65,46 @@ const LOOK_ALIKE = new RegExp(
   'i',
 )
 
+// Words that turn the material after them into CONTEXT rather than the product:
+// what the stone is laid on, fixed to, or backed by. AGENTS.md's rule is "look
+// at the head noun" — this is the practical read of it.
+//
+//   "Marble tile ON concrete screed"        → concrete is the substrate → marble
+//   "Granite cladding ANCHORED TO concrete" → concrete is the structure → granite
+//   "Precast Concrete Granite Cladding"     → nothing precedes it → concrete IS
+//                                             the product → drop
+const SUBSTRATE_PREPOSITIONS =
+  /\b(on|onto|over|to|against|above|upon|with|behind|under|underneath|atop|fixed|bonded|anchored|laid|installed|mounted|bedded|backed|adhered)\b\s*(?:[a-z]+\s+){0,2}$|(?:على|فوق|إلى|الى|ضد|خلف|تحت|مع|مثبت|مثبتة|ملصق|ملصقة|مركب|مركبة|بطانة|قاعدة)\s*(?:\S+\s+){0,2}$/i
+
+// A natural-stone word appearing BEFORE the disqualifier is strong evidence the
+// stone is the head noun and the other material is context.
+const STONE_WORD = /\b(marble|granite)\b|رخام|جرانيت/i
+
+/**
+ * Is this disqualifying word incidental — describing what the stone attaches to
+ * rather than what the item IS?
+ */
+function isIncidental(text: string, matchIndex: number, matched: string): boolean {
+  const before = text.slice(0, matchIndex)
+
+  // Nothing before it → it leads the description → it IS the product.
+  // ("Precast Concrete Granite Wall Cladding", "GRC Panel with granite finish")
+  if (!before.trim()) return false
+
+  // A stone word must appear before it, otherwise there's no stone to be the
+  // head noun. ("Cement mortar on concrete" is not ours either way.)
+  if (!STONE_WORD.test(before)) return false
+
+  // …and it must be introduced as a substrate/fixing. "Marble concrete panel"
+  // has a stone word before it but no preposition — that's a compound name, and
+  // it stays disqualified.
+  if (!SUBSTRATE_PREPOSITIONS.test(before)) return false
+
+  // Never let a look-alike hide behind a preposition: "porcelain tile with
+  // marble effect" must not survive because "with" precedes it.
+  return !LOOK_ALIKE.test(text) && !/\b(precast|grc|gfrc|grg)\b/i.test(matched)
+}
+
 export interface GuardVerdict {
   /** true = this line is NOT natural stone and must not be quoted as ours. */
   disqualified: boolean
@@ -86,12 +126,17 @@ export function guardDescription(description: string): GuardVerdict {
   if (!text) return CLEAN
 
   for (const { re, department } of DISQUALIFYING) {
-    if (re.test(text)) {
-      return {
-        disqualified: true,
-        realDepartment: department,
-        reason: `كلمة مستبعِدة (${department}) — المنتج مصنّع، مو حجر طبيعي.`,
-      }
+    const m = re.exec(text)
+    if (!m) continue
+    // The word is present — but is it the PRODUCT, or just what the stone sits
+    // on? "Marble tile on concrete screed" is marble; the concrete is the floor
+    // underneath it. Dropping that row loses a real sale, which is a worse
+    // failure than the one this guard exists to prevent.
+    if (isIncidental(text, m.index, m[0])) continue
+    return {
+      disqualified: true,
+      realDepartment: department,
+      reason: `كلمة مستبعِدة (${department}) — المنتج مصنّع، مو حجر طبيعي.`,
     }
   }
 
