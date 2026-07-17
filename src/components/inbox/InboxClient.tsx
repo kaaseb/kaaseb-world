@@ -305,7 +305,7 @@ export function InboxClient({ initialItems, initialLastRun, canCreateProject }: 
                   </div>
                 )}
 
-                <div className="flex items-center gap-2 pt-1">
+                <div className="flex flex-wrap items-center gap-2 pt-1">
                   {e.status === 'converted' && e.projectId ? (
                     <Button variant="outline" size="sm" onClick={() => router.push(`/projects/${e.projectId}`)} className="gap-1.5">
                       <ExternalLink className="w-3.5 h-3.5" /> {t('inbox_open_project')}

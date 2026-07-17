@@ -319,7 +319,7 @@ export function CompaniesClient({ initialItems, initialLastRun }: Props) {
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Button variant="outline" onClick={exportExcel} className="gap-2">
             <FileDown className="w-4 h-4" />
             {t('opp_export')}
@@ -399,7 +399,7 @@ export function CompaniesClient({ initialItems, initialLastRun }: Props) {
       {/* Filters */}
       <Card className="mb-4">
         <CardContent className="py-3 flex flex-wrap gap-3">
-          <div className="relative flex-1 min-w-[220px]">
+          <div className="relative flex-1 min-w-[150px]">
             <Search className={cn('absolute top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground', isRtl ? 'right-3' : 'left-3')} />
             <Input
               value={search}
@@ -605,13 +605,13 @@ export function CompaniesClient({ initialItems, initialLastRun }: Props) {
                     )}
                   </div>
 
-                  {/* Actions */}
-                  <div className="flex items-center gap-2 pt-2 border-t">
+                  {/* Actions — wrap on narrow phones so nothing overflows */}
+                  <div className="flex flex-wrap items-center gap-2 pt-2 border-t">
                     <select
                       value={c.status}
                       onChange={(e) => setStatus(c.id, e.target.value as CompanyStatus)}
                       disabled={busyId === c.id}
-                      className="h-8 flex-1 rounded-md border border-input bg-transparent px-2 text-xs"
+                      className="h-8 flex-1 min-w-[120px] rounded-md border border-input bg-transparent px-2 text-xs"
                     >
                       {COMPANY_STATUSES.map((s) => (
                         <option key={s.key} value={s.key}>{s[lang]}</option>
