@@ -32,7 +32,17 @@ const VIDEO_EXTS = new Set(['mp4', 'mov', 'avi', 'mkv', 'webm', 'flv', 'wmv', 'm
 
 // Below this much extracted text we treat a PDF as scanned/image-only and send
 // it for vision instead of as (near-empty) text.
-const MIN_PDF_TEXT_CHARS = 80
+// A page with less than this is furniture — a title block, a stamp, a page
+// number — not content. Judged PER PAGE; see extractPdfText for why the old
+// document-wide total was the wrong question.
+const MIN_PAGE_TEXT_CHARS = 80
+
+// If fewer than this share of pages carry real text, treat the PDF as a scan
+// and send it to vision instead. 0.7 keeps normal digital docs (which often
+// have a blank divider or two) on the cheap text path, while a mixed
+// cover+scan file — the case that was silently losing 99% of its content —
+// correctly falls through to vision.
+const MIN_TEXT_PAGE_RATIO = 0.7
 
 export function extOf(name: string): string {
   return name.toLowerCase().split('?')[0].split('.').pop() || ''
@@ -78,8 +88,26 @@ async function extractPdfText(buf: Buffer): Promise<string | null> {
     const pdf = await getDocumentProxy(new Uint8Array(buf))
     const { text } = await extractText(pdf, { mergePages: false })
     const pages = Array.isArray(text) ? text : [String(text)]
-    const total = pages.reduce((n, p) => n + (p?.length || 0), 0)
-    if (total < MIN_PDF_TEXT_CHARS) return null
+
+    // Judge EACH PAGE, not the document total.
+    //
+    // This used to be `total = sum(all pages) < MIN_PDF_TEXT_CHARS`, which is
+    // the wrong question for the mixed PDFs this app actually receives. A real
+    // Sold.pdf is 3 digital cover pages + 400 SCANNED table pages: the covers
+    // alone clear an 80-char document threshold, so the whole file took the
+    // text path and pages 4-400 came back as "## Page 40" followed by nothing.
+    // The model then received a document that looked complete and was 99% empty,
+    // and answered `quantity: 0` for a number that was sitting right there in
+    // the pixels. Nothing anywhere reported a problem.
+    //
+    // Now: if a meaningful share of pages is empty, the file is (at least
+    // partly) a scan — return null so the caller sends the real PDF and lets
+    // vision read it. Losing cheap text on a mixed file is a far smaller cost
+    // than silently dropping its contents.
+    const textish = pages.filter((p) => (p || '').trim().length >= MIN_PAGE_TEXT_CHARS)
+    if (textish.length === 0) return null
+    if (textish.length < pages.length * MIN_TEXT_PAGE_RATIO) return null
+
     return pages.map((p, i) => `## Page ${i + 1}\n${(p || '').trim()}`).join('\n\n')
   } catch {
     return null
