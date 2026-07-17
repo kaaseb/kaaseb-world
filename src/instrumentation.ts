@@ -19,5 +19,14 @@ export async function register() {
     } catch (err) {
       console.error('[instrumentation] opportunity scheduler failed to start:', err)
     }
+
+    // Periodic Titan email pull. Same wrapping — a background pull must never be
+    // the reason the server won't boot.
+    try {
+      const { startInboxScheduler } = await import('./lib/inbox/scheduler')
+      startInboxScheduler()
+    } catch (err) {
+      console.error('[instrumentation] inbox scheduler failed to start:', err)
+    }
   }
 }

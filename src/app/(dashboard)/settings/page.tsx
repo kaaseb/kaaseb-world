@@ -14,6 +14,7 @@ import type { Profile } from '@/types'
 import { useLanguage } from '@/contexts/LanguageContext'
 import { FurnSettingsTab } from '@/components/furn/FurnSettingsTab'
 import { FxSettingsTab } from '@/components/settings/FxSettingsTab'
+import { TitanSettingsTab } from '@/components/integrations/TitanSettingsTab'
 import { DeliverySettingsTab } from '@/components/furn/DeliverySettingsTab'
 import { PreQualSettingsTab } from '@/components/pre-qualifications/PreQualSettingsTab'
 import { AiSettingsTab } from '@/components/ai/AiSettingsTab'
@@ -702,6 +703,11 @@ export default function SettingsPage() {
         {/* USD exchange rate — Tannoor USD pricing */}
         {profile?.role === 'super_admin' && (
           <FxSettingsTab />
+        )}
+
+        {/* Titan email intake (IMAP) */}
+        {profile?.role === 'super_admin' && (
+          <TitanSettingsTab />
         )}
 
         {/* Furn (الفرن) — branding, defaults, departments */}

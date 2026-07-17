@@ -1393,6 +1393,28 @@ const translations = {
   nav_visualize:            { en: 'Magic Tunnel', ar: 'النفق السحري' },
   nav_opportunities:        { en: 'Opportunities', ar: 'الفرص' },
   nav_companies:            { en: 'Target Companies', ar: 'شركات مستهدفة' },
+  nav_inbox:                { en: 'Email Inbox', ar: 'صندوق الوارد' },
+
+  // ─── Email Inbox (Titan intake) ───────────────────────────────────────────
+  inbox_title:              { en: 'Email Inbox',          ar: 'صندوق الوارد' },
+  inbox_subtitle:           { en: 'Customer project emails pulled from Titan — convert one into a project', ar: 'إيميلات مشاريع العملاء المسحوبة من Titan — حوّل أي واحد لمشروع' },
+  inbox_pull:               { en: 'Pull now',             ar: 'اسحب الآن' },
+  inbox_pulling:            { en: 'Pulling…',             ar: 'جاري السحب…' },
+  inbox_last_pull:          { en: 'Last pull',            ar: 'آخر سحب' },
+  inbox_never:              { en: 'Never pulled',         ar: 'ما تم السحب بعد' },
+  inbox_new:                { en: 'new',                  ar: 'جديد' },
+  inbox_empty:              { en: 'Inbox is empty',       ar: 'الصندوق فاضي' },
+  inbox_empty_hint:         { en: 'Set up Titan in Settings, then press "Pull now".', ar: 'اضبط Titan في الإعدادات، ثم اضغط "اسحب الآن".' },
+  inbox_attachments:        { en: 'attachments',          ar: 'مرفق' },
+  inbox_convert:            { en: 'Convert to project',   ar: 'حوّلها لمشروع' },
+  inbox_converting:         { en: 'Converting…',          ar: 'جاري التحويل…' },
+  inbox_converted:          { en: 'Converted ✓',          ar: 'تم التحويل ✓' },
+  inbox_open_project:       { en: 'Open project',         ar: 'افتح المشروع' },
+  inbox_archive:            { en: 'Archive',              ar: 'أرشفة' },
+  inbox_delete_confirm:     { en: 'Delete this email from the inbox?', ar: 'حذف هذا الإيميل من الصندوق؟' },
+  inbox_tab_new:            { en: 'New',                  ar: 'الجديدة' },
+  inbox_tab_converted:      { en: 'Converted',            ar: 'المحوّلة' },
+  inbox_tab_archived:       { en: 'Archived',             ar: 'المؤرشفة' },
 
   // ─── Target Companies (شركات مستهدفة) — the account list ──────────────────
   co_title:                 { en: 'Target Companies',     ar: 'شركات مستهدفة' },
