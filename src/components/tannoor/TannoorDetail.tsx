@@ -34,6 +34,10 @@ interface Props {
   initialItems: ItemWithProduct[]
   initialQuotations: TannoorQuotation[]
   canExport: boolean
+  // SAR-per-USD rate from the FX setting, or null in manual mode. Passed from
+  // the server so the client preview derives the same USD prices the quote route
+  // will stamp on the PDF.
+  usdRate: number | null
 }
 
 function display(en: string | null, ar: string | null, isRtl: boolean): string {
@@ -41,7 +45,7 @@ function display(en: string | null, ar: string | null, isRtl: boolean): string {
   return en || ar || '—'
 }
 
-export function TannoorDetail({ project: initialProject, initialItems, initialQuotations, canExport }: Props) {
+export function TannoorDetail({ project: initialProject, initialItems, initialQuotations, canExport, usdRate }: Props) {
   const { t, isRtl } = useLanguage()
   const [project, setProject] = useState<TannoorProject>(initialProject)
   const [items, setItems] = useState<ItemWithProduct[]>(initialItems)
@@ -141,7 +145,11 @@ export function TannoorDetail({ project: initialProject, initialItems, initialQu
     setItems(prev => prev.map(it => {
       const prod = it.tannoor_products
       if (!prod) return { ...it, currency: c }
-      const seed = c === 'USD' ? prod.price_usd : prod.price_sar
+      // In a rate mode, USD is SAR ÷ rate (matches the server); in manual mode
+      // (usdRate === null) fall back to the product's own price_usd.
+      const seed = c === 'USD'
+        ? (usdRate ? Math.round(((Number(prod.price_sar) || 0) / usdRate) * 100) / 100 : prod.price_usd)
+        : prod.price_sar
       return { ...it, unit_price: Number(seed ?? 0), currency: c }
     }))
   }

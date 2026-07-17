@@ -3,6 +3,7 @@ import { redirect, notFound } from 'next/navigation'
 import { hasPermission } from '@/lib/permissions'
 import { getProfileOrFallback, getEffectivePermissions } from '@/lib/profile'
 import { TannoorDetail } from '@/components/tannoor/TannoorDetail'
+import { getFxSettings, resolveRate } from '@/lib/settings/fx'
 import type { TannoorProject, TannoorItem, TannoorQuotation } from '@/types'
 
 export const dynamic = 'force-dynamic'
@@ -24,12 +25,18 @@ export default async function TannoorProjectPage({ params }: { params: Promise<{
   ])
   if (!project) notFound()
 
+  // null = manual mode (use each product's own price_usd). A number = SAR per
+  // USD; the client derives USD prices from SAR at this rate, matching the
+  // server's quote/process math so the preview never disagrees with the PDF.
+  const usdRate = resolveRate(await getFxSettings())
+
   return (
     <TannoorDetail
       project={project as TannoorProject}
       initialItems={(items || []) as TannoorItem[]}
       initialQuotations={(quotations || []) as TannoorQuotation[]}
       canExport={hasPermission(profile, permissions, 'tannoor.quotation.export')}
+      usdRate={usdRate}
     />
   )
 }

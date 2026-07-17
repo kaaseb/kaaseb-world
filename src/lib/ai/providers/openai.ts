@@ -89,37 +89,65 @@ export class OpenAiProvider implements AiProvider {
     for (const f of req.files) content.push(...fileToBlocks(f))
     content.push({ type: 'input_text', text: req.userText })
 
-    // Reasoning models (gpt-5.x / o-series) take reasoning.effort and reject
-    // temperature; everything else takes temperature. Sending the wrong one is
-    // a hard 400, so we pick exactly one based on the configured model.
-    const tuning = isReasoningModel(this.documentModel)
-      ? { reasoning: { effort: req.reasoningEffort ?? 'high' } }
-      : { temperature: req.temperature ?? 0.1 }
+    // Try the configured document model first, then degrade to known-good ones.
+    //
+    // WHY: the AI Settings dropdown merges live models with a hard-coded fallback
+    // list, so an admin can save a model id that this account cannot actually
+    // call (`gpt-5.5-mini` did exactly this) — and then EVERY Furn/Tannoor BOQ
+    // run dies with "400 model does not exist". A quotation engine must not be
+    // one bad dropdown pick away from total failure. On a model-not-found error
+    // we fall through to a model we know exists rather than surfacing the 400.
+    const candidates = Array.from(
+      new Set([this.documentModel, 'gpt-5.4', 'gpt-4.1', 'gpt-4o'].filter(Boolean)),
+    )
 
-    const res = await this.client.responses.create({
-      model: this.documentModel,
-      instructions: req.systemInstruction,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      input: [{ role: 'user', content }] as any,
-      ...tuning,
-      text: {
-        format: {
-          type: 'json_schema',
-          name: req.schemaName,
+    let lastErr: unknown
+    for (const model of candidates) {
+      // Reasoning models (gpt-5.x / o-series) take reasoning.effort and reject
+      // temperature; everything else takes temperature — picked per model since
+      // the fallback might be a different family than the configured one.
+      const tuning = isReasoningModel(model)
+        ? { reasoning: { effort: req.reasoningEffort ?? 'high' } }
+        : { temperature: req.temperature ?? 0.1 }
+      try {
+        const res = await this.client.responses.create({
+          model,
+          instructions: req.systemInstruction,
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          schema: req.schema as any,
-          strict: true,
-        },
-      },
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any)
+          input: [{ role: 'user', content }] as any,
+          ...tuning,
+          text: {
+            format: {
+              type: 'json_schema',
+              name: req.schemaName,
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              schema: req.schema as any,
+              strict: true,
+            },
+          },
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        } as any)
 
-    const raw = (res.output_text || '').trim() || '{}'
-    try {
-      return JSON.parse(raw) as T
-    } catch (e) {
-      throw new Error(`OpenAI returned non-JSON: ${(e as Error).message}\n${raw.slice(0, 400)}`)
+        if (model !== this.documentModel) {
+          console.warn(`[openai] configured model "${this.documentModel}" unavailable — used "${model}" instead. Fix it in AI settings.`)
+        }
+        const raw = (res.output_text || '').trim() || '{}'
+        try {
+          return JSON.parse(raw) as T
+        } catch (e) {
+          throw new Error(`OpenAI returned non-JSON: ${(e as Error).message}\n${raw.slice(0, 400)}`)
+        }
+      } catch (e) {
+        lastErr = e
+        // Only a nonexistent/unauthorised MODEL is worth trying another model
+        // for. A schema error, a rate limit, a bad key — those recur identically
+        // on every candidate, so rethrow immediately instead of looping.
+        const msg = (e as { message?: string })?.message || ''
+        const isModelProblem = /model.*(does not exist|not found)|does not exist.*model|model_not_found|unsupported model|do not have access to (the )?model/i.test(msg)
+        if (!isModelProblem) throw e
+      }
     }
+    throw lastErr instanceof Error ? lastErr : new Error('OpenAI: no usable model')
   }
 
   async chatWithTools(req: ChatRequest): Promise<string> {

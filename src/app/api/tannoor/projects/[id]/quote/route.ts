@@ -6,6 +6,7 @@ import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { verifyOrigin } from '@/lib/csrf'
+import { getFxSettings, usdPrice, round2 } from '@/lib/settings/fx'
 
 const VAT_RATE = 0.15
 
@@ -39,15 +40,21 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
 
   // Totals come from each line's edited unit_price (single-currency project),
   // falling back to the catalog price in the requested currency if a line was
-  // never priced.
+  // never priced. In a rate mode the USD fallback is DERIVED from the SAR price
+  // at the configured rate rather than read from the (drift-prone) price_usd
+  // column — the setting exists precisely so the second column stops mattering.
+  const fx = await getFxSettings()
   type ItemRow = typeof items[number] & { tannoor_products?: { price_sar: number; price_usd: number } | null }
-  const subtotal = (items as ItemRow[]).reduce((sum, it) => {
-    const fallback = currency === 'USD' ? (it.tannoor_products?.price_usd ?? 0) : (it.tannoor_products?.price_sar ?? 0)
+  const rawSubtotal = (items as ItemRow[]).reduce((sum, it) => {
+    const sar = it.tannoor_products?.price_sar ?? 0
+    const usd = it.tannoor_products?.price_usd ?? 0
+    const fallback = currency === 'USD' ? (usdPrice(fx, sar, usd) ?? 0) : sar
     const price = it.unit_price ?? fallback
     return sum + Number(it.quantity || 0) * Number(price)
   }, 0)
-  const vatAmount = subtotal * VAT_RATE
-  const total = subtotal + vatAmount
+  const subtotal = round2(rawSubtotal)
+  const vatAmount = round2(subtotal * VAT_RATE)
+  const total = round2(subtotal + vatAmount)
 
   // Allocate the next quotation number from furn_settings.next_tannoor_number.
   const admin = createAdminClient()

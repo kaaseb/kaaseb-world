@@ -13,6 +13,7 @@ import { BADGES } from '@/lib/badges'
 import type { Profile } from '@/types'
 import { useLanguage } from '@/contexts/LanguageContext'
 import { FurnSettingsTab } from '@/components/furn/FurnSettingsTab'
+import { FxSettingsTab } from '@/components/settings/FxSettingsTab'
 import { DeliverySettingsTab } from '@/components/furn/DeliverySettingsTab'
 import { PreQualSettingsTab } from '@/components/pre-qualifications/PreQualSettingsTab'
 import { AiSettingsTab } from '@/components/ai/AiSettingsTab'
@@ -696,6 +697,11 @@ export default function SettingsPage() {
         {/* AI engine — provider switch + OpenAI key (super-admin only) */}
         {profile?.role === 'super_admin' && (
           <AiSettingsTab />
+        )}
+
+        {/* USD exchange rate — Tannoor USD pricing */}
+        {profile?.role === 'super_admin' && (
+          <FxSettingsTab />
         )}
 
         {/* Furn (الفرن) — branding, defaults, departments */}

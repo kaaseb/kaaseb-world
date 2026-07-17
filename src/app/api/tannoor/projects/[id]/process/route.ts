@@ -15,6 +15,7 @@ import { verifyOrigin } from '@/lib/csrf'
 import { analyzeTannoorBoq } from '@/lib/tannoor/boq'
 import { setProjectItemSources } from '@/lib/tannoor/item-sources'
 import { guardItem } from '@/lib/boq/department-guard'
+import { getFxSettings, usdPrice } from '@/lib/settings/fx'
 import { getColors } from '@/lib/tannoor/colors'
 import type { TannoorProduct, FurnDepartment } from '@/types'
 
@@ -96,6 +97,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       )
       // Seed prices in the currency the project will actually be quoted in.
       const projectCurrency: 'SAR' | 'USD' = project.pricing_currency === 'USD' ? 'USD' : 'SAR'
+      const fx = await getFxSettings()
 
       // The same deterministic gate Furn runs. Tannoor needs it MORE, not less:
       // Furn has a human pricing step that would catch a concrete line before it
@@ -128,12 +130,14 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
           // only the label. AGENTS.md is explicit: never silently convert units.
           unit:          it.unit || product?.unit || '',
           product_id:    it.product_id,
-          // Seed the price in the PROJECT'S currency, not always SAR. The old
-          // line was `product?.price_sar ?? null` unconditionally, and since
-          // unit_price is then never null, the `?? fallback` in quote/route.ts
-          // could never fire — every USD quotation was billed with SAR numbers
-          // (~3.75× under) while the PDF printed a USD header.
-          unit_price:    (projectCurrency === 'USD' ? product?.price_usd : product?.price_sar) ?? null,
+          // Seed the price in the PROJECT'S currency. For USD, honour the FX
+          // setting: a rate mode derives the price from SAR (so the drift-prone
+          // price_usd column stops mattering), 'manual' uses price_usd as before.
+          // (The old bug: this was `price_sar` unconditionally, so USD quotes
+          // billed SAR numbers ~3.75× under a USD header.)
+          unit_price:    (projectCurrency === 'USD'
+            ? usdPrice(fx, product?.price_sar, product?.price_usd)
+            : (product?.price_sar ?? null)),
           currency:      projectCurrency,
           // `notes` is the TEAM's column — the AI must never write here (mirrors
           // Furn). The match explanation lives in ai_missing_items for unmatched
