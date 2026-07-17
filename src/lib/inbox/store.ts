@@ -27,14 +27,24 @@ export interface EmailAttachment {
   category: 'boq' | 'spec' | 'drawing' | 'other'
 }
 
+// Stage-1 preview, produced by a small AI pass at pull time. Optional because a
+// summary is a nice-to-have — a pull must never fail because the model did, and
+// older records simply won't carry it.
+export interface EmailPreview {
+  projectName: string // AI's cleaned project title (falls back to subject)
+  summary: string // 2-3 sentences: what this project is
+  highlights: string[] // key facts: "فيه جدول كميات", "موعد التسليم 15 أغسطس", "3 أبراج"
+}
+
 export interface InboxEmail {
   id: string // = the IMAP Message-ID (also the dedup key)
   subject: string
   fromName: string
   fromEmail: string
-  date: string // ISO
+  date: string // ISO — the receipt date
   bodyText: string // trimmed plain-text preview
   attachments: EmailAttachment[]
+  preview: EmailPreview | null // stage-1 AI summary
   status: EmailStatus
   // Set once converted, so the card can link to the created project.
   projectId: string | null
@@ -122,6 +132,7 @@ export async function lastSuccessfulPullAt(): Promise<Date | null> {
   return Number.isNaN(d.getTime()) ? null : d
 }
 
+// The pull builds these; `preview` is included (added by the summarize pass).
 export type NewEmail = Omit<InboxEmail, 'id' | 'status' | 'projectId' | 'createdAt'> & { id: string }
 
 /** Add fetched emails, skipping any Message-ID we already stored. Returns count. */

@@ -36,6 +36,12 @@ const CAT_LABEL: Record<string, { en: string; ar: string }> = {
   other: { en: 'Other', ar: 'أخرى' },
 }
 
+function fileCounts(e: InboxEmail): { boq: number; drawing: number; spec: number; other: number } {
+  const c = { boq: 0, drawing: 0, spec: 0, other: 0 }
+  for (const a of e.attachments) c[a.category]++
+  return c
+}
+
 function fmt(iso: string | null, lang: string): string {
   if (!iso) return ''
   const d = new Date(iso)
@@ -220,6 +226,10 @@ export function InboxClient({ initialItems, initialLastRun, canCreateProject }: 
         ))}
       </div>
 
+      {tab === 'new' && filtered.length > 0 && (
+        <p className="text-xs text-muted-foreground mb-3">{t('inbox_stage1_hint')}</p>
+      )}
+
       {filtered.length === 0 ? (
         <Card className="border-dashed">
           <CardContent className="py-16 text-center">
@@ -230,15 +240,21 @@ export function InboxClient({ initialItems, initialLastRun, canCreateProject }: 
         </Card>
       ) : (
         <div className="space-y-3">
-          {filtered.map((e) => (
+          {filtered.map((e) => {
+            const c = fileCounts(e)
+            return (
             <Card key={e.id}>
               <CardContent className="p-4 flex flex-col gap-3">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <h3 className="font-semibold text-gray-900 truncate">{e.subject}</h3>
-                    <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground mt-1">
-                      <span className="flex items-center gap-1"><Mail className="w-3.5 h-3.5" />{e.fromName || e.fromEmail}</span>
-                      {e.date && <span className="flex items-center gap-1"><CalendarDays className="w-3.5 h-3.5" />{fmt(e.date, lang)}</span>}
+                    {/* Stage-1 title = the AI's cleaned project name, subject beneath */}
+                    <h3 className="font-semibold text-gray-900 leading-snug">{e.preview?.projectName || e.subject}</h3>
+                    {e.preview?.projectName && e.preview.projectName !== e.subject && (
+                      <p className="text-xs text-muted-foreground truncate mt-0.5">{e.subject}</p>
+                    )}
+                    <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground mt-1.5">
+                      <span className="flex items-center gap-1"><Mail className="w-3.5 h-3.5" />{t('inbox_from')}: {e.fromName || e.fromEmail}</span>
+                      {e.date && <span className="flex items-center gap-1"><CalendarDays className="w-3.5 h-3.5" />{t('inbox_received')}: {fmt(e.date, lang)}</span>}
                       <span className="flex items-center gap-1"><Paperclip className="w-3.5 h-3.5" />{e.attachments.length} {t('inbox_attachments')}</span>
                     </div>
                   </div>
@@ -246,6 +262,23 @@ export function InboxClient({ initialItems, initialLastRun, canCreateProject }: 
                     <Trash2 className="w-4 h-4" />
                   </Button>
                 </div>
+
+                {/* AI summary */}
+                {e.preview?.summary && (
+                  <p className="text-sm text-gray-600 leading-relaxed">{e.preview.summary}</p>
+                )}
+
+                {/* Highlights + file-type breakdown as chips */}
+                {(e.preview?.highlights?.length || c.boq || c.drawing || c.spec) ? (
+                  <div className="flex flex-wrap gap-1.5">
+                    {c.boq > 0 && <span className="px-2 py-0.5 rounded-full text-xs bg-emerald-50 text-emerald-700 border border-emerald-200">{c.boq} {t('inbox_files_boq')}</span>}
+                    {c.drawing > 0 && <span className="px-2 py-0.5 rounded-full text-xs bg-blue-50 text-blue-700 border border-blue-200">{c.drawing} {t('inbox_files_drawing')}</span>}
+                    {c.spec > 0 && <span className="px-2 py-0.5 rounded-full text-xs bg-purple-50 text-purple-700 border border-purple-200">{c.spec} {t('inbox_files_spec')}</span>}
+                    {(e.preview?.highlights || []).map((h, i) => (
+                      <span key={i} className="px-2 py-0.5 rounded-full text-xs bg-amber-50 text-amber-800 border border-amber-200">{h}</span>
+                    ))}
+                  </div>
+                ) : null}
 
                 {e.attachments.length > 0 && (
                   <div className="flex flex-wrap gap-1.5">
@@ -291,7 +324,7 @@ export function InboxClient({ initialItems, initialLastRun, canCreateProject }: 
                 </div>
               </CardContent>
             </Card>
-          ))}
+          )})}
         </div>
       )}
     </div>

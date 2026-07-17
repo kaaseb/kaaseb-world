@@ -1415,6 +1415,13 @@ const translations = {
   inbox_tab_new:            { en: 'New',                  ar: 'الجديدة' },
   inbox_tab_converted:      { en: 'Converted',            ar: 'المحوّلة' },
   inbox_tab_archived:       { en: 'Archived',             ar: 'المؤرشفة' },
+  inbox_received:           { en: 'Received',             ar: 'تاريخ الاستلام' },
+  inbox_files_boq:          { en: 'BOQ',                  ar: 'كميات' },
+  inbox_files_drawing:      { en: 'drawings',             ar: 'رسومات' },
+  inbox_files_spec:         { en: 'specs',                ar: 'مواصفات' },
+  inbox_files_other:        { en: 'other',                ar: 'أخرى' },
+  inbox_stage1_hint:        { en: 'Review the summary, then send the ones you want to Projects.', ar: 'راجع الملخص، ثم أرسل اللي تبيه للمشاريع.' },
+  inbox_from:               { en: 'From',                 ar: 'من' },
 
   // ─── Target Companies (شركات مستهدفة) — the account list ──────────────────
   co_title:                 { en: 'Target Companies',     ar: 'شركات مستهدفة' },

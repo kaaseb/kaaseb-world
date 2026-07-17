@@ -68,9 +68,10 @@ function str(v: unknown, max = 200): string {
 // Build the project draft from the email. The heuristic result is always valid
 // on its own; the AI only ever improves it.
 export async function buildProjectDraft(email: InboxEmail): Promise<ConvertDraft> {
-  // Deterministic baseline — never fails.
+  // Deterministic baseline — never fails. Prefer the stage-1 summary's project
+  // name (what the owner already saw in the inbox) over the raw subject.
   const draft: ConvertDraft = {
-    name_ar: email.subject || 'مشروع من البريد',
+    name_ar: email.preview?.projectName || email.subject || 'مشروع من البريد',
     company_ar: email.fromName || email.fromEmail || null,
     engineer_name_ar: null,
     engineer_phone: null,

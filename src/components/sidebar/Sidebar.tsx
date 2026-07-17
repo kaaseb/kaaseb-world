@@ -65,6 +65,7 @@ export function Sidebar({ profile, permissions, onLock, drawerOpen = false, onDr
   const allItems: Array<{ href: string; icon: typeof LayoutDashboard; label: string; perm: PermissionKey }> = [
     { href: '/dashboard',          icon: LayoutDashboard, label: t('nav_home'),               perm: 'page.dashboard' },
     { href: '/calendar',           icon: CalendarDays,    label: t('nav_calendar'),           perm: 'page.calendar' },
+    { href: '/inbox',              icon: Inbox,           label: t('nav_inbox'),              perm: 'page.inbox' },
     { href: '/projects',           icon: Briefcase,       label: t('nav_client_projects'),    perm: 'page.client_projects' },
     { href: '/furn',               icon: Flame,           label: t('nav_furn'),               perm: 'page.furn' },
     { href: '/tannoor',            icon: Cookie,          label: t('nav_tannoor'),            perm: 'page.tannoor' },
@@ -74,7 +75,6 @@ export function Sidebar({ profile, permissions, onLock, drawerOpen = false, onDr
     { href: '/visualize',          icon: Wand2,           label: t('nav_visualize'),          perm: 'page.visualize' },
     { href: '/opportunities',      icon: Radar,           label: t('nav_opportunities'),      perm: 'page.opportunities' },
     { href: '/companies',          icon: Building,        label: t('nav_companies'),          perm: 'page.companies' },
-    { href: '/inbox',              icon: Inbox,           label: t('nav_inbox'),              perm: 'page.inbox' },
     { href: '/ai',                 icon: Bot,             label: t('nav_ghassl_ai'),          perm: 'page.ai' },
     { href: '/goals',              icon: Target,          label: t('nav_goals'),              perm: 'page.goals' },
     { href: '/departments',        icon: Building2,       label: t('nav_departments'),        perm: 'page.departments' },

@@ -18,6 +18,7 @@ import {
   beginPull, finishPull, addEmails, knownMessageIds,
   type NewEmail, type EmailAttachment, type PullTrigger,
 } from './store'
+import { summarizeEmail } from './summarize'
 
 // Bound each run so it always finishes well inside the 15-min stale window.
 // Dedup means anything missed is caught on the next pull.
@@ -140,11 +141,27 @@ export async function runPull(opts: { trigger: PullTrigger; by?: string | null }
               : new Date()).toISOString(),
             bodyText: (parsed.text || '').trim().slice(0, BODY_PREVIEW_CHARS),
             attachments: atts,
+            preview: null, // filled by the summarize pass below
           })
         }
       }
     } finally {
+      // Release the mailbox lock BEFORE summarizing — the AI calls can take a
+      // while and there's no reason to hold the IMAP connection open for them.
       lock.release()
+    }
+
+    // Stage-1 summaries. Sequential and best-effort: one email's summary failing
+    // (or being slow) must not sink the pull — summarizeEmail already falls back
+    // to a deterministic preview, so `preview` is always populated.
+    for (const e of emails) {
+      e.preview = await summarizeEmail({
+        subject: e.subject,
+        fromName: e.fromName,
+        fromEmail: e.fromEmail,
+        bodyText: e.bodyText,
+        attachments: e.attachments.map((a) => ({ name: a.name, category: a.category })),
+      })
     }
 
     const added = await addEmails(emails)
