@@ -1,8 +1,12 @@
-# BOQ Router — corrected design (NOT YET BUILT)
+# BOQ Router — design + implementation notes
 
-> **Status: IMPLEMENTED for Furn (2026-07) — see .** Tannoor still runs the single-call engine; port it after Furn proves itself in production. The autopsy below remains the contract: none of the three fatal ideas may return.
-> A first attempt was written and **deleted** — its two core mechanisms were proven
-> wrong before it shipped. The autopsy is below so nobody rebuilds them.
+> **Status: IMPLEMENTED for Furn (2026-07) — code lives in `src/lib/boq/router/`**
+> (core.ts, indexer.ts, resolve.ts, pipeline.ts; wired into the Furn process route,
+> which now returns 202 and runs in the background with S3 progress).
+> **Tannoor still runs the single-call engine** — port it after Furn proves itself
+> in production. The autopsy below remains the contract: none of the three fatal
+> ideas may return. (A first attempt containing them was written and deleted
+> before it shipped.)
 
 ## The problem
 
