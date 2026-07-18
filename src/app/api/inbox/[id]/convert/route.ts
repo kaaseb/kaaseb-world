@@ -13,6 +13,7 @@ import { hasPermission } from '@/lib/permissions'
 import { serverAudit } from '@/lib/audit-server'
 import { getEmail, updateEmail } from '@/lib/inbox/store'
 import { buildProjectDraft } from '@/lib/inbox/convert'
+import { hydrateEmail } from '@/lib/inbox/imap'
 
 export const runtime = 'nodejs'
 export const maxDuration = 120
@@ -36,10 +37,21 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   }
 
   const { id } = await params
-  const email = await getEmail(id)
+  let email = await getEmail(id)
   if (!email) return NextResponse.json({ error: 'Not found' }, { status: 404 })
   if (email.status === 'converted' && email.projectId) {
     return NextResponse.json({ project: { id: email.projectId }, alreadyConverted: true })
+  }
+
+  // A listed-only email has no attachments yet — download them (and the summary)
+  // now so the project is built with its files. Normally the owner hydrates from
+  // the inbox first; this is the safety net if convert is hit on a raw envelope.
+  if (!email.hydrated) {
+    const h = await hydrateEmail(id)
+    if (!h.ok || !h.email) {
+      return NextResponse.json({ error: h.error || 'تعذّر إحضار مرفقات الرسالة.' }, { status: 502 })
+    }
+    email = h.email
   }
 
   const draft = await buildProjectDraft(email)

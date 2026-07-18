@@ -1,5 +1,7 @@
-// POST /api/inbox/pull — manual "pull now". Fire-and-forget + poll, like the
-// opportunities scan. IMAP + 200 attachments takes a while.
+// POST /api/inbox/pull — manual "refresh list". Fire-and-forget + poll. This is
+// the LIGHT tier: it mirrors envelopes only (subject/from/date/count) for the
+// whole recent mailbox — no attachments, no AI. Downloading a message's files
+// happens later, per pick, via /api/inbox/[id]/hydrate.
 
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
@@ -7,7 +9,7 @@ import { verifyOrigin } from '@/lib/csrf'
 import { getProfileOrFallback, getEffectivePermissions } from '@/lib/profile'
 import { hasPermission } from '@/lib/permissions'
 import { getInboxState } from '@/lib/inbox/store'
-import { runPull } from '@/lib/inbox/imap'
+import { runList } from '@/lib/inbox/imap'
 
 export const runtime = 'nodejs'
 export const maxDuration = 300
@@ -28,12 +30,12 @@ export async function POST(request: Request) {
 
   const { lastRun } = await getInboxState()
   if (lastRun?.status === 'running') {
-    return NextResponse.json({ error: 'السحب شغّال حالياً — انتظر لين يخلص.' }, { status: 409 })
+    return NextResponse.json({ error: 'التحديث شغّال حالياً — انتظر لين يخلص.' }, { status: 409 })
   }
 
   const by = profile.full_name || profile.email || null
-  void runPull({ trigger: 'manual', by }).catch(() => {
-    /* runPull records its own failure in lastRun */
+  void runList({ trigger: 'manual', by }).catch(() => {
+    /* runList records its own failure in lastRun */
   })
 
   return NextResponse.json({ started: true }, { status: 202 })

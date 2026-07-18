@@ -42,13 +42,38 @@ export interface InboxEmail {
   fromName: string
   fromEmail: string
   date: string // ISO — the receipt date
-  bodyText: string // trimmed plain-text preview
-  attachments: EmailAttachment[]
-  preview: EmailPreview | null // stage-1 AI summary
+  bodyText: string // trimmed plain-text preview (empty until hydrated)
+  attachments: EmailAttachment[] // empty until hydrated
+  preview: EmailPreview | null // stage-1 AI summary (null until hydrated)
   status: EmailStatus
   // Set once converted, so the card can link to the created project.
   projectId: string | null
   createdAt: string
+  // ── Two-tier intake ────────────────────────────────────────────────────────
+  // A LIST sync stores only the cheap envelope (subject/from/date/count) for
+  // hundreds of messages. The heavy part — downloading the 200 attachments to S3
+  // and running the AI summary — happens on demand, per message the owner picks,
+  // via hydrateEmail(). `hydrated` says which tier a record is at.
+  hydrated: boolean // false = envelope only; true = attachments + preview fetched
+  attachmentCount: number // from the IMAP bodyStructure — shown before hydration
+  size: number // whole-message bytes (IMAP SIZE), gated before we download it
+  uid: number | null // IMAP UID, so hydrateEmail can re-fetch just this message
+  uidValidity: number | null // guards the UID (a mailbox reset invalidates it)
+  folder: string // the mailbox the UID belongs to
+}
+
+// The lightweight envelope a LIST sync produces — no bytes pulled, no AI.
+export interface ListedEmail {
+  id: string
+  subject: string
+  fromName: string
+  fromEmail: string
+  date: string
+  attachmentCount: number
+  size: number
+  uid: number
+  uidValidity: number
+  folder: string
 }
 
 export type PullStatus = 'running' | 'done' | 'failed'
@@ -72,9 +97,26 @@ export interface InboxState {
 
 const EMPTY: InboxState = { items: [], lastRun: null }
 
+// Records written before the two-tier split have no `hydrated` flag — they were
+// always fully fetched, so normalise them to hydrated=true. Keeps old inboxes
+// working without a migration.
+function normalize(e: InboxEmail): InboxEmail {
+  if (typeof e.hydrated === 'boolean') return e
+  return {
+    ...e,
+    hydrated: true,
+    attachmentCount: Array.isArray(e.attachments) ? e.attachments.length : 0,
+    size: e.size ?? 0,
+    uid: e.uid ?? null,
+    uidValidity: e.uidValidity ?? null,
+    folder: e.folder || 'INBOX',
+  }
+}
+
 async function readState(): Promise<InboxState> {
   const s = await readJson<InboxState>(KEY, EMPTY)
-  return { items: Array.isArray(s?.items) ? s.items : [], lastRun: s?.lastRun ?? null }
+  const items = Array.isArray(s?.items) ? s.items.map(normalize) : []
+  return { items, lastRun: s?.lastRun ?? null }
 }
 
 async function writeState(state: InboxState): Promise<void> {
@@ -100,11 +142,6 @@ export async function getEmail(id: string): Promise<InboxEmail | null> {
   return s.items.find((e) => e.id === id) ?? null
 }
 
-/** Message-IDs we already hold — passed to the IMAP fetch so it skips them. */
-export async function knownMessageIds(): Promise<Set<string>> {
-  const s = await readState()
-  return new Set(s.items.map((e) => e.id))
-}
 
 export async function beginPull(trigger: PullTrigger, by: string | null): Promise<PullRun | null> {
   const s = await readState()
@@ -132,23 +169,77 @@ export async function lastSuccessfulPullAt(): Promise<Date | null> {
   return Number.isNaN(d.getTime()) ? null : d
 }
 
-// The pull builds these; `preview` is included (added by the summarize pass).
-export type NewEmail = Omit<InboxEmail, 'id' | 'status' | 'projectId' | 'createdAt'> & { id: string }
-
-/** Add fetched emails, skipping any Message-ID we already stored. Returns count. */
-export async function addEmails(emails: NewEmail[]): Promise<number> {
+// A LIST sync writes these envelopes. New ids become fresh listed (un-hydrated)
+// records; ids we already hold get their envelope + UID refreshed WITHOUT ever
+// downgrading a hydrated record (its attachments/preview/status are preserved).
+// Returns how many were brand new.
+export async function upsertListed(listed: ListedEmail[]): Promise<number> {
   const s = await readState()
-  const seen = new Set(s.items.map((e) => e.id))
+  const byId = new Map(s.items.map((e) => [e.id, e]))
   const now = new Date().toISOString()
   let added = 0
-  for (const e of emails) {
-    if (!e.id || seen.has(e.id)) continue
-    s.items.unshift({ ...e, status: 'new', projectId: null, createdAt: now })
-    seen.add(e.id)
+  for (const l of listed) {
+    if (!l.id) continue
+    const existing = byId.get(l.id)
+    if (existing) {
+      // Refresh envelope + re-fetch coordinates; keep everything hydration set.
+      existing.subject = l.subject || existing.subject
+      existing.fromName = l.fromName || existing.fromName
+      existing.fromEmail = l.fromEmail || existing.fromEmail
+      existing.date = l.date || existing.date
+      existing.size = l.size || existing.size
+      existing.uid = l.uid
+      existing.uidValidity = l.uidValidity
+      existing.folder = l.folder
+      if (!existing.hydrated) existing.attachmentCount = l.attachmentCount
+      continue
+    }
+    const rec: InboxEmail = {
+      id: l.id,
+      subject: l.subject,
+      fromName: l.fromName,
+      fromEmail: l.fromEmail,
+      date: l.date,
+      bodyText: '',
+      attachments: [],
+      preview: null,
+      status: 'new',
+      projectId: null,
+      createdAt: now,
+      hydrated: false,
+      attachmentCount: l.attachmentCount,
+      size: l.size,
+      uid: l.uid,
+      uidValidity: l.uidValidity,
+      folder: l.folder,
+    }
+    s.items.unshift(rec)
+    byId.set(l.id, rec)
     added++
   }
-  if (added > 0) await writeState(s)
+  await writeState(s)
   return added
+}
+
+// Second tier: fold a message's downloaded body/attachments/summary onto its
+// listed record and mark it hydrated.
+export async function applyHydration(
+  id: string,
+  patch: { bodyText: string; attachments: EmailAttachment[]; preview: EmailPreview | null },
+): Promise<InboxEmail | null> {
+  const s = await readState()
+  const idx = s.items.findIndex((e) => e.id === id)
+  if (idx < 0) return null
+  s.items[idx] = {
+    ...s.items[idx],
+    bodyText: patch.bodyText,
+    attachments: patch.attachments,
+    preview: patch.preview,
+    attachmentCount: patch.attachments.length,
+    hydrated: true,
+  }
+  await writeState(s)
+  return s.items[idx]
 }
 
 export async function updateEmail(

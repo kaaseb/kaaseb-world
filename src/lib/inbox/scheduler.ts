@@ -10,7 +10,7 @@
 import cron from 'node-cron'
 import { getTitanSettings } from '@/lib/integrations/titan'
 import { getInboxState, lastSuccessfulPullAt } from './store'
-import { runPull } from './imap'
+import { runList } from './imap'
 
 const CRON_EXPRESSION = '15 */3 * * *' // every 3 hours, offset off the hour
 const TIMEZONE = 'Asia/Riyadh'
@@ -56,7 +56,7 @@ export function startInboxScheduler(): void {
     CRON_EXPRESSION,
     () => {
       void (async () => {
-        if (await titanReady()) await runPull({ trigger: 'schedule' }).catch(() => {})
+        if (await titanReady()) await runList({ trigger: 'schedule' }).catch(() => {})
       })()
     },
     { timezone: TIMEZONE },
@@ -65,7 +65,7 @@ export function startInboxScheduler(): void {
   setTimeout(() => {
     void (async () => {
       try {
-        if ((await titanReady()) && (await shouldCatchUp())) await runPull({ trigger: 'schedule' })
+        if ((await titanReady()) && (await shouldCatchUp())) await runList({ trigger: 'schedule' })
       } catch {
         /* the safety net must never take the server down */
       }

@@ -1,13 +1,18 @@
 'use client'
 
 // "صندوق الوارد" — Titan-pulled emails, each convertible into a /projects row.
-// Polls only while a pull is running (same light-by-default rule as the scouts).
+//
+// Two-tier: a cheap LIST sync mirrors the whole recent mailbox by NAME (envelope
+// only). The owner searches/filters that list, then presses "جهّز الملخص" on the
+// ones worth it — only THEN are that message's attachments + AI summary pulled.
+// Polls only while a list sync is running (same light-by-default rule as scouts).
 
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import {
   Inbox, RefreshCw, Loader2, Trash2, Paperclip, Mail, CalendarDays,
-  Briefcase, Archive, AlertCircle, ExternalLink, FileSpreadsheet, PencilRuler, FileText, File as FileIcon,
+  Briefcase, Archive, AlertCircle, ExternalLink, FileSpreadsheet, PencilRuler,
+  FileText, File as FileIcon, Sparkles, Search, X,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { toast } from 'sonner'
@@ -22,6 +27,8 @@ interface Props {
   initialLastRun: PullRun | null
   canCreateProject: boolean
 }
+
+const PAGE = 25
 
 const CAT_ICON: Record<string, LucideIcon> = {
   boq: FileSpreadsheet,
@@ -59,6 +66,12 @@ export function InboxClient({ initialItems, initialLastRun, canCreateProject }: 
   const [starting, setStarting] = useState(false)
   const [busyId, setBusyId] = useState<string | null>(null)
 
+  // Filters
+  const [search, setSearch] = useState('')
+  const [dateFrom, setDateFrom] = useState('')
+  const [dateTo, setDateTo] = useState('')
+  const [visible, setVisible] = useState(PAGE)
+
   const isPulling = lastRun?.status === 'running'
 
   const refetch = useCallback(async () => {
@@ -82,11 +95,14 @@ export function InboxClient({ initialItems, initialLastRun, canCreateProject }: 
   const wasPulling = useRef(isPulling)
   useEffect(() => {
     if (wasPulling.current && !isPulling && lastRun) {
-      if (lastRun.status === 'done') toast.success(`${t('inbox_last_pull')}: +${lastRun.added} ${t('inbox_new')}`)
-      else if (lastRun.status === 'failed') toast.error(lastRun.error || 'Pull failed', { duration: 12000 })
+      if (lastRun.status === 'done') toast.success(`${t('inbox_last_sync')}: +${lastRun.added} ${t('inbox_new')}`)
+      else if (lastRun.status === 'failed') toast.error(lastRun.error || 'Failed', { duration: 12000 })
     }
     wasPulling.current = isPulling
   }, [isPulling, lastRun, t])
+
+  // Reset the page window whenever the visible set changes shape.
+  useEffect(() => { setVisible(PAGE) }, [tab, search, dateFrom, dateTo])
 
   async function pull() {
     setStarting(true)
@@ -97,12 +113,30 @@ export function InboxClient({ initialItems, initialLastRun, canCreateProject }: 
         toast.error(j.error || 'Failed')
         return
       }
-      toast.success(t('inbox_pulling'))
+      toast.success(t('inbox_refreshing'))
       await refetch()
     } catch {
       toast.error('Failed')
     } finally {
       setStarting(false)
+    }
+  }
+
+  async function hydrate(id: string) {
+    setBusyId(id)
+    try {
+      const res = await fetch(`/api/inbox/${id}/hydrate`, { method: 'POST' })
+      const j = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        toast.error(j.error || 'Failed', { duration: 10000 })
+        return
+      }
+      if (j.email) setItems((list) => list.map((e) => (e.id === id ? j.email : e)))
+      toast.success(lang === 'ar' ? 'تم التجهيز ✓' : 'Prepared ✓')
+    } catch {
+      toast.error('Failed')
+    } finally {
+      setBusyId(null)
     }
   }
 
@@ -163,7 +197,23 @@ export function InboxClient({ initialItems, initialLastRun, canCreateProject }: 
     archived: items.filter((e) => e.status === 'archived').length,
   }), [items])
 
-  const filtered = useMemo(() => items.filter((e) => e.status === tab), [items, tab])
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase()
+    return items.filter((e) => {
+      if (e.status !== tab) return false
+      if (q) {
+        const hay = `${e.subject} ${e.fromName} ${e.fromEmail} ${e.preview?.projectName || ''} ${e.preview?.summary || ''}`.toLowerCase()
+        if (!hay.includes(q)) return false
+      }
+      const day = (e.date || '').slice(0, 10)
+      if (dateFrom && day && day < dateFrom) return false
+      if (dateTo && day && day > dateTo) return false
+      return true
+    })
+  }, [items, tab, search, dateFrom, dateTo])
+
+  const shown = filtered.slice(0, visible)
+  const hasFilters = !!(search || dateFrom || dateTo)
 
   const tabs: Array<{ key: EmailStatus; label: string; icon: LucideIcon; count: number }> = [
     { key: 'new', label: t('inbox_tab_new'), icon: Mail, count: counts.new },
@@ -185,7 +235,7 @@ export function InboxClient({ initialItems, initialLastRun, canCreateProject }: 
         </div>
         <Button onClick={pull} disabled={isPulling || starting} className="gap-2">
           {isPulling || starting ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-          {isPulling || starting ? t('inbox_pulling') : t('inbox_pull')}
+          {isPulling || starting ? t('inbox_refreshing') : t('inbox_refresh_list')}
         </Button>
       </div>
 
@@ -193,7 +243,7 @@ export function InboxClient({ initialItems, initialLastRun, canCreateProject }: 
         <CardContent className="py-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
           {isPulling ? (
             <span className="flex items-center gap-2 text-blue-700 font-medium">
-              <Loader2 className="w-4 h-4 animate-spin" /> {t('inbox_pulling')}
+              <Loader2 className="w-4 h-4 animate-spin" /> {t('inbox_refreshing')}
             </span>
           ) : lastRun?.status === 'failed' ? (
             <span className="flex items-center gap-2 text-red-600 font-medium">
@@ -201,7 +251,7 @@ export function InboxClient({ initialItems, initialLastRun, canCreateProject }: 
             </span>
           ) : lastRun?.finishedAt ? (
             <span className="text-muted-foreground">
-              {t('inbox_last_pull')}: <span className="text-gray-900 font-medium">{fmt(lastRun.finishedAt, lang)}</span>
+              {t('inbox_last_sync')}: <span className="text-gray-900 font-medium">{fmt(lastRun.finishedAt, lang)}</span>
             </span>
           ) : (
             <span className="text-muted-foreground">{t('inbox_never')}</span>
@@ -226,106 +276,159 @@ export function InboxClient({ initialItems, initialLastRun, canCreateProject }: 
         ))}
       </div>
 
-      {tab === 'new' && filtered.length > 0 && (
-        <p className="text-xs text-muted-foreground mb-3">{t('inbox_stage1_hint')}</p>
-      )}
+      {/* Search + date-range filters */}
+      <div className="mb-3 flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2">
+        <div className="relative flex-1 min-w-[180px]">
+          <Search className={cn('w-4 h-4 text-muted-foreground absolute top-1/2 -translate-y-1/2', isRtl ? 'right-3' : 'left-3')} />
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder={t('inbox_search_placeholder')}
+            className={cn('w-full h-10 rounded-lg border border-gray-200 bg-white text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100', isRtl ? 'pr-9 pl-3' : 'pl-9 pr-3')}
+          />
+        </div>
+        <div className="flex items-center gap-2">
+          <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <span className="whitespace-nowrap">{t('inbox_date_from')}</span>
+            <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="h-10 rounded-lg border border-gray-200 bg-white px-2 text-sm outline-none focus:border-blue-400" />
+          </label>
+          <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <span className="whitespace-nowrap">{t('inbox_date_to')}</span>
+            <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="h-10 rounded-lg border border-gray-200 bg-white px-2 text-sm outline-none focus:border-blue-400" />
+          </label>
+          {hasFilters && (
+            <Button variant="ghost" size="sm" onClick={() => { setSearch(''); setDateFrom(''); setDateTo('') }} className="gap-1 text-muted-foreground">
+              <X className="w-3.5 h-3.5" /> {t('inbox_clear_filters')}
+            </Button>
+          )}
+        </div>
+      </div>
+
+      {/* Count line */}
+      <p className="text-xs text-muted-foreground mb-3">
+        {t('inbox_showing')} {shown.length} {t('inbox_of')} {filtered.length}
+        {tab === 'new' && <span className="ms-2 opacity-80">· {t('inbox_list_hint')}</span>}
+      </p>
 
       {filtered.length === 0 ? (
         <Card className="border-dashed">
           <CardContent className="py-16 text-center">
             <Inbox className="w-10 h-10 mx-auto text-muted-foreground/40 mb-3" />
-            <p className="font-medium text-gray-900">{t('inbox_empty')}</p>
-            <p className="text-sm text-muted-foreground mt-1">{t('inbox_empty_hint')}</p>
+            <p className="font-medium text-gray-900">{hasFilters ? t('inbox_no_results') : t('inbox_empty')}</p>
+            {!hasFilters && <p className="text-sm text-muted-foreground mt-1">{t('inbox_empty_hint')}</p>}
           </CardContent>
         </Card>
       ) : (
-        <div className="space-y-3">
-          {filtered.map((e) => {
-            const c = fileCounts(e)
-            return (
-            <Card key={e.id}>
-              <CardContent className="p-4 flex flex-col gap-3">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    {/* Stage-1 title = the AI's cleaned project name, subject beneath */}
-                    <h3 className="font-semibold text-gray-900 leading-snug">{e.preview?.projectName || e.subject}</h3>
-                    {e.preview?.projectName && e.preview.projectName !== e.subject && (
-                      <p className="text-xs text-muted-foreground truncate mt-0.5">{e.subject}</p>
-                    )}
-                    <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground mt-1.5">
-                      <span className="flex items-center gap-1"><Mail className="w-3.5 h-3.5" />{t('inbox_from')}: {e.fromName || e.fromEmail}</span>
-                      {e.date && <span className="flex items-center gap-1"><CalendarDays className="w-3.5 h-3.5" />{t('inbox_received')}: {fmt(e.date, lang)}</span>}
-                      <span className="flex items-center gap-1"><Paperclip className="w-3.5 h-3.5" />{e.attachments.length} {t('inbox_attachments')}</span>
+        <>
+          <div className="space-y-3">
+            {shown.map((e) => {
+              const c = fileCounts(e)
+              const attCount = e.hydrated ? e.attachments.length : e.attachmentCount
+              return (
+              <Card key={e.id}>
+                <CardContent className="p-4 flex flex-col gap-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <h3 className="font-semibold text-gray-900 leading-snug">{e.preview?.projectName || e.subject}</h3>
+                      {e.preview?.projectName && e.preview.projectName !== e.subject && (
+                        <p className="text-xs text-muted-foreground truncate mt-0.5">{e.subject}</p>
+                      )}
+                      <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground mt-1.5">
+                        <span className="flex items-center gap-1"><Mail className="w-3.5 h-3.5" />{t('inbox_from')}: {e.fromName || e.fromEmail}</span>
+                        {e.date && <span className="flex items-center gap-1"><CalendarDays className="w-3.5 h-3.5" />{t('inbox_received')}: {fmt(e.date, lang)}</span>}
+                        {attCount > 0 && <span className="flex items-center gap-1"><Paperclip className="w-3.5 h-3.5" />{attCount} {t('inbox_attachments')}</span>}
+                      </div>
                     </div>
+                    <Button variant="ghost" size="icon-sm" onClick={() => remove(e.id)} className="text-muted-foreground hover:text-red-600 flex-shrink-0">
+                      <Trash2 className="w-4 h-4" />
+                    </Button>
                   </div>
-                  <Button variant="ghost" size="icon-sm" onClick={() => remove(e.id)} className="text-muted-foreground hover:text-red-600 flex-shrink-0">
-                    <Trash2 className="w-4 h-4" />
-                  </Button>
-                </div>
 
-                {/* AI summary */}
-                {e.preview?.summary && (
-                  <p className="text-sm text-gray-600 leading-relaxed">{e.preview.summary}</p>
-                )}
+                  {!e.hydrated ? (
+                    /* Listed-only envelope — names only, not yet fetched */
+                    <span className="inline-flex w-fit items-center gap-1.5 px-2 py-0.5 rounded-full text-xs bg-gray-100 text-gray-500 border border-gray-200">
+                      <Sparkles className="w-3.5 h-3.5" /> {t('inbox_not_prepared')}
+                    </span>
+                  ) : (
+                    <>
+                      {e.preview?.summary && (
+                        <p className="text-sm text-gray-600 leading-relaxed">{e.preview.summary}</p>
+                      )}
 
-                {/* Highlights + file-type breakdown as chips */}
-                {(e.preview?.highlights?.length || c.boq || c.drawing || c.spec) ? (
-                  <div className="flex flex-wrap gap-1.5">
-                    {c.boq > 0 && <span className="px-2 py-0.5 rounded-full text-xs bg-emerald-50 text-emerald-700 border border-emerald-200">{c.boq} {t('inbox_files_boq')}</span>}
-                    {c.drawing > 0 && <span className="px-2 py-0.5 rounded-full text-xs bg-blue-50 text-blue-700 border border-blue-200">{c.drawing} {t('inbox_files_drawing')}</span>}
-                    {c.spec > 0 && <span className="px-2 py-0.5 rounded-full text-xs bg-purple-50 text-purple-700 border border-purple-200">{c.spec} {t('inbox_files_spec')}</span>}
-                    {(e.preview?.highlights || []).map((h, i) => (
-                      <span key={i} className="px-2 py-0.5 rounded-full text-xs bg-amber-50 text-amber-800 border border-amber-200">{h}</span>
-                    ))}
-                  </div>
-                ) : null}
+                      {(e.preview?.highlights?.length || c.boq || c.drawing || c.spec) ? (
+                        <div className="flex flex-wrap gap-1.5">
+                          {c.boq > 0 && <span className="px-2 py-0.5 rounded-full text-xs bg-emerald-50 text-emerald-700 border border-emerald-200">{c.boq} {t('inbox_files_boq')}</span>}
+                          {c.drawing > 0 && <span className="px-2 py-0.5 rounded-full text-xs bg-blue-50 text-blue-700 border border-blue-200">{c.drawing} {t('inbox_files_drawing')}</span>}
+                          {c.spec > 0 && <span className="px-2 py-0.5 rounded-full text-xs bg-purple-50 text-purple-700 border border-purple-200">{c.spec} {t('inbox_files_spec')}</span>}
+                          {(e.preview?.highlights || []).map((h, i) => (
+                            <span key={i} className="px-2 py-0.5 rounded-full text-xs bg-amber-50 text-amber-800 border border-amber-200">{h}</span>
+                          ))}
+                        </div>
+                      ) : null}
 
-                {e.attachments.length > 0 && (
-                  <div className="flex flex-wrap gap-1.5">
-                    {e.attachments.slice(0, 20).map((a, i) => {
-                      const Icon = CAT_ICON[a.category] || FileIcon
-                      return (
-                        <a
-                          key={i}
-                          href={a.url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          title={a.name}
-                          className="inline-flex items-center gap-1 max-w-[220px] px-2 py-1 rounded-md bg-gray-50 border border-gray-100 text-xs hover:bg-gray-100"
-                        >
-                          <Icon className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
-                          <span className="truncate">{a.name}</span>
-                          <span className="text-[10px] text-muted-foreground">{CAT_LABEL[a.category]?.[lang]}</span>
-                        </a>
-                      )
-                    })}
-                    {e.attachments.length > 20 && (
-                      <span className="inline-flex items-center px-2 py-1 text-xs text-muted-foreground">+{e.attachments.length - 20}</span>
+                      {e.attachments.length > 0 && (
+                        <div className="flex flex-wrap gap-1.5">
+                          {e.attachments.slice(0, 20).map((a, i) => {
+                            const Icon = CAT_ICON[a.category] || FileIcon
+                            return (
+                              <a
+                                key={i}
+                                href={a.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                title={a.name}
+                                className="inline-flex items-center gap-1 max-w-[220px] px-2 py-1 rounded-md bg-gray-50 border border-gray-100 text-xs hover:bg-gray-100"
+                              >
+                                <Icon className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
+                                <span className="truncate">{a.name}</span>
+                                <span className="text-[10px] text-muted-foreground">{CAT_LABEL[a.category]?.[lang]}</span>
+                              </a>
+                            )
+                          })}
+                          {e.attachments.length > 20 && (
+                            <span className="inline-flex items-center px-2 py-1 text-xs text-muted-foreground">+{e.attachments.length - 20}</span>
+                          )}
+                        </div>
+                      )}
+                    </>
+                  )}
+
+                  <div className="flex flex-wrap items-center gap-2 pt-1">
+                    {!e.hydrated ? (
+                      <Button size="sm" onClick={() => hydrate(e.id)} disabled={busyId === e.id} className="gap-1.5">
+                        {busyId === e.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+                        {busyId === e.id ? t('inbox_hydrating') : t('inbox_hydrate')}
+                      </Button>
+                    ) : e.status === 'converted' && e.projectId ? (
+                      <Button variant="outline" size="sm" onClick={() => router.push(`/projects/${e.projectId}`)} className="gap-1.5">
+                        <ExternalLink className="w-3.5 h-3.5" /> {t('inbox_open_project')}
+                      </Button>
+                    ) : canCreateProject ? (
+                      <Button size="sm" onClick={() => convert(e.id)} disabled={busyId === e.id} className="gap-1.5">
+                        {busyId === e.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Briefcase className="w-3.5 h-3.5" />}
+                        {busyId === e.id ? t('inbox_converting') : t('inbox_convert')}
+                      </Button>
+                    ) : null}
+                    {e.status !== 'archived' && (
+                      <Button variant="ghost" size="sm" onClick={() => archive(e.id)} disabled={busyId === e.id} className="gap-1.5 text-muted-foreground">
+                        <Archive className="w-3.5 h-3.5" /> {t('inbox_archive')}
+                      </Button>
                     )}
                   </div>
-                )}
+                </CardContent>
+              </Card>
+            )})}
+          </div>
 
-                <div className="flex flex-wrap items-center gap-2 pt-1">
-                  {e.status === 'converted' && e.projectId ? (
-                    <Button variant="outline" size="sm" onClick={() => router.push(`/projects/${e.projectId}`)} className="gap-1.5">
-                      <ExternalLink className="w-3.5 h-3.5" /> {t('inbox_open_project')}
-                    </Button>
-                  ) : canCreateProject ? (
-                    <Button size="sm" onClick={() => convert(e.id)} disabled={busyId === e.id} className="gap-1.5">
-                      {busyId === e.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Briefcase className="w-3.5 h-3.5" />}
-                      {busyId === e.id ? t('inbox_converting') : t('inbox_convert')}
-                    </Button>
-                  ) : null}
-                  {e.status !== 'archived' && (
-                    <Button variant="ghost" size="sm" onClick={() => archive(e.id)} disabled={busyId === e.id} className="gap-1.5 text-muted-foreground">
-                      <Archive className="w-3.5 h-3.5" /> {t('inbox_archive')}
-                    </Button>
-                  )}
-                </div>
-              </CardContent>
-            </Card>
-          )})}
-        </div>
+          {filtered.length > visible && (
+            <div className="mt-4 text-center">
+              <Button variant="outline" onClick={() => setVisible((v) => v + PAGE)} className="gap-2">
+                {t('inbox_load_more')} ({filtered.length - visible})
+              </Button>
+            </div>
+          )}
+        </>
       )}
     </div>
   )

@@ -1423,6 +1423,22 @@ const translations = {
   inbox_files_other:        { en: 'other',                ar: 'أخرى' },
   inbox_stage1_hint:        { en: 'Review the summary, then send the ones you want to Projects.', ar: 'راجع الملخص، ثم أرسل اللي تبيه للمشاريع.' },
   inbox_from:               { en: 'From',                 ar: 'من' },
+  // Two-tier intake — list (cheap) vs prepare (per pick)
+  inbox_refresh_list:       { en: 'Refresh list',         ar: 'حدّث القائمة' },
+  inbox_refreshing:         { en: 'Refreshing…',          ar: 'جاري التحديث…' },
+  inbox_last_sync:          { en: 'Last synced',          ar: 'آخر تحديث' },
+  inbox_list_hint:          { en: 'The whole mailbox is listed by name. Pick an email and press "Prepare summary" to pull its files and summary.', ar: 'كل الصندوق معروض بالأسماء. اختر رسالة واضغط «جهّز الملخص» لسحب ملفاتها وملخّصها.' },
+  inbox_hydrate:            { en: 'Prepare summary',       ar: 'جهّز الملخص' },
+  inbox_hydrating:          { en: 'Preparing…',           ar: 'جاري التجهيز…' },
+  inbox_not_prepared:       { en: 'Not prepared yet — names only', ar: 'غير مُجهّزة — أسماء فقط' },
+  inbox_search_placeholder: { en: 'Search subject or sender…', ar: 'ابحث بالعنوان أو المُرسِل…' },
+  inbox_date_from:          { en: 'From date',            ar: 'من تاريخ' },
+  inbox_date_to:            { en: 'To date',              ar: 'إلى تاريخ' },
+  inbox_clear_filters:      { en: 'Clear',                ar: 'مسح' },
+  inbox_showing:            { en: 'Showing',              ar: 'معروض' },
+  inbox_of:                 { en: 'of',                   ar: 'من' },
+  inbox_load_more:          { en: 'Show more',            ar: 'عرض المزيد' },
+  inbox_no_results:         { en: 'No emails match your filters', ar: 'ما فيه رسائل تطابق البحث' },
 
   // ─── Target Companies (شركات مستهدفة) — the account list ──────────────────
   co_title:                 { en: 'Target Companies',     ar: 'شركات مستهدفة' },
