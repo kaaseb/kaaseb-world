@@ -8,6 +8,7 @@ import { verifyOrigin } from '@/lib/csrf'
 import { getProfileOrFallback, getEffectivePermissions } from '@/lib/profile'
 import { hasPermission } from '@/lib/permissions'
 import { updateEmail, deleteEmail } from '@/lib/inbox/store'
+import { inboxUnlocked } from '@/lib/inbox/lock'
 
 export const runtime = 'nodejs'
 
@@ -22,6 +23,7 @@ async function guard(request: Request) {
   if (!hasPermission(profile, permissions, 'page.inbox')) {
     return { error: NextResponse.json({ error: 'Forbidden' }, { status: 403 }) }
   }
+  if (!(await inboxUnlocked())) return { error: NextResponse.json({ error: 'مقفل', locked: true }, { status: 423 }) }
   return { error: null }
 }
 

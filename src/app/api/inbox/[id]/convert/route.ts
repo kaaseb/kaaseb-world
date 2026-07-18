@@ -12,6 +12,7 @@ import { getProfileOrFallback, getEffectivePermissions } from '@/lib/profile'
 import { hasPermission } from '@/lib/permissions'
 import { serverAudit } from '@/lib/audit-server'
 import { getEmail, updateEmail } from '@/lib/inbox/store'
+import { inboxUnlocked } from '@/lib/inbox/lock'
 import { buildProjectDraft } from '@/lib/inbox/convert'
 import { hydrateEmail } from '@/lib/inbox/imap'
 
@@ -35,6 +36,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   if (!hasPermission(profile, permissions, 'client_projects.create')) {
     return NextResponse.json({ error: 'ما عندك صلاحية إنشاء مشاريع' }, { status: 403 })
   }
+  if (!(await inboxUnlocked())) return NextResponse.json({ error: 'مقفل', locked: true }, { status: 423 })
 
   const { id } = await params
   let email = await getEmail(id)

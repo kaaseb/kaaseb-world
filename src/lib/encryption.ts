@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, randomBytes, createHash } from 'crypto'
+import { createCipheriv, createDecipheriv, randomBytes, createHash, createHmac } from 'crypto'
 
 // Authenticated encryption for the shared-credentials vault. AES-256-GCM with a
 // fresh 12-byte IV per record. The auth tag is appended so any tamper of the
@@ -68,4 +68,11 @@ export function decryptSecret(envelope: string): string {
 
 export function isEncrypted(value: string | null | undefined): boolean {
   return typeof value === 'string' && value.startsWith(`${VERSION}.`)
+}
+
+// Keyed hash bound to the app secret (same key as the vault). Used for one-way
+// PIN hashes and unlock tokens: a leaked S3 blob can't be brute-forced without
+// the server key, and the value is never reversible. Hex digest, constant length.
+export function appHmac(message: string): string {
+  return createHmac('sha256', getKey()).update(message).digest('hex')
 }

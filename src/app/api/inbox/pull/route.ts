@@ -9,6 +9,7 @@ import { verifyOrigin } from '@/lib/csrf'
 import { getProfileOrFallback, getEffectivePermissions } from '@/lib/profile'
 import { hasPermission } from '@/lib/permissions'
 import { getInboxState } from '@/lib/inbox/store'
+import { inboxUnlocked } from '@/lib/inbox/lock'
 import { runList } from '@/lib/inbox/imap'
 
 export const runtime = 'nodejs'
@@ -27,6 +28,8 @@ export async function POST(request: Request) {
   if (!hasPermission(profile, permissions, 'page.inbox')) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
+
+  if (!(await inboxUnlocked())) return NextResponse.json({ error: 'مقفل', locked: true }, { status: 423 })
 
   const { lastRun } = await getInboxState()
   if (lastRun?.status === 'running') {

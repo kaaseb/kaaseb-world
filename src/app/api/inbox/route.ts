@@ -5,6 +5,7 @@ import { createClient } from '@/lib/supabase/server'
 import { getProfileOrFallback, getEffectivePermissions } from '@/lib/profile'
 import { hasPermission } from '@/lib/permissions'
 import { getInboxState } from '@/lib/inbox/store'
+import { inboxUnlocked } from '@/lib/inbox/lock'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -19,6 +20,7 @@ export async function GET() {
   if (!hasPermission(profile, permissions, 'page.inbox')) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
+  if (!(await inboxUnlocked())) return NextResponse.json({ error: 'مقفل', locked: true }, { status: 423 })
 
   const { items, lastRun } = await getInboxState()
   return NextResponse.json({ items, lastRun })

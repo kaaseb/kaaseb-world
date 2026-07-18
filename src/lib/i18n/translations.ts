@@ -1439,6 +1439,21 @@ const translations = {
   inbox_of:                 { en: 'of',                   ar: 'من' },
   inbox_load_more:          { en: 'Show more',            ar: 'عرض المزيد' },
   inbox_no_results:         { en: 'No emails match your filters', ar: 'ما فيه رسائل تطابق البحث' },
+  // Secret gate
+  inbox_locked_title:       { en: 'Locked inbox',          ar: 'صندوق مقفل' },
+  inbox_locked_desc:        { en: 'Enter the secret PIN to open the inbox.', ar: 'أدخل الرقم السري لفتح الصندوق.' },
+  inbox_pin_placeholder:    { en: 'Secret PIN',            ar: 'الرقم السري' },
+  inbox_unlock_btn:         { en: 'Unlock',                ar: 'دخول' },
+  inbox_unlocked:           { en: 'Unlocked ✓',            ar: 'تم الفتح ✓' },
+  inbox_pin_wrong:          { en: 'Wrong PIN',             ar: 'رقم سري خاطئ' },
+  inbox_change_pin:         { en: 'Change PIN',            ar: 'تغيير الرقم السري' },
+  inbox_new_pin:            { en: 'New PIN',               ar: 'رقم سري جديد' },
+  inbox_confirm_pin:        { en: 'Confirm PIN',           ar: 'تأكيد الرقم' },
+  inbox_pin_save:           { en: 'Save PIN',              ar: 'حفظ الرقم' },
+  inbox_pin_cancel:         { en: 'Cancel',                ar: 'إلغاء' },
+  inbox_pin_saved:          { en: 'PIN changed ✓',         ar: 'تم تغيير الرقم السري ✓' },
+  inbox_pin_mismatch:       { en: 'The two PINs do not match', ar: 'الرقمان غير متطابقين' },
+  inbox_pin_too_short:      { en: 'PIN too short (min 4 digits)', ar: 'الرقم قصير جداً (٤ خانات على الأقل)' },
 
   // ─── Target Companies (شركات مستهدفة) — the account list ──────────────────
   co_title:                 { en: 'Target Companies',     ar: 'شركات مستهدفة' },

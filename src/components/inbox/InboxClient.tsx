@@ -12,7 +12,7 @@ import { useRouter } from 'next/navigation'
 import {
   Inbox, RefreshCw, Loader2, Trash2, Paperclip, Mail, CalendarDays,
   Briefcase, Archive, AlertCircle, ExternalLink, FileSpreadsheet, PencilRuler,
-  FileText, File as FileIcon, Sparkles, Search, X,
+  FileText, File as FileIcon, Sparkles, Search, X, KeyRound, ShieldCheck,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { toast } from 'sonner'
@@ -26,6 +26,7 @@ interface Props {
   initialItems: InboxEmail[]
   initialLastRun: PullRun | null
   canCreateProject: boolean
+  isSuperAdmin: boolean
 }
 
 const PAGE = 25
@@ -56,7 +57,7 @@ function fmt(iso: string | null, lang: string): string {
   return d.toLocaleString(lang === 'ar' ? 'ar-SA' : 'en-GB', { dateStyle: 'medium', timeStyle: 'short' })
 }
 
-export function InboxClient({ initialItems, initialLastRun, canCreateProject }: Props) {
+export function InboxClient({ initialItems, initialLastRun, canCreateProject, isSuperAdmin }: Props) {
   const { t, lang, isRtl } = useLanguage()
   const router = useRouter()
 
@@ -65,6 +66,12 @@ export function InboxClient({ initialItems, initialLastRun, canCreateProject }: 
   const [tab, setTab] = useState<EmailStatus>('new')
   const [starting, setStarting] = useState(false)
   const [busyId, setBusyId] = useState<string | null>(null)
+
+  // Super-admin: change the shared PIN
+  const [showPin, setShowPin] = useState(false)
+  const [newPin, setNewPin] = useState('')
+  const [confirmPin, setConfirmPin] = useState('')
+  const [savingPin, setSavingPin] = useState(false)
 
   // Filters
   const [search, setSearch] = useState('')
@@ -119,6 +126,29 @@ export function InboxClient({ initialItems, initialLastRun, canCreateProject }: 
       toast.error('Failed')
     } finally {
       setStarting(false)
+    }
+  }
+
+  async function changePin(e: React.FormEvent) {
+    e.preventDefault()
+    if (savingPin) return
+    if (newPin.trim().length < 4) { toast.error(t('inbox_pin_too_short')); return }
+    if (newPin.trim() !== confirmPin.trim()) { toast.error(t('inbox_pin_mismatch')); return }
+    setSavingPin(true)
+    try {
+      const res = await fetch('/api/inbox/pin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ newPin: newPin.trim() }),
+      })
+      const j = await res.json().catch(() => ({}))
+      if (!res.ok) { toast.error(j.error || 'Failed'); return }
+      toast.success(t('inbox_pin_saved'))
+      setShowPin(false); setNewPin(''); setConfirmPin('')
+    } catch {
+      toast.error('Failed')
+    } finally {
+      setSavingPin(false)
     }
   }
 
@@ -233,11 +263,57 @@ export function InboxClient({ initialItems, initialLastRun, canCreateProject }: 
             <p className="text-sm text-muted-foreground mt-0.5">{t('inbox_subtitle')}</p>
           </div>
         </div>
-        <Button onClick={pull} disabled={isPulling || starting} className="gap-2">
-          {isPulling || starting ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-          {isPulling || starting ? t('inbox_refreshing') : t('inbox_refresh_list')}
-        </Button>
+        <div className="flex items-center gap-2">
+          {isSuperAdmin && (
+            <Button variant="outline" onClick={() => setShowPin((v) => !v)} className="gap-2">
+              <KeyRound className="w-4 h-4" /> {t('inbox_change_pin')}
+            </Button>
+          )}
+          <Button onClick={pull} disabled={isPulling || starting} className="gap-2">
+            {isPulling || starting ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+            {isPulling || starting ? t('inbox_refreshing') : t('inbox_refresh_list')}
+          </Button>
+        </div>
       </div>
+
+      {isSuperAdmin && showPin && (
+        <Card className="mb-4 border shadow-sm">
+          <CardContent className="p-4">
+            <form onSubmit={changePin} className="flex flex-col gap-3">
+              <div className="flex items-center gap-2 text-sm font-medium text-gray-900">
+                <ShieldCheck className="w-4 h-4 text-blue-600" /> {t('inbox_change_pin')}
+              </div>
+              <div className="flex flex-col sm:flex-row gap-2">
+                <input
+                  type="password"
+                  inputMode="numeric"
+                  value={newPin}
+                  onChange={(e) => setNewPin(e.target.value)}
+                  placeholder={t('inbox_new_pin')}
+                  className="flex-1 h-10 rounded-lg border border-gray-200 bg-white px-3 text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+                />
+                <input
+                  type="password"
+                  inputMode="numeric"
+                  value={confirmPin}
+                  onChange={(e) => setConfirmPin(e.target.value)}
+                  placeholder={t('inbox_confirm_pin')}
+                  className="flex-1 h-10 rounded-lg border border-gray-200 bg-white px-3 text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+                />
+              </div>
+              <div className="flex items-center gap-2">
+                <Button type="submit" size="sm" disabled={savingPin} className="gap-1.5">
+                  {savingPin ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ShieldCheck className="w-3.5 h-3.5" />}
+                  {t('inbox_pin_save')}
+                </Button>
+                <Button type="button" variant="ghost" size="sm" onClick={() => { setShowPin(false); setNewPin(''); setConfirmPin('') }}>
+                  {t('inbox_pin_cancel')}
+                </Button>
+              </div>
+            </form>
+          </CardContent>
+        </Card>
+      )}
 
       <Card className="mb-4 border-0 shadow-sm">
         <CardContent className="py-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
