@@ -25,6 +25,11 @@ import { summarizeEmail } from './summarize'
 const MAX_FETCH = 25
 const MAX_ATTACHMENTS_PER_EMAIL = 300
 const MAX_ATTACHMENT_BYTES = 60 * 1024 * 1024 // 60 MB — a huge single drawing
+// Whole-message ceiling, checked from the SIZE header BEFORE any bytes are
+// pulled. A customer mailbox is externally reachable, so a crafted multi-GB
+// message must be rejected without ever being buffered (else the background pull
+// OOMs the Node process). 120 MB comfortably holds a real 200-drawing project.
+const MAX_MESSAGE_BYTES = 120 * 1024 * 1024
 const BODY_PREVIEW_CHARS = 4000
 
 const log = (msg: string) => console.log(`[صندوق] ${msg}`)
@@ -86,9 +91,22 @@ export async function runPull(opts: { trigger: PullTrigger; by?: string | null }
       const total = client.mailbox && typeof client.mailbox !== 'boolean' ? client.mailbox.exists : 0
       if (total > 0) {
         const from = Math.max(1, total - MAX_FETCH + 1)
-        // Newest last in a sequence range; we sort by date in the store anyway.
-        for await (const msg of client.fetch(`${from}:*`, { source: true })) {
-          if (!msg.source) continue
+
+        // Pass 1: SIZES only (no bytes). This is what bounds memory — a crafted
+        // 500 MB message must never be pulled into a Buffer just to reject it.
+        const candidates: Array<{ uid: number; size: number }> = []
+        for await (const meta of client.fetch(`${from}:*`, { uid: true, size: true })) {
+          candidates.push({ uid: meta.uid, size: meta.size || 0 })
+        }
+
+        // Pass 2: fetch SOURCE only for messages under the cap, one at a time.
+        for (const c of candidates) {
+          if (c.size > MAX_MESSAGE_BYTES) {
+            log(`skip message uid ${c.uid} — too large (${Math.round(c.size / 1024 / 1024)}MB)`)
+            continue
+          }
+          const msg = await client.fetchOne(String(c.uid), { source: true }, { uid: true })
+          if (!msg || !msg.source) continue
           fetched++
           let parsed
           try {

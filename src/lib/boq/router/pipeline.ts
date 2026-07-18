@@ -21,7 +21,8 @@ import { fetchAiFiles } from '@/lib/ai/files'
 import type { JsonSchema } from '@/lib/ai/provider'
 import type { BoqAnalysisResult, BoqExtractedItem, SkippedFile } from '@/lib/furn/boq'
 import {
-  AI_CALL_TIMEOUT_MS, INDEX_CONCURRENCY, MAX_READ_GROUPS, MAX_SOURCES,
+  AI_CALL_TIMEOUT_MS, INDEX_CONCURRENCY, MAX_INDEXED_ENTRIES, MAX_READ_GROUPS,
+  MAX_SOURCES, READ_CONCURRENCY,
   makeProgressWriter, pooled, withTimeout,
   type Candidate, type IndexedFile, type Resolution, type RouterRow, type SourceBucket,
 } from './core'
@@ -86,7 +87,7 @@ const PHASE1_SCHEMA: JsonSchema = {
           quantity_stated: { type: 'boolean', description: 'true only when this BOQ row itself contains the quantity number.' },
           unit: { type: 'string', description: 'Normalize to {m, m2, m3, pcs, kg, ton, set, lot, lm}.' },
           department_match: { type: 'string', description: 'The covered department (canonical English name from the list).' },
-          reference_hint: { type: 'string', description: 'If the row points elsewhere ("as per Sold.pdf p.40", "refer A-301", "حسب جدول التشطيبات") copy that pointer VERBATIM. If the row has no quantity and no pointer, write a short bilingual search phrase (item + area, e.g. "Lobby marble flooring رخام لوبي"). Empty string when the row is self-contained.' },
+          reference_hint: { type: 'string', description: 'ONLY if the row explicitly points at another document ("as per Sold.pdf p.40", "refer A-301", "حسب جدول التشطيبات ورقة 2"), copy that pointer VERBATIM. This must be a real citation, NOT a description of the item. Empty string when the row has no explicit pointer — do NOT invent a search phrase; the next phase searches by the item description itself.' },
           ai_confidence: { type: 'number', description: '0..1 for description/unit/department correctness of THIS row.' },
         },
       },
@@ -121,7 +122,7 @@ async function extractBoqRows(input: RouterInput): Promise<{
 
 YOU SEE THE BOQ ONLY. The project's other attachments (specs, drawings, schedules) are processed in a LATER phase by a different system. Therefore:
 - quantity = ONLY what this BOQ row itself states. If the row has no number, quantity=0 and quantity_stated=false. NEVER estimate or pull from memory.
-- reference_hint = the row's pointer to another document, copied verbatim ("as per Sold.pdf p.40", "refer to drawing A-301", "حسب جدول التشطيبات"). If the row has no quantity AND no pointer, write a short bilingual search phrase for it (item name + location, e.g. "Lobby marble flooring رخام أرضيات اللوبي") — the next phase searches the attachments with it.
+- reference_hint = ONLY a real, explicit pointer the row makes to another document, copied verbatim ("as per Sold.pdf p.40", "refer to drawing A-301", "حسب جدول التشطيبات ورقة 2"). If the row has no explicit pointer, leave it EMPTY — do not paraphrase the item into a search phrase; the next phase searches by the description itself. A wrong pointer sends the search to the wrong file.
 - Do NOT write "searched all attachments" — you searched nothing; that is not your job here.
 
 DEPARTMENT CLASSIFICATION — COMPOUND-NAME TRAP (a real production failure):
@@ -195,6 +196,27 @@ interface RowState {
   row: RouterRow
   candidates: Candidate[]
   resolution: Resolution | null
+  /** How many of this row's candidate pages were actually opened & read. Lets
+   *  the assembler tell "searched, nothing found" from "never searched" (D7). */
+  candidatesRead: number
+}
+
+// Dimensional families — an override across families (38 lm → 120 m²) is never
+// a conflict to resolve, it's a mis-read to reject.
+function unitFamily(u: string): 'length' | 'area' | 'volume' | 'count' | 'weight' | 'other' {
+  const n = (u || '').toLowerCase().replace(/[²2]/g, '2').replace(/[³3]/g, '3').trim()
+  if (['m', 'lm', 'mt', 'متر', 'م', 'مط', 'meter', 'rm'].includes(n)) return 'length'
+  if (['m2', 'sqm', 'sm', 'م2', 'متر مربع'].includes(n)) return 'area'
+  if (['m3', 'cbm', 'م3', 'متر مكعب'].includes(n)) return 'volume'
+  if (['pcs', 'pc', 'no', 'no.', 'nos', 'عدد', 'حبة', 'قطعة', 'set', 'ea', 'unit'].includes(n)) return 'count'
+  if (['kg', 'ton', 'كجم', 'طن'].includes(n)) return 'weight'
+  return 'other'
+}
+function sameUnitFamily(a: string, b: string): boolean {
+  const fa = unitFamily(a)
+  const fb = unitFamily(b)
+  if (fa === 'other' || fb === 'other') return true // unknown → don't block on it
+  return fa === fb
 }
 
 function groupKey(c: Candidate): string {
@@ -234,17 +256,27 @@ async function readRound(
   }
   const ordered = [...groups.values()].sort((a, b) => Number(isTextGroup(b)) - Number(isTextGroup(a)))
 
-  for (const g of ordered) {
-    if (budget.groups <= 0) {
-      log(`ميزانية القراءة انتهت — تُركت ${ordered.length} مجموعة (تغطية جزئية مُعلنة)`)
-      return
-    }
-    budget.groups--
+  // Take only as many groups as the shared budget allows, then read them with
+  // bounded concurrency (was fully serial → up to ~30 min wall-clock on a big
+  // visual project). Each row whose group is opened counts as "read".
+  const toRead = ordered.slice(0, Math.max(0, budget.groups))
+  if (toRead.length < ordered.length) {
+    log(`ميزانية القراءة: ${toRead.length}/${ordered.length} مجموعة هذه الجولة (تغطية جزئية مُعلنة)`)
+  }
+  budget.groups -= toRead.length
+
+  const posInGroup = (g: ReadGroup) => new Set(g.rows.map((r) => r.position))
+  const stByPos = new Map(states.map((s) => [s.row.position, s]))
+
+  await pooled(toRead, READ_CONCURRENCY, async (g) => {
     const visual = !isTextGroup(g)
+    const inGroup = posInGroup(g)
+    for (const st of states) if (inGroup.has(st.row.position)) st.candidatesRead++
     try {
       const results = visual ? await readVisualPage(g) : await readTextPage(g)
       for (const res of results) {
-        const st = states.find((s) => s.row.position === res.position)
+        const st = stByPos.get(res.position)
+        // First writer wins; earlier rounds/higher-rank candidates come first.
         if (st && !st.resolution) st.resolution = res
       }
       onGroupDone(1, visual)
@@ -253,7 +285,7 @@ async function readRound(
       onGroupDone(0, visual)
       log(`فشل قراءة ${g.file.name} ص${g.page ?? 1}: ${e instanceof Error ? e.message : e}`)
     }
-  }
+  })
 }
 
 // ─── the pipeline ───────────────────────────────────────────────────────────
@@ -280,6 +312,8 @@ export async function runBoqRouter(input: RouterInput): Promise<RouterResult> {
   const indexed: IndexedFile[] = []
   let filesFromCache = 0
   let filesFailed = 0
+  let entryCount = 0 // entries indexed AFTER zip expansion — the real cost driver
+  let entryCapHit = false
   let done = 0
 
   await pooled(sources, INDEX_CONCURRENCY, async (src) => {
@@ -291,6 +325,14 @@ export async function runBoqRouter(input: RouterInput): Promise<RouterResult> {
       skippedFiles.push({ name: src.name, reason: e instanceof Error ? e.message : 'تعذّر التحميل' })
     }
     for (const raw of raws) {
+      // Cap TOTAL indexed entries, not just upload URLs — a few zipped-scan
+      // archives could otherwise expand into thousands of vision calls.
+      if (entryCount >= MAX_INDEXED_ENTRIES) {
+        entryCapHit = true
+        skippedFiles.push({ name: raw.ref.name, reason: `تجاوز حد الفهرسة (${MAX_INDEXED_ENTRIES} ملف)` })
+        continue
+      }
+      entryCount++
       try {
         const { file, cached } = await indexSource(raw)
         indexed.push(file)
@@ -305,7 +347,7 @@ export async function runBoqRouter(input: RouterInput): Promise<RouterResult> {
       }
     }
     done++
-    await progress.push({ filesDone: done, filesFailed, message: `فهرسة الملفات ${done}/${sources.length}` })
+    await progress.push({ filesTotal: entryCount, filesDone: done, filesFailed, message: `فهرسة الملفات ${done}/${sources.length}` })
   })
 
   const readable = indexed.filter((f) => f.kind !== 'unreadable')
@@ -319,6 +361,7 @@ export async function runBoqRouter(input: RouterInput): Promise<RouterResult> {
     row,
     candidates: resolveExplicitHint(row.referenceHint, readable),
     resolution: null,
+    candidatesRead: 0,
   }))
 
   if (readable.length > 0 && boq.rows.length > 0) {
@@ -374,9 +417,10 @@ export async function runBoqRouter(input: RouterInput): Promise<RouterResult> {
   // Phase 5 — assemble.
   await progress.push({ stage: 'assembling', message: 'تجميع النتائج…' })
   let rowsConflict = 0
-  const coverageLine = `فُهرس ${readable.length}/${sources.length === 0 ? 0 : indexed.length} ملفاً${filesFailed > 0 ? ` (تعذّر ${filesFailed})` : ''}، وقُرئت ${pagesRead} صفحة موجّهة`
+  let rowsUnsearched = 0
+  const coverageLine = `فُهرس ${readable.length}/${entryCount} ملفاً${filesFailed > 0 ? ` (تعذّر ${filesFailed})` : ''}، وقُرئت ${pagesRead} صفحة موجّهة`
 
-  const items: BoqExtractedItem[] = states.map(({ row, resolution }) => {
+  const items: BoqExtractedItem[] = states.map(({ row, resolution, candidates, candidatesRead }) => {
     let quantity = row.quantity
     let details = row.details
     let confidence = row.ai_confidence
@@ -389,36 +433,69 @@ export async function runBoqRouter(input: RouterInput): Promise<RouterResult> {
     const verifyBit = resolution
       ? resolution.verified === 'quote' ? ' (تحقق نصي)' : ' (قراءة بصرية مزدوجة)'
       : ''
+    const isDrawing = resolution?.bucket === 'drawing'
+    const unitsCompatible = resolution ? sameUnitFamily(resolution.unit, row.unit) : true
+
+    const addNote = (n: string) => { details = details ? `${n}\n${details}` : n }
 
     if (resolution && row.quantityStated) {
       const diff = Math.abs(resolution.value - row.quantity) / Math.max(row.quantity, 1e-9)
       if (diff <= CONFLICT_TOLERANCE) {
+        // The source agrees with the BOQ — strongest possible signal.
         source = `BOQ؛ تأكدت من ${cite}${verifyBit}`
         confidence = Math.max(confidence, 0.9)
-      } else {
-        // AGENTS.md: drawings override the BOQ — but LOUDLY, with both numbers.
+      } else if (!unitsCompatible) {
+        // A length can't override an area. This is a mis-read, not a conflict —
+        // KEEP the BOQ number, flag for review. (The old code overwrote 120 m²
+        // with 38 lm and printed "38 m²".)
+        rowsConflict++
+        addNote(`⚠️ تحقّق يدوي: الـBOQ يقول ${row.quantity} ${row.unit} لكن ${cite} يذكر ${resolution.value} ${resolution.unit} (وحدة مختلفة الجنس) — أُبقي رقم الـBOQ، راجعه.`)
+        source = `BOQ (تعارض وحدة مع ${cite} — لم يُعتمد)`
+        confidence = Math.min(confidence, 0.55)
+      } else if (isDrawing) {
+        // AGENTS.md: DRAWINGS (and only drawings) override the BOQ — loudly.
         rowsConflict++
         quantity = resolution.value
-        const note = `⚠️ تعارض كمية: الـBOQ يقول ${row.quantity} ${row.unit}، و${cite} يقول ${resolution.value} ${resolution.unit || row.unit} — اعتُمد ${resolution.value} (الرسومات تتفوق).`
-        details = details ? `${note}\n${details}` : note
+        addNote(`⚠️ تعارض كمية: الـBOQ يقول ${row.quantity} ${row.unit}، والرسمة ${cite} تقول ${resolution.value} ${resolution.unit || row.unit} — اعتُمد رقم الرسمة (الرسومات تتفوق).`)
         source = `${cite}${quoteBit}${verifyBit}`
         confidence = Math.min(confidence, 0.7)
-      }
-    } else if (resolution) {
-      quantity = resolution.value
-      source = `${cite}${quoteBit}${verifyBit}`
-      confidence = Math.max(confidence, resolution.visual ? 0.7 : 0.8)
-      if (resolution.unit && resolution.unit.toLowerCase() !== row.unit.toLowerCase()) {
-        const unitNote = `وحدة المصدر "${resolution.unit}" تخالف وحدة الـBOQ "${row.unit}" — أُبقيت وحدة الـBOQ، راجعها.`
-        details = details ? `${details}\n${unitNote}` : unitNote
+      } else {
+        // A spec/other source disagrees. It is NOT drawing authority — do not
+        // silently overwrite a stated BOQ quantity; surface both for a human.
+        rowsConflict++
+        addNote(`⚠️ تحقّق يدوي: الـBOQ يقول ${row.quantity} ${row.unit}، والمصدر ${cite} يقول ${resolution.value} ${resolution.unit || row.unit} — أُبقي رقم الـBOQ (المصدر ليس رسمة)، راجعه.`)
+        source = `BOQ (يخالف ${cite} — لم يُعتمد تلقائياً)`
         confidence = Math.min(confidence, 0.6)
       }
+    } else if (resolution) {
+      // Row had no BOQ quantity — take the resolved number, but never accept it
+      // under a dimensionally-incompatible unit.
+      if (!unitsCompatible) {
+        addNote(`⚠️ ${cite} يذكر ${resolution.value} ${resolution.unit}، ووحدة الـBOQ "${row.unit}" مختلفة الجنس — لم تُعتمد الكمية، راجعها يدوياً.`)
+        source = `${coverageLine} — وجد رقم بوحدة غير متوافقة في ${cite}، يحتاج مراجعة`
+        confidence = Math.min(confidence, 0.4)
+      } else {
+        quantity = resolution.value
+        source = `${cite}${quoteBit}${verifyBit}`
+        confidence = Math.max(confidence, resolution.visual ? 0.7 : 0.8)
+      }
     } else if (row.quantityStated) {
-      source = 'BOQ'
-    } else {
-      // Honest zero: say exactly what WAS searched, never "searched everything".
-      source = `${coverageLine} — لم يُعثر على كمية لهذا البند`
+      // Stated in the BOQ; a candidate MAY have existed but wasn't opened.
+      source = candidates.length > 0 && candidatesRead === 0
+        ? `BOQ (لم يُتحقق من المصادر — تجاوزنا حد القراءة، راجع يدوياً)`
+        : 'BOQ'
+    } else if (candidatesRead > 0) {
+      // We DID open candidate pages and found nothing — honest searched-empty.
+      source = `${coverageLine} — بحثنا الصفحات المرشّحة ولم نجد كمية لهذا البند`
       confidence = Math.min(confidence, 0.4)
+    } else {
+      // We never opened a page for it (no candidate, or budget/truncation) —
+      // say THAT, not "searched and not found".
+      rowsUnsearched++
+      source = candidates.length === 0
+        ? `${coverageLine} — لم يُوجَّه هذا البند لأي ملف`
+        : `${coverageLine} — لم تُقرأ صفحات هذا البند (تجاوزنا حد القراءة)`
+      confidence = Math.min(confidence, 0.35)
     }
 
     return {
@@ -436,6 +513,9 @@ export async function runBoqRouter(input: RouterInput): Promise<RouterResult> {
   const noteParts = [
     boq.notes,
     coverageLine,
+    rowsConflict > 0 ? `${rowsConflict} بند فيه تعارض/تحقّق يدوي — راجع الملاحظات.` : null,
+    rowsUnsearched > 0 ? `${rowsUnsearched} بند لم تُقرأ مصادره (بلا كمية موثّقة) — يحتاج مراجعة يدوية.` : null,
+    entryCapHit ? `عدد الملفات تجاوز حد الفهرسة (${MAX_INDEXED_ENTRIES}) — بعضها لم يُفهرس.` : null,
     catalogTruncated ? 'فهرس التوجيه اختُصر لكبر عدد الملفات — بعض المرشحين لم يُعرض.' : null,
     budget.groups <= 0 ? 'وُقفت القراءة عند حد الصفحات — بعض البنود لم تُقرأ صفحاتها المرشحة.' : null,
   ].filter(Boolean)
@@ -450,7 +530,7 @@ export async function runBoqRouter(input: RouterInput): Promise<RouterResult> {
     skippedFiles,
     filesSent: readable.length + 1, // +1 = the BOQ itself
     coverage: {
-      filesTotal: sources.length,
+      filesTotal: entryCount,
       filesIndexed: readable.length,
       filesFromCache,
       filesFailed,

@@ -21,6 +21,7 @@
 import * as XLSX from 'xlsx'
 import { extractText, getDocumentProxy } from 'unpdf'
 import { unzipSync } from 'fflate'
+import { fetchAppOwned } from '@/lib/s3'
 import type { AiFile } from './provider'
 
 const EXCEL_MIMES = new Set([
@@ -159,7 +160,11 @@ async function bytesToAiFile(buf: Buffer, name: string, label: string, opts: Fet
 // Fetch one URL and return 1..N AiFiles. A ZIP expands into many; an unreadable
 // file yields []. `label` is the caption the model sees before each file.
 export async function fetchAiFiles(url: string, label: string, opts: FetchOpts = {}): Promise<AiFile[]> {
-  const res = await fetch(url)
+  // SSRF guard: boq_url / spec / drawing / other URLs arrive from a request body.
+  // Only our own S3/CDN uploads may be fetched server-side — never an arbitrary
+  // or internal URL. Protects both the router (phase 1 BOQ) and the old Tannoor
+  // engine, which share this loader.
+  const res = await fetchAppOwned(url)
   if (!res.ok) throw new Error(`Failed to fetch file: ${res.status} ${url}`)
   const buf = Buffer.from(await res.arrayBuffer())
   const name = fileNameFromUrl(url)

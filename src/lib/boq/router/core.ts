@@ -31,7 +31,12 @@ import { readJson, writeJson } from '@/lib/s3'
 // without a migration. (Files never go stale; OUR CODE does.)
 export const INDEX_VERSION = 1
 
-export const MAX_SOURCES = 250 // attachments considered per run (matches BUCKET_CAP)
+export const MAX_SOURCES = 250 // upload URLs considered per run (matches BUCKET_CAP)
+// Hard ceiling on ENTRIES actually indexed AFTER zip expansion. Without this a
+// handful of zipped-scan uploads (250 uploads × 50 scanned entries each) becomes
+// 12,500 vision-TOC calls. Bounds the real cost, which the URL cap does not.
+export const MAX_INDEXED_ENTRIES = 400
+export const READ_CONCURRENCY = 3 // parallel page reads (each is 1-2 AI calls)
 export const VISION_TOC_MAX_PAGES = 30 // pages of a scanned doc the TOC pass looks at
 export const MAX_READ_GROUPS = 60 // (file,page) reads per run
 export const MAX_CANDIDATES_PER_ROW = 3
@@ -111,7 +116,9 @@ export interface Resolution {
   quote: string
   fileName: string
   page: number | null
-  /** 'quote' = exact text match. 'double-read' = independent vision confirm. */
+  /** Which bucket the source came from — drawings alone may override the BOQ. */
+  bucket: SourceBucket
+  /** 'quote' = number verified in text. 'double-read' = two independent visual reads agreed. */
   verified: 'quote' | 'double-read'
   visual: boolean
 }
@@ -163,14 +170,32 @@ export function makeProgressWriter(projectId: string) {
     startedAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   }
-  // Serialized writes: progress updates are frequent and S3 writes are slow;
-  // chain them so they can't interleave, and never let one failing write kill
-  // the pipeline (progress is telemetry, not state).
+  // Coalesced, serialized writes. Progress updates fire ~270×/run (one per file,
+  // per page); S3 PUTs are slow. So: always keep `state` current in memory, but
+  // only flush to S3 when the last flush was ≥ MIN_FLUSH_MS ago OR the stage
+  // changed OR it's the terminal state. A flush always writes the LATEST snapshot,
+  // never a stale queued one. Failures are swallowed — progress is telemetry.
+  const MIN_FLUSH_MS = 1500
   let chain: Promise<void> = Promise.resolve()
-  const push = (patch: Partial<RunProgress>) => {
-    state = { ...state, ...patch, updatedAt: new Date().toISOString() }
+  let lastFlush = 0
+  let lastStage: RunStage | null = null
+
+  const flush = () => {
     const snapshot = state
     chain = chain.then(() => writeJson(runKey(projectId), snapshot)).catch(() => {})
+    return chain
+  }
+
+  const push = (patch: Partial<RunProgress>) => {
+    state = { ...state, ...patch, updatedAt: new Date().toISOString() }
+    const now = Date.now()
+    const terminal = state.stage === 'done' || state.stage === 'failed'
+    const stageChanged = state.stage !== lastStage
+    if (terminal || stageChanged || now - lastFlush >= MIN_FLUSH_MS) {
+      lastFlush = now
+      lastStage = state.stage
+      return flush()
+    }
     return chain
   }
   return { push, get: () => state }
@@ -208,16 +233,55 @@ export function normalizeText(s: string): string {
     .trim()
 }
 
+function toWesternDigits(s: string): string {
+  return (s || '').replace(/[٠-٩۰-۹]/g, (d) => AR_DIGITS[d] ?? d)
+}
+
 /**
- * The hallucination gate for TEXT pages: the model must hand back the verbatim
- * substring containing the number, and we require it to actually occur in the
- * page. An empty page cannot produce a quote that verifies — which converts the
- * silent failures (empty extraction, wrong page) into loud, rejected ones.
+ * Extract the NUMERIC VALUES from a string, tokenised so that "1,412" parses to
+ * 1412 (one number) — NOT to 1 and 412. Comma = thousands, dot / ٫ = decimal
+ * (the English convention Saudi BOQs follow). This is what stops a claimed
+ * "412" from verifying against a page's "1,412".
  */
-export function quoteVerifies(pageText: string, quote: string): boolean {
-  const q = normalizeText(quote)
-  if (q.length < 2) return false
-  return normalizeText(pageText).includes(q)
+export function numbersIn(text: string): number[] {
+  const w = toWesternDigits(text).replace(/٫/g, '.')
+  const out: number[] = []
+  const re = /\d[\d,]*(?:\.\d+)?/g
+  let m: RegExpExecArray | null
+  while ((m = re.exec(w)) !== null) {
+    const n = Number(m[0].replace(/,/g, ''))
+    if (Number.isFinite(n)) out.push(n)
+  }
+  return out
+}
+
+const NUM_EPS = 0.01
+
+/**
+ * The hallucination gate for TEXT pages. THREE checks, all required — because
+ * verifying the quote string alone (the old behaviour) decoupled the number we
+ * store from the number we verified:
+ *
+ *   1. the quote occurs verbatim in the page   → the audit trail is real text,
+ *                                                 not fabricated.
+ *   2. `value` is a real number ON THE PAGE     → not a substring of a bigger
+ *      (numbersIn(page) contains it)              number: "412" fails against
+ *                                                 a page whose only figure is
+ *                                                 "1,412".
+ *   3. `value` also appears IN THE QUOTE         → the number and its own cited
+ *      (numbersIn(quote) contains it)             context agree — catches a
+ *                                                 transposed 186-for-168 slip
+ *                                                 where the quote still holds 168.
+ *
+ * An empty/wrong page cannot satisfy all three, so silent failures become loud
+ * rejections — which is the whole promise of the router.
+ */
+export function readingVerifies(pageText: string, quote: string, value: number): boolean {
+  if (!quote || quote.trim().length < 2) return false
+  if (!Number.isFinite(value)) return false
+  if (!normalizeText(pageText).includes(normalizeText(quote))) return false
+  const near = (n: number) => Math.abs(n - value) < NUM_EPS
+  return numbersIn(pageText).some(near) && numbersIn(quote).some(near)
 }
 
 /** Race an AI call against a hard timeout so a hung request can never wedge the

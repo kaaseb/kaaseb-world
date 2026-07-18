@@ -22,7 +22,7 @@ import type { AiFile, JsonSchema } from '@/lib/ai/provider'
 import { mimeFromName } from '@/lib/ai/files'
 import {
   AI_CALL_TIMEOUT_MS, CATALOG_CHAR_CAP, MAX_CANDIDATES_PER_ROW, PAGE_TEXT_CAP,
-  normalizeText, quoteVerifies, withTimeout,
+  normalizeText, readingVerifies, withTimeout,
   type Candidate, type IndexedFile, type Resolution, type RouterRow,
 } from './core'
 import { extractPdfPageRange, refetchBytes } from './indexer'
@@ -40,33 +40,63 @@ export function pageFromHint(hint: string): number | null {
   return m ? Number(m[1]) : null
 }
 
-/** Resolve a row's free-text hint against the indexed files by NAME/doc-number.
- *  Stem comparison, so "Sold.pdf", "sold" and "Sold_rev2.pdf" meet. */
+// TOKEN-boundary match, not substring. `resolveExplicitHint` used
+// `normHint.includes(stem)`, so file "A-30.pdf" (stem "a 30") matched a hint
+// "refer to A-301" ("a 301".includes("a 30") = true), and docNumber "12" matched
+// any hint containing "12". A citation must match a WHOLE token.
+// Split on whitespace AND dots — normalizeText keeps dots (for decimals in
+// quotes), but "Sold.pdf" must tokenize to {sold, pdf} so a hint's "sold"
+// matches the stem, not fail against the single token "sold.pdf".
+function tokenize(s: string): string[] {
+  return normalizeText(s).split(/[\s.]+/).filter(Boolean)
+}
+function tokens(s: string): Set<string> {
+  return new Set(tokenize(s))
+}
+function hasToken(hintTokens: Set<string>, needle: string): boolean {
+  const parts = tokenize(needle).filter((w) => w.length >= 2)
+  return parts.length > 0 && parts.every((w) => hintTokens.has(w))
+}
+
+/**
+ * Resolve a row's EXPLICIT citation ("Sold.pdf ص40", "refer to A-301") to files.
+ * Only real pointers reach here — phase 1 emits reference_hint verbatim, empty
+ * when the row has none, so a loose search phrase can no longer masquerade as a
+ * citation. Matching is whole-token, and a page number is applied ONLY when the
+ * hint cites exactly ONE file (otherwise "p.40 of Sold.pdf, see A-301" would
+ * read page 40 of A-301 too).
+ */
 export function resolveExplicitHint(hint: string, files: IndexedFile[]): Candidate[] {
   const raw = (hint || '').trim()
   if (!raw) return []
-  const normHint = normalizeText(raw)
-  if (!normHint) return []
+  const hintTokens = tokens(raw)
+  if (hintTokens.size === 0) return []
   const wantedPage = pageFromHint(raw)
 
-  const out: Candidate[] = []
+  const matched: IndexedFile[] = []
   for (const f of files) {
-    const stem = normalizeText(f.name.replace(/\.[a-z0-9]+$/i, ''))
-    const doc = f.docNumber ? normalizeText(f.docNumber) : ''
-    const named =
-      (stem.length >= 3 && normHint.includes(stem)) ||
-      (doc.length >= 2 && normHint.includes(doc)) ||
-      stem.split(' ').some((w) => w.length >= 4 && normHint.includes(w))
-    if (!named) continue
-    const page = wantedPage && wantedPage <= Math.max(1, f.pageCount) ? wantedPage : null
-    out.push({
-      sha: f.sha,
-      page: page ?? (f.pageCount === 1 ? 1 : null),
-      why: `إشارة صريحة في الـBOQ: "${raw.slice(0, 60)}"`,
-      rank: 2,
-    })
+    const stem = f.name.replace(/\.[a-z0-9]+$/i, '')
+    // A file is cited when its doc-number token, or a DISTINCTIVE stem token
+    // (length ≥ 4, e.g. "sold", "annex"), appears as a whole token in the hint.
+    const byDoc = f.docNumber ? hasToken(hintTokens, f.docNumber) : false
+    const byStem =
+      hasToken(hintTokens, stem) ||
+      tokenize(stem).some((w) => w.length >= 4 && hintTokens.has(w))
+    if (byDoc || byStem) matched.push(f)
   }
-  return out
+  if (matched.length === 0) return []
+
+  // Page only when unambiguous (single cited file). With several files cited we
+  // can't safely say which one the page belongs to, so target the whole file.
+  const applyPage = matched.length === 1 && wantedPage !== null
+  return matched.map((f) => ({
+    sha: f.sha,
+    page: applyPage && wantedPage! <= Math.max(1, f.pageCount)
+      ? wantedPage!
+      : (f.pageCount === 1 ? 1 : null),
+    why: `إشارة صريحة في الـBOQ: "${raw.slice(0, 60)}"`,
+    rank: 2 as const,
+  }))
 }
 
 // ─── semantic routing (one call for ALL rows) ───────────────────────────────
@@ -231,28 +261,6 @@ interface RawRead {
   results?: Array<{ row?: unknown; found?: unknown; value?: unknown; unit?: unknown; quote?: unknown }>
 }
 
-const CONFIRM_SCHEMA: JsonSchema = {
-  type: 'object',
-  additionalProperties: false,
-  required: ['results'],
-  properties: {
-    results: {
-      type: 'array',
-      items: {
-        type: 'object',
-        additionalProperties: false,
-        required: ['row', 'confirmed'],
-        properties: {
-          row: { type: 'number' },
-          confirmed: { type: 'boolean', description: 'true ONLY if the page visibly shows exactly this value for this item.' },
-        },
-      },
-    },
-  },
-}
-
-interface RawConfirm { results?: Array<{ row?: unknown; confirmed?: unknown }> }
-
 export interface ReadGroup {
   file: IndexedFile
   page: number | null
@@ -307,18 +315,48 @@ export async function readTextPage(group: ReadGroup): Promise<Resolution[]> {
   const found = parseRead(parsed, allowed)
   const out: Resolution[] = []
   for (const [pos, r] of found) {
-    if (!quoteVerifies(pageText, r.quote)) continue // hallucination gate
+    // Hallucination gate: the VALUE (not just the quote string) must be a real
+    // number on the page AND inside its own quote. See readingVerifies.
+    if (!readingVerifies(pageText, r.quote, r.value)) continue
     out.push({
       position: pos, value: r.value, unit: r.unit, quote: r.quote,
-      fileName: group.file.name, page, verified: 'quote', visual: false,
+      fileName: group.file.name, page, bucket: group.file.bucket,
+      verified: 'quote', visual: false,
     })
   }
   return out
 }
 
-/** VISUAL page (scan/photo/drawing): extract the single page, read numbers with
- *  vision (tables + written labels ONLY), then a second independent vision call
- *  must confirm each value before it is accepted. */
+const VISUAL_READ_INSTRUCTION =
+  'أنت قارئ مخططات وجداول ممسوحة. أمامك صفحة واحدة (صورة). اقرأ فقط الأرقام المكتوبة فعلاً: خلايا الجداول، والمساحات/الأطوال المكتوبة كنص على المخطط، وأسطر الأبعاد المُعلَّمة. ممنوع منعاً باتاً: القياس من الرسم، أو حساب مساحة من تظليل، أو استخدام مقياس الرسم — الصورة قد تكون مصغّرة والمقياس بلا معنى. لكل بند: إن ظهر رقم يخصه، أرجعه مع quote = النص الظاهر حوله كما تقرؤه (مثل "Lobby marble 412 m2"). إن لم يظهر فـfound=false — لا تخمّن.'
+
+async function visualReadOnce(
+  provider: Awaited<ReturnType<typeof getProvider>>,
+  aiFile: AiFile,
+  group: ReadGroup,
+  label: string,
+): Promise<Map<number, { value: number; unit: string; quote: string }>> {
+  const parsed = await withTimeout(
+    provider.generateStructured<RawRead>({
+      systemInstruction: VISUAL_READ_INSTRUCTION,
+      files: [aiFile],
+      userText: `## البنود المطلوب إيجاد أرقامها في هذه الصفحة\n${rowsAsk(group.rows)}\n\nJSON فقط.`,
+      schema: READ_SCHEMA,
+      schemaName: 'visual_read',
+      temperature: 0,
+    }),
+    AI_CALL_TIMEOUT_MS,
+    label,
+  )
+  return parseRead(parsed, new Set(group.rows.map((r) => r.position)))
+}
+
+/** VISUAL page (scan/photo/drawing): a number in pixels can't be indexOf-verified
+ *  against text, so verification is TWO GENUINELY INDEPENDENT reads of the same
+ *  page — neither told the other's answer — and a value is accepted only when
+ *  both reads land on the same number (within tolerance). Anchoring the second
+ *  call with the first's value (the old "confirm this?" approach) just made it
+ *  agree; two blind reads that must match is a real check. Same call count. */
 export async function readVisualPage(group: ReadGroup): Promise<Resolution[]> {
   const buf = await refetchBytes(group.file)
   const mime = mimeFromName(group.file.name)
@@ -335,58 +373,20 @@ export async function readVisualPage(group: ReadGroup): Promise<Resolution[]> {
     pageLabel = 1
   }
 
-  const readInstruction =
-    'أنت قارئ مخططات وجداول ممسوحة. أمامك صفحة واحدة (صورة). اقرأ فقط الأرقام المكتوبة فعلاً: خلايا الجداول، والمساحات/الأطوال المكتوبة كنص على المخطط، وأسطر الأبعاد المُعلَّمة. ممنوع منعاً باتاً: القياس من الرسم، أو حساب مساحة من تظليل، أو استخدام مقياس الرسم — الصورة قد تكون مصغّرة والمقياس بلا معنى. لكل بند: إن ظهر رقم يخصه، أرجعه مع quote = النص الظاهر حوله كما تقرؤه (مثل "Lobby marble 412 m2"). إن لم يظهر فـfound=false — لا تخمّن.'
-
   const provider = await getProvider()
-  const parsed = await withTimeout(
-    provider.generateStructured<RawRead>({
-      systemInstruction: readInstruction,
-      files: [aiFile],
-      userText: `## البنود المطلوب إيجاد أرقامها في هذه الصفحة\n${rowsAsk(group.rows)}\n\nJSON فقط.`,
-      schema: READ_SCHEMA,
-      schemaName: 'visual_read',
-      temperature: 0,
-    }),
-    AI_CALL_TIMEOUT_MS,
-    `قراءة بصرية ${group.file.name}`,
-  )
-
-  const allowed = new Set(group.rows.map((r) => r.position))
-  const found = parseRead(parsed, allowed)
-  if (found.size === 0) return []
-
-  // Double-read: pixels can't be indexOf'd, so verification is an independent
-  // second look that must re-see each claimed value. Disagreement = rejection —
-  // a dropped true value costs a manual check; a passed false one costs money.
-  const claims = [...found.entries()]
-    .map(([pos, r]) => `صف ${pos}: القيمة المدّعاة ${r.value} ${r.unit} — سياقها "${r.quote.slice(0, 80)}"`)
-    .join('\n')
-  const confirm = await withTimeout(
-    provider.generateStructured<RawConfirm>({
-      systemInstruction:
-        'أنت مدقق مستقل. انظر إلى الصفحة (الصورة) بعينين جديدتين وتحقق من كل قيمة مدّعاة: هل تظهر فعلاً بهذا الرقم لهذا البند في هذه الصفحة؟ كن متشدداً — عند أدنى شك أجب confirmed=false.',
-      files: [aiFile],
-      userText: `## القيم المدّعاة\n${claims}\n\nتحقق منها واحدة واحدة. JSON فقط.`,
-      schema: CONFIRM_SCHEMA,
-      schemaName: 'visual_confirm',
-      temperature: 0,
-    }),
-    AI_CALL_TIMEOUT_MS,
-    `تدقيق بصري ${group.file.name}`,
-  )
-
-  const confirmed = new Set<number>()
-  for (const r of confirm.results || []) {
-    if (r?.confirmed === true && Number.isFinite(Number(r?.row))) confirmed.add(Number(r.row))
-  }
+  const readA = await visualReadOnce(provider, aiFile, group, `قراءة بصرية أ ${group.file.name}`)
+  if (readA.size === 0) return [] // nothing to confirm — skip the second call, save tokens
+  const readB = await visualReadOnce(provider, aiFile, group, `قراءة بصرية ب ${group.file.name}`)
 
   const out: Resolution[] = []
-  for (const [pos, r] of found) {
-    if (!confirmed.has(pos)) continue
+  for (const [pos, a] of readA) {
+    const b = readB.get(pos)
+    // Both blind reads must produce the SAME number for this row.
+    if (!b || Math.abs(a.value - b.value) > 0.01) continue
     out.push({
-      position: pos, value: r.value, unit: r.unit, quote: r.quote,
-      fileName: group.file.name, page: pageLabel, verified: 'double-read', visual: true,
+      position: pos, value: a.value, unit: a.unit || b.unit, quote: a.quote,
+      fileName: group.file.name, page: pageLabel, bucket: group.file.bucket,
+      verified: 'double-read', visual: true,
     })
   }
   return out

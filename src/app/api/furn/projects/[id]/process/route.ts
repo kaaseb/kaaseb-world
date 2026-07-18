@@ -18,6 +18,8 @@ import { NextResponse } from 'next/server'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createClient } from '@/lib/supabase/server'
 import { verifyOrigin } from '@/lib/csrf'
+import { getProfileOrFallback, getEffectivePermissions } from '@/lib/profile'
+import { hasPermission } from '@/lib/permissions'
 import { setProjectItemSources } from '@/lib/furn/item-sources'
 import { guardItem } from '@/lib/boq/department-guard'
 import { runBoqRouter, type RouterInput, type RouterResult } from '@/lib/boq/router/pipeline'
@@ -44,6 +46,16 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
+  // Gate on the Furn page permission. A router run issues hundreds of billable
+  // model calls; it must not be triggerable by any signed-in user (e.g. an
+  // inbox-only role). The rest of the Furn API is UI-gated only — this is the
+  // one route where the cost makes an explicit server-side check worth it.
+  const profile = await getProfileOrFallback(supabase, user)
+  const permissions = await getEffectivePermissions(supabase, profile)
+  if (!hasPermission(profile, permissions, 'page.furn')) {
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+  }
+
   const { data: project, error: pErr } = await supabase
     .from('furn_projects').select('*').eq('id', id).single()
   if (pErr || !project) return NextResponse.json({ error: 'Project not found' }, { status: 404 })
@@ -65,16 +77,25 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   }
 
   // ── LOCK ──────────────────────────────────────────────────────────────────
-  // Atomic compare-and-set: claim the project only if it isn't already being
-  // processed (or its lock went stale after a crash/deploy). Two tabs cannot
-  // both win — without this, interleaved delete+insert doubles every item and
-  // the customer gets quoted twice.
-  const STALE_LOCK_MS = 45 * 60 * 1000 // router runs are longer than the old single call
+  // Atomic compare-and-set: claim the project only if a router run isn't already
+  // in flight (or its lock went stale after a crash/deploy). Two tabs cannot
+  // both win — without this, interleaved delete+insert doubles every item.
+  //
+  // We key the lock on STAGE, not status. A finished project sits at
+  // stage='pricing'/'quoted' with status='in_progress' (that status means "being
+  // priced by humans"), so keying on status would (a) 409 every re-process for
+  // 45 min and (b) — worse — the poller keys on stage==='processing' to detect
+  // "done", and a claim that left stage untouched made re-processing a quoted
+  // project report "done" instantly and then swap its items out underneath the
+  // user. Setting stage='processing' here fixes both: the poller sees a real
+  // running state, and the lock predicate distinguishes an active run from a
+  // priced project.
+  const STALE_LOCK_MS = 60 * 60 * 1000 // comfortably longer than the true worst-case run
   const staleCutoff = new Date(Date.now() - STALE_LOCK_MS).toISOString()
   const { data: locked } = await supabase.from('furn_projects')
-    .update({ status: 'in_progress', ai_error: null, updated_at: new Date().toISOString() })
+    .update({ stage: 'processing', status: 'in_progress', ai_error: null, updated_at: new Date().toISOString() })
     .eq('id', id)
-    .or(`status.neq.in_progress,updated_at.lt.${staleCutoff}`)
+    .or(`stage.neq.processing,updated_at.lt.${staleCutoff}`)
     .select('id')
     .maybeSingle()
 

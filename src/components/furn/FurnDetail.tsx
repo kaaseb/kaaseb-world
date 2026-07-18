@@ -114,7 +114,12 @@ export function FurnDetail({ project: initialProject, initialItems, initialQuota
   // survives that). We poll the project + the progress file until the status
   // leaves in_progress-processing, then land exactly where the old flow did.
   async function pollUntilDone() {
-    for (;;) {
+    // Cap the poll so a silently-dead background job can't make the client spin
+    // forever: the router's worst case is generous but finite, and the server
+    // lock frees after 60 min anyway. ~75 min of 4 s ticks then we stop and tell
+    // the user to refresh.
+    const MAX_TICKS = 1125
+    for (let tick = 0; tick < MAX_TICKS; tick++) {
       await new Promise(r => setTimeout(r, 4000))
       try {
         const [pRes, gRes] = await Promise.all([
@@ -148,6 +153,11 @@ export function FurnDetail({ project: initialProject, initialItems, initialQuota
         }
       } catch { /* transient — next tick */ }
     }
+    // Exhausted the poll budget without a terminal state — stop spinning.
+    setProcessing(false)
+    setRunMessage('')
+    await refreshProject()
+    toast.error(t('furn_processing_failed'), { duration: 10000 })
   }
 
   async function runProcessing() {

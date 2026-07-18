@@ -14,7 +14,7 @@
 
 import { unzipSync } from 'fflate'
 import { PDFDocument } from 'pdf-lib'
-import { readJson, writeJson } from '@/lib/s3'
+import { readJson, writeJson, fetchAppOwned } from '@/lib/s3'
 import { getProvider } from '@/lib/ai'
 import type { AiFile, JsonSchema } from '@/lib/ai/provider'
 import { extOf, mimeFromName } from '@/lib/ai/files'
@@ -48,7 +48,8 @@ export async function fetchSources(
   name: string,
   bucket: SourceRef['bucket'],
 ): Promise<RawSource[]> {
-  const res = await fetch(url)
+  // SSRF guard: only our own S3/CDN URLs are ever fetched server-side.
+  const res = await fetchAppOwned(url)
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   const buf = Buffer.from(await res.arrayBuffer())
   if (buf.byteLength > MAX_FILE_BYTES) throw new Error(`الملف أكبر من الحد (${Math.round(MAX_FILE_BYTES / 1024 / 1024)}MB)`)
@@ -77,7 +78,7 @@ export async function fetchSources(
  *  visual pages). Verifies the hash so a silently-overwritten stable S3 key can
  *  never feed us different bytes under a cached identity. */
 export async function refetchBytes(file: IndexedFile): Promise<Buffer> {
-  const res = await fetch(file.source.url)
+  const res = await fetchAppOwned(file.source.url)
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   let buf = Buffer.from(await res.arrayBuffer())
   if (file.source.zipEntry) {
