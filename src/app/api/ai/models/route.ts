@@ -1,9 +1,16 @@
-// GET /api/ai/models — live text-model lists for the AI Settings dropdowns.
+// GET /api/ai/models — text-model lists for the AI Settings dropdowns.
 //
-// Pulls the up-to-date model catalogue from each provider (using the stored /
-// env key) and keeps only chat/document-capable text models. Always merged with
-// a small curated fallback so the dropdown is never empty even if a key is
-// missing or the list call fails. Super-admin only.
+// Shows the LIVE catalogue the account can actually call (newest first). The
+// curated fallback is a LAST RESORT only — used when the provider's list call
+// fails (missing key / API down) so the dropdown is never empty. It is never
+// MERGED into a live list.
+//
+// WHY (this was a real, expensive bug): the old code did `merge(live, fallback)`
+// and always folded the hardcoded list into the live one — so the dropdown
+// offered `gpt-5.5-mini`, an admin saved it, and every BOQ + chat call 400'd
+// with "model does not exist". A dropdown must never advertise a model the
+// account can't call. Fallback names are also kept to CONFIRMED-available ones.
+// Super-admin only.
 
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
@@ -11,8 +18,8 @@ import { getOpenAiKey, getGeminiKey } from '@/lib/ai/config'
 
 export const runtime = 'nodejs'
 
-const OPENAI_FALLBACK = ['gpt-5.5', 'gpt-5.4', 'gpt-5.5-mini', 'gpt-5.4-mini']
-const GEMINI_FALLBACK = ['gemini-3-pro', 'gemini-3-flash', 'gemini-2.5-pro', 'gemini-2.5-flash']
+const OPENAI_FALLBACK = ['gpt-5.4', 'gpt-5.4-mini', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini']
+const GEMINI_FALLBACK = ['gemini-2.5-pro', 'gemini-2.5-flash']
 
 // Keep chat/reasoning text models; drop image/audio/embedding/etc.
 const OPENAI_INCLUDE = /^(gpt-|o\d|chatgpt)/i
@@ -46,9 +53,10 @@ async function listGemini(): Promise<string[]> {
   } catch { return [] }
 }
 
-// Dedupe + sort newest-ish first (numeric-aware descending).
-function merge(live: string[], fallback: string[]): string[] {
-  return Array.from(new Set([...live, ...fallback]))
+// Dedupe + sort newest-first (numeric-aware descending), so gpt-5.4 sits above
+// gpt-4o and the freshest model an account has is at the top of the list.
+function ordered(list: string[]): string[] {
+  return Array.from(new Set(list))
     .sort((a, b) => b.localeCompare(a, undefined, { numeric: true }))
 }
 
@@ -57,9 +65,16 @@ export async function GET() {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const [openai, gemini] = await Promise.all([listOpenAi(), listGemini()])
+  const [openaiLive, geminiLive] = await Promise.all([listOpenAi(), listGemini()])
+  // Live-only when the provider actually returned a list; fall back ONLY when it
+  // didn't (so the dropdown is never empty, but also never invents a model).
+  const openaiIsLive = openaiLive.length > 0
+  const geminiIsLive = geminiLive.length > 0
   return NextResponse.json({
-    openai: merge(openai, OPENAI_FALLBACK),
-    gemini: merge(gemini, GEMINI_FALLBACK),
+    openai: ordered(openaiIsLive ? openaiLive : OPENAI_FALLBACK),
+    gemini: ordered(geminiIsLive ? geminiLive : GEMINI_FALLBACK),
+    // Lets the UI tell the admin whether these are real, live models.
+    openaiLive: openaiIsLive,
+    geminiLive: geminiIsLive,
   })
 }

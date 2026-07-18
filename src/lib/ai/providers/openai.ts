@@ -142,12 +142,18 @@ export class OpenAiProvider implements AiProvider {
         // Only a nonexistent/unauthorised MODEL is worth trying another model
         // for. A schema error, a rate limit, a bad key — those recur identically
         // on every candidate, so rethrow immediately instead of looping.
-        const msg = (e as { message?: string })?.message || ''
-        const isModelProblem = /model.*(does not exist|not found)|does not exist.*model|model_not_found|unsupported model|do not have access to (the )?model/i.test(msg)
-        if (!isModelProblem) throw e
+        if (!OpenAiProvider.isModelNotFound(e)) throw e
       }
     }
     throw lastErr instanceof Error ? lastErr : new Error('OpenAI: no usable model')
+  }
+
+  // A model the account can't call errors with one of these. Only THIS is worth
+  // trying a different model for — everything else (rate limit, schema, bad key)
+  // recurs identically on every candidate.
+  private static isModelNotFound(e: unknown): boolean {
+    const msg = (e as { message?: string })?.message || ''
+    return /model.*(does not exist|not found)|does not exist.*model|model_not_found|unsupported model|do not have access to (the )?model/i.test(msg)
   }
 
   async chatWithTools(req: ChatRequest): Promise<string> {
@@ -164,13 +170,35 @@ export class OpenAiProvider implements AiProvider {
     const maxHops = req.maxToolHops ?? 6
     let lastText = ''
 
+    // Same resilience as generateStructured: if the configured chat model isn't
+    // callable on this account (the saved `gpt-5.5-mini` that 400'd every chat),
+    // fall through to a known-good one instead of failing. Resolved once, on the
+    // first hop, then reused for the rest of the tool loop.
+    const chatCandidates = Array.from(
+      new Set([this.chatModel, 'gpt-5.4-mini', 'gpt-4.1-mini', 'gpt-4o-mini'].filter(Boolean)),
+    )
+    let modelIdx = 0
+
     for (let hop = 0; hop < maxHops; hop++) {
-      const res = await this.client.chat.completions.create({
-        model: this.chatModel,
-        messages,
-        tools,
-        tool_choice: 'auto',
-      })
+      let res: OpenAI.Chat.ChatCompletion
+      for (;;) {
+        try {
+          res = await this.client.chat.completions.create({
+            model: chatCandidates[modelIdx],
+            messages,
+            tools,
+            tool_choice: 'auto',
+          })
+          break
+        } catch (e) {
+          if (OpenAiProvider.isModelNotFound(e) && modelIdx < chatCandidates.length - 1) {
+            console.warn(`[openai] chat model "${chatCandidates[modelIdx]}" unavailable — trying "${chatCandidates[modelIdx + 1]}". Fix it in AI settings.`)
+            modelIdx++
+            continue
+          }
+          throw e
+        }
+      }
 
       const msg = res.choices[0]?.message
       if (!msg) break
