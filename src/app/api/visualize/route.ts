@@ -115,6 +115,16 @@ export async function POST(request: Request) {
       ? body.quality
       : 'high'
 
+  // Cost gate — the REAL one. OpenAI image generation is super-admin only; this
+  // is enforced here on the server, so a direct API call with provider:'openai'
+  // can't bypass it (the client lock is only a matching UI hint). Everyone else
+  // uses the free Gemini default.
+  const { data: profile } = await supabase
+    .from('profiles').select('full_name, role').eq('id', user.id).maybeSingle()
+  if (provider === 'openai' && profile?.role !== 'super_admin') {
+    return NextResponse.json({ error: 'محرك OpenAI متاح للمدير فقط (تحكّم بالتكلفة) — استخدم Gemini.' }, { status: 403 })
+  }
+
   // Resolve the product image up-front (catalog URL / quick upload / productId).
   let productUrl = body.productImageUrl || ''
   if (!productUrl && body.productId) {
@@ -123,9 +133,6 @@ export async function POST(request: Request) {
   if (mode === 'place' && !productUrl) {
     return NextResponse.json({ error: 'A product image is required to place a product.' }, { status: 400 })
   }
-
-  const { data: profile } = await supabase
-    .from('profiles').select('full_name').eq('id', user.id).maybeSingle()
 
   const job = await createJob({
     mode,

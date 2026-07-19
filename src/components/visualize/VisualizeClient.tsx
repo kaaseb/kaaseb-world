@@ -9,7 +9,7 @@ import { useRef, useState, useMemo, useEffect, useCallback } from 'react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { toast } from 'sonner'
-import { Wand2, Upload, Loader2, Download, Image as ImageIcon, Sparkles, Search, Check, Trash2, AlertCircle, StickyNote, Cpu, Lock } from 'lucide-react'
+import { Wand2, Upload, Loader2, Download, Image as ImageIcon, Sparkles, Search, Check, Trash2, AlertCircle, StickyNote, Cpu } from 'lucide-react'
 import { useLanguage } from '@/contexts/LanguageContext'
 import { IMAGE_PROVIDERS, DEFAULT_PROVIDER, defaultModelFor, type ImageProvider } from '@/lib/ai/image-models'
 
@@ -41,6 +41,9 @@ interface Props {
   images: Record<string, string>
   // Product ids ordered most-used first (from the S3 usage store).
   topProductIds: string[]
+  // OpenAI (paid) engine is gated to the super admin — this drives the UI; the
+  // server enforces the same rule so it can't be bypassed.
+  isSuperAdmin: boolean
 }
 
 const SURFACES = [
@@ -60,11 +63,8 @@ function pick(en: string | null, ar: string | null, isRtl: boolean): string {
 }
 
 const TOP_N = 5
-// Simple cost-control gate: OpenAI is locked behind this password (Gemini is the
-// free-to-use default). Not hard security — just stops casual OpenAI usage.
-const OPENAI_LOCK = '100200300'
 
-export function VisualizeClient({ products, images, topProductIds }: Props) {
+export function VisualizeClient({ products, images, topProductIds, isSuperAdmin }: Props) {
   const { isRtl, lang } = useLanguage()
   const ar = lang === 'ar'
 
@@ -94,28 +94,17 @@ export function VisualizeClient({ products, images, topProductIds }: Props) {
   const [model, setModel] = useState<string>(defaultModelFor(DEFAULT_PROVIDER))
   const [quality, setQuality] = useState<'low' | 'medium' | 'high'>('high')
   const [imageModels, setImageModels] = useState<{ openai: string[]; gemini: string[] }>({ openai: [], gemini: [] })
-  const [openaiUnlocked, setOpenaiUnlocked] = useState(false)
-  const [lockPrompt, setLockPrompt] = useState(false)
-  const [lockInput, setLockInput] = useState('')
   const providerInfo = IMAGE_PROVIDERS[provider]
 
   function changeProvider(p: ImageProvider) {
-    // OpenAI is gated behind a password (cost control). Gemini stays default.
-    if (p === 'openai' && !openaiUnlocked) { setLockPrompt(true); return }
+    // OpenAI (paid) is super-admin only — enforced on the server; this is just
+    // the matching UI. Gemini stays the free default for everyone.
+    if (p === 'openai' && !isSuperAdmin) {
+      toast.error(ar ? 'محرك OpenAI متاح للمدير فقط' : 'OpenAI is available to the admin only')
+      return
+    }
     setProvider(p)
     setModel(defaultModelFor(p)) // reset to that provider's default model
-  }
-
-  function unlockOpenai() {
-    if (lockInput === OPENAI_LOCK) {
-      setOpenaiUnlocked(true)
-      setLockPrompt(false)
-      setLockInput('')
-      setProvider('openai')
-      setModel(defaultModelFor('openai'))
-    } else {
-      toast.error(ar ? 'الرقم السري غير صحيح' : 'Wrong password')
-    }
   }
 
   // Live image models merged with the catalogue (known ids get friendly labels;
@@ -444,7 +433,7 @@ export function VisualizeClient({ products, images, topProductIds }: Props) {
                 {(Object.keys(IMAGE_PROVIDERS) as ImageProvider[]).map(p => (
                   <button key={p} type="button" onClick={() => changeProvider(p)}
                     className={['flex-1 px-2.5 py-1.5 rounded-md transition', provider === p ? 'bg-indigo-600 text-white' : 'text-muted-foreground hover:bg-muted'].join(' ')}>
-                    {IMAGE_PROVIDERS[p].label}{p === 'openai' && !openaiUnlocked ? ' 🔒' : ''}
+                    {IMAGE_PROVIDERS[p].label}{p === 'openai' && !isSuperAdmin ? ' 🔒' : ''}
                   </button>
                 ))}
               </div>
@@ -456,21 +445,10 @@ export function VisualizeClient({ products, images, topProductIds }: Props) {
               </select>
             </div>
 
-            {lockPrompt && (
-              <div className="flex items-center gap-2 rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-950/20 p-2">
-                <Lock className="w-4 h-4 text-amber-600 shrink-0" />
-                <input
-                  type="password"
-                  value={lockInput}
-                  onChange={e => setLockInput(e.target.value)}
-                  onKeyDown={e => { if (e.key === 'Enter') unlockOpenai() }}
-                  autoFocus
-                  placeholder={ar ? 'الرقم السري لاستخدام OpenAI' : 'OpenAI password'}
-                  className="flex-1 h-8 bg-background border border-input rounded-md text-sm px-2"
-                />
-                <Button type="button" size="sm" className="h-8" onClick={unlockOpenai}>{ar ? 'فتح' : 'Unlock'}</Button>
-                <button type="button" onClick={() => { setLockPrompt(false); setLockInput('') }} className="text-xs text-muted-foreground hover:underline">{ar ? 'إلغاء' : 'Cancel'}</button>
-              </div>
+            {!isSuperAdmin && (
+              <p className="text-xs text-muted-foreground">
+                {ar ? '🔒 محرك OpenAI متاح للمدير فقط — Gemini مجاني للجميع.' : '🔒 OpenAI engine is admin-only — Gemini is free for everyone.'}
+              </p>
             )}
             {providerInfo.qualities.length > 0 && (
               <select value={quality} onChange={e => setQuality(e.target.value as 'low' | 'medium' | 'high')}
