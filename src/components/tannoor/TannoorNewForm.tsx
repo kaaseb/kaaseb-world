@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
@@ -11,9 +11,10 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { toast } from 'sonner'
 import {
   ArrowLeft, ArrowRight, FileSpreadsheet, FileText, Image as ImageIcon,
-  Loader2, Upload, X,
+  Loader2, Upload, X, Sparkles, Search, Link2, Briefcase,
 } from 'lucide-react'
 import { useLanguage } from '@/contexts/LanguageContext'
+import type { ClientProject } from '@/types'
 
 interface UploadedFile { url: string; name: string; key?: string; size?: number }
 
@@ -40,6 +41,68 @@ export function TannoorNewForm() {
   const [uploadingSpec, setUploadingSpec] = useState(false)
   const [uploadingDrawing, setUploadingDrawing] = useState(false)
   const [submitting, setSubmitting] = useState(false)
+
+  // ── Import from an existing /projects entry (same source Furn pulls from) ──
+  const [clientProjects, setClientProjects] = useState<ClientProject[] | null>(null)
+  const [pickerOpen, setPickerOpen] = useState(false)
+  const [pickerQuery, setPickerQuery] = useState('')
+  const [loadingClients, setLoadingClients] = useState(false)
+  const [sourceId, setSourceId] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!pickerOpen || clientProjects !== null) return
+    let alive = true
+    // Deferred off the effect body so the initial setState isn't synchronous.
+    const run = setTimeout(() => {
+      setLoadingClients(true)
+      fetch('/api/client-projects')
+        .then((r) => r.json())
+        .then((j) => { if (alive) setClientProjects((j.projects || []) as ClientProject[]) })
+        .catch(() => { if (alive) setClientProjects([]) })
+        .finally(() => { if (alive) setLoadingClients(false) })
+    }, 0)
+    return () => { alive = false; clearTimeout(run) }
+  }, [pickerOpen, clientProjects])
+
+  const filteredClients = useMemo(() => {
+    if (!clientProjects) return []
+    const q = pickerQuery.trim().toLowerCase()
+    const base = q
+      ? clientProjects.filter((p) => [p.name_en, p.name_ar, p.company_en, p.company_ar, p.engineer_name_en, p.engineer_name_ar, p.engineer_phone].filter(Boolean).join(' ').toLowerCase().includes(q))
+      : clientProjects
+    return base.slice(0, 50)
+  }, [clientProjects, pickerQuery])
+
+  // Apply a client project: fill BOTH languages, route files by category
+  // (boq → BOQ slot, drawing → drawings, spec/other → specs).
+  function importFromClientProject(cp: ClientProject) {
+    setSourceId(cp.id)
+    setNameEn(cp.name_en || cp.name_ar || '')
+    setNameAr(cp.name_ar || cp.name_en || '')
+    setCompanyEn(cp.company_en || cp.company_ar || '')
+    setCompanyAr(cp.company_ar || cp.company_en || '')
+    setEngEn(cp.engineer_name_en || cp.engineer_name_ar || '')
+    setEngAr(cp.engineer_name_ar || cp.engineer_name_en || '')
+    setEngPhone(cp.engineer_phone || '')
+
+    let boq: UploadedFile | null = null
+    const newSpecs: UploadedFile[] = []
+    const newDrawings: UploadedFile[] = []
+    for (const f of (cp.files || [])) {
+      const up: UploadedFile = { url: f.url, name: f.name, size: typeof f.bytes === 'number' ? f.bytes : undefined }
+      if (f.category === 'boq' && !boq) boq = up
+      else if (f.category === 'drawing') newDrawings.push(up)
+      else newSpecs.push(up) // spec, other, and any extra boq
+    }
+    if (boq) setBoqFile(boq)
+    if (newSpecs.length) setSpecs((prev) => [...prev, ...newSpecs])
+    if (newDrawings.length) setDrawings((prev) => [...prev, ...newDrawings])
+
+    const imported = (cp.files || []).length
+    toast.success(imported > 0 ? t('furn_imported_files_toast').replace('{n}', String(imported)) : t('furn_imported_no_files'))
+    setPickerOpen(false)
+    setPickerQuery('')
+  }
 
   async function upload(file: File): Promise<UploadedFile | null> {
     const fd = new FormData()
@@ -104,6 +167,70 @@ export function TannoorNewForm() {
       <p className="text-sm text-muted-foreground mb-6">{t('tn_subtitle')}</p>
 
       <form onSubmit={handleSubmit} className="space-y-6">
+        {/* Quick-start: pull everything (text + files) from an existing project —
+            the same source Furn imports from, so the intake chain is consistent. */}
+        <Card className="border-orange-200 bg-gradient-to-br from-orange-50 to-amber-50/40">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base font-semibold flex items-center gap-2">
+              <span className="w-8 h-8 rounded-lg bg-orange-100 text-orange-700 flex items-center justify-center"><Sparkles className="w-4 h-4" /></span>
+              {t('furn_quick_start')}
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {sourceId ? (
+              <div className="flex items-center gap-3 rounded-lg border border-emerald-200 bg-emerald-50/60 p-2.5">
+                <Link2 className="w-4 h-4 text-emerald-700 flex-shrink-0" />
+                <p className="flex-1 text-sm text-emerald-900 min-w-0 truncate">{t('furn_imported_from_client')}</p>
+                <Button type="button" size="sm" variant="ghost" onClick={() => setSourceId(null)} className="text-emerald-700 gap-1">
+                  <X className="w-4 h-4" /><span className="text-xs">{t('furn_unlink_import')}</span>
+                </Button>
+              </div>
+            ) : (
+              <>
+                <div className="relative">
+                  <Search className={`absolute top-1/2 -translate-y-1/2 w-4 h-4 text-orange-700/60 ${isRtl ? 'right-3' : 'left-3'}`} />
+                  <Input
+                    value={pickerQuery}
+                    onFocus={() => setPickerOpen(true)}
+                    onChange={(e) => { setPickerQuery(e.target.value); setPickerOpen(true) }}
+                    placeholder={t('furn_import_search_ph')}
+                    className={`bg-white ${isRtl ? 'pr-10' : 'pl-10'}`}
+                  />
+                </div>
+                {pickerOpen && (
+                  <div className="rounded-lg bg-white border max-h-[320px] overflow-y-auto">
+                    {loadingClients ? (
+                      <div className="p-6 text-center text-sm text-muted-foreground flex items-center justify-center gap-2"><Loader2 className="w-4 h-4 animate-spin" />{t('loading')}</div>
+                    ) : filteredClients.length === 0 ? (
+                      <div className="p-6 text-center text-sm text-muted-foreground">{t('furn_import_no_match')}</div>
+                    ) : (
+                      <ul className="divide-y">
+                        {filteredClients.map((cp) => {
+                          const name = isRtl ? (cp.name_ar || cp.name_en) : (cp.name_en || cp.name_ar)
+                          const company = isRtl ? (cp.company_ar || cp.company_en) : (cp.company_en || cp.company_ar)
+                          const fileCount = (cp.files || []).length
+                          return (
+                            <li key={cp.id}>
+                              <button type="button" onClick={() => importFromClientProject(cp)} className="w-full text-start px-3 py-2.5 hover:bg-orange-50/60 transition flex items-center gap-3">
+                                <div className="w-9 h-9 rounded-md bg-muted/60 text-muted-foreground flex items-center justify-center flex-shrink-0"><Briefcase className="w-4 h-4" /></div>
+                                <div className="flex-1 min-w-0">
+                                  <p className="text-sm font-medium truncate">{name || '—'}</p>
+                                  <p className="text-xs text-muted-foreground truncate">{[company, cp.engineer_phone].filter(Boolean).join(' · ')}</p>
+                                </div>
+                                {fileCount > 0 && <span className="text-xs text-muted-foreground whitespace-nowrap flex items-center gap-0.5"><FileText className="w-3 h-3" />{fileCount}</span>}
+                              </button>
+                            </li>
+                          )
+                        })}
+                      </ul>
+                    )}
+                  </div>
+                )}
+              </>
+            )}
+          </CardContent>
+        </Card>
+
         <Card className="border-0 shadow-sm">
           <CardHeader><CardTitle className="text-base font-semibold">{t('furn_form_project_name')}</CardTitle></CardHeader>
           <CardContent className="space-y-4">

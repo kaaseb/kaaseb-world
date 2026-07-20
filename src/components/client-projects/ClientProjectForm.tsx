@@ -213,10 +213,9 @@ export function ClientProjectForm({ mode, initial, profiles = [], canEdit = true
       return
     }
     toast.success(mode === 'create' ? t('cp_form_submit') : t('saved'))
-    // After creating, drop the user back on the list. After editing, stay
-    // on the project so they can keep tweaking without losing context.
-    if (mode === 'create') router.push('/projects')
-    else router.refresh()
+    // Both creating and saving edits return to the projects list (owner's
+    // request — after saving changes inside a project, go back to /projects).
+    router.push('/projects')
   }
 
   async function handleDelete() {

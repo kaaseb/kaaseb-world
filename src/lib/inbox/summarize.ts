@@ -14,13 +14,18 @@ import type { EmailPreview, EmailAttachment } from './store'
 const SUMMARY_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['projectName', 'summary', 'highlights'],
+  required: ['projectName', 'summary', 'highlights', 'requirements'],
   properties: {
-    projectName: { type: 'string', description: 'A clean, short project title (Arabic). Fall back to the email subject if unclear.' },
-    summary: { type: 'string', description: '2-3 sentences in Arabic: what is this project / what is the customer asking for.' },
+    projectName: { type: 'string', description: 'A clean, short project title in ARABIC. Fall back to the email subject if unclear.' },
+    summary: { type: 'string', description: '2-3 sentences in ARABIC: what is this project / what is the customer asking for. ALWAYS write it in Arabic even if the email is English — translate it.' },
     highlights: {
       type: 'array',
-      description: 'Up to 5 short Arabic facts worth seeing at a glance: has a BOQ? a deadline/date? number of buildings/floors? location? budget? scope?',
+      description: 'Up to 5 short ARABIC facts worth seeing at a glance: has a BOQ? a deadline/date? number of buildings/floors? location? budget? scope?',
+      items: { type: 'string' },
+    },
+    requirements: {
+      type: 'array',
+      description: 'The terms/conditions the CUSTOMER explicitly asks us to address in the quote — each as a short ARABIC phrase. Examples: "سعر الوحدة والإجمالي", "أفضل سعر لأقل وأكبر كمية", "مهلة التسليم", "شروط الدفع", "صلاحية العرض", "الضمان", "المطابقة الفنية للمواصفات". Read them from the body OR any attached RFQ text. Empty array if the email lists none. Do NOT invent.',
       items: { type: 'string' },
     },
   },
@@ -30,6 +35,7 @@ interface RawSummary {
   projectName?: unknown
   summary?: unknown
   highlights?: unknown
+  requirements?: unknown
 }
 
 function str(v: unknown, max: number): string {
@@ -56,6 +62,7 @@ function fallback(input: SummarizeInput): EmailPreview {
     projectName: input.subject || 'مشروع من البريد',
     summary: input.bodyText ? input.bodyText.slice(0, 300) : 'إيميل من عميل — راجع المرفقات.',
     highlights: hl,
+    requirements: [],
   }
 }
 
@@ -69,7 +76,7 @@ export async function summarizeEmail(input: SummarizeInput): Promise<EmailPrevie
     const files = input.attachments.map((a, i) => `${i + 1}. ${a.name} [${a.category}]`).join('\n')
     const parsed = await provider.generateStructured<RawSummary>({
       systemInstruction:
-        'أنت مساعد فرز مشاريع لشركة رخام سعودية. من إيميل عميل وقائمة مرفقاته، اكتب ملخصاً سريعاً يساعد صاحب الشركة يقرر هل يحوّله لمشروع. لا تخترع معلومات — لخّص الموجود فقط. اكتب بالعربي.',
+        'أنت مساعد فرز مشاريع لشركة رخام سعودية. من إيميل عميل وقائمة مرفقاته، اكتب ملخصاً سريعاً يساعد صاحب الشركة يقرر هل يحوّله لمشروع، واستخرج الشروط/المتطلبات التي يطلب العميل تغطيتها في العرض. لا تخترع معلومات — لخّص الموجود فقط. اكتب كل المخرجات بالعربي حتى لو كان الإيميل بالإنجليزي (ترجمها).',
       files: [],
       userText: `العنوان: ${input.subject}\nمن: ${input.fromName} <${input.fromEmail}>\n\nنص الإيميل:\n${input.bodyText.slice(0, 3000)}\n\nالمرفقات:\n${files || '(لا مرفقات)'}`,
       schema: SUMMARY_SCHEMA,
@@ -82,8 +89,11 @@ export async function summarizeEmail(input: SummarizeInput): Promise<EmailPrevie
     const highlights = Array.isArray(parsed.highlights)
       ? parsed.highlights.map((h) => str(h, 120)).filter(Boolean).slice(0, 5)
       : base.highlights
+    const requirements = Array.isArray(parsed.requirements)
+      ? parsed.requirements.map((r) => str(r, 160)).filter(Boolean).slice(0, 12)
+      : base.requirements
 
-    return { projectName, summary, highlights }
+    return { projectName, summary, highlights, requirements }
   } catch {
     return base
   }

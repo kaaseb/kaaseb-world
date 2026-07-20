@@ -146,6 +146,7 @@ export async function runList(opts: { trigger: PullTrigger; by?: string | null }
             uid: meta.uid,
             uidValidity,
             folder: conn.folder,
+            inReplyTo: (env?.inReplyTo || '').trim() || null,
           })
         }
       }

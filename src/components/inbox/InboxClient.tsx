@@ -13,6 +13,7 @@ import {
   Inbox, RefreshCw, Loader2, Trash2, Paperclip, Mail, CalendarDays,
   Briefcase, Archive, AlertCircle, ExternalLink, FileSpreadsheet, PencilRuler,
   FileText, File as FileIcon, Sparkles, Search, X, KeyRound, ShieldCheck,
+  MessagesSquare, ListChecks,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { toast } from 'sonner'
@@ -44,9 +45,19 @@ const CAT_LABEL: Record<string, { en: string; ar: string }> = {
   other: { en: 'Other', ar: 'أخرى' },
 }
 
-function fileCounts(e: InboxEmail): { boq: number; drawing: number; spec: number; other: number } {
+// A conversation grouped for display: one card, replies nested.
+interface ThreadView {
+  threadId: string
+  head: InboxEmail // representative message (hydrated-with-summary, else earliest)
+  messages: InboxEmail[] // oldest → newest
+  totalAttachments: number
+  latestDate: string
+}
+
+// Aggregate attachment category counts across every message in a thread.
+function threadFileCounts(msgs: InboxEmail[]): { boq: number; drawing: number; spec: number; other: number } {
   const c = { boq: 0, drawing: 0, spec: 0, other: 0 }
-  for (const a of e.attachments) c[a.category]++
+  for (const m of msgs) for (const a of m.attachments) c[a.category]++
   return c
 }
 
@@ -152,16 +163,17 @@ export function InboxClient({ initialItems, initialLastRun, canCreateProject, is
     }
   }
 
-  async function hydrate(id: string) {
-    setBusyId(id)
+  // Hydrate the thread's head message to get its summary (busy keyed by thread).
+  async function hydrate(headId: string, threadId: string) {
+    setBusyId(threadId)
     try {
-      const res = await fetch(`/api/inbox/${id}/hydrate`, { method: 'POST' })
+      const res = await fetch(`/api/inbox/${headId}/hydrate`, { method: 'POST' })
       const j = await res.json().catch(() => ({}))
       if (!res.ok) {
         toast.error(j.error || 'Failed', { duration: 10000 })
         return
       }
-      if (j.email) setItems((list) => list.map((e) => (e.id === id ? j.email : e)))
+      if (j.email) setItems((list) => list.map((e) => (e.id === headId ? j.email : e)))
       toast.success(lang === 'ar' ? 'تم التجهيز ✓' : 'Prepared ✓')
     } catch {
       toast.error('Failed')
@@ -170,18 +182,20 @@ export function InboxClient({ initialItems, initialLastRun, canCreateProject, is
     }
   }
 
-  async function convert(id: string) {
-    setBusyId(id)
+  // Convert the WHOLE thread → one project. The server pools every message.
+  async function convert(headId: string, threadId: string) {
+    setBusyId(threadId)
     try {
-      const res = await fetch(`/api/inbox/${id}/convert`, { method: 'POST' })
+      const res = await fetch(`/api/inbox/${headId}/convert`, { method: 'POST' })
       const j = await res.json().catch(() => ({}))
       if (!res.ok) {
-        toast.error(j.error || 'Failed', { duration: 10000 })
+        toast.error(j.error || 'Failed', { duration: 12000 })
         return
       }
-      setItems((list) => list.map((e) => (e.id === id ? { ...e, status: 'converted', projectId: j.project?.id ?? null } : e)))
+      const pid = j.project?.id ?? null
+      setItems((list) => list.map((e) => (e.threadId === threadId ? { ...e, status: 'converted', projectId: pid } : e)))
       toast.success(t('inbox_converted'))
-      if (j.project?.id) router.push(`/projects/${j.project.id}`)
+      if (pid) router.push(`/projects/${pid}`)
     } catch {
       toast.error('Failed')
     } finally {
@@ -189,12 +203,12 @@ export function InboxClient({ initialItems, initialLastRun, canCreateProject, is
     }
   }
 
-  async function archive(id: string) {
-    setBusyId(id)
+  async function archive(headId: string, threadId: string) {
+    setBusyId(threadId)
     const prev = items
-    setItems((list) => list.map((e) => (e.id === id ? { ...e, status: 'archived' } : e)))
+    setItems((list) => list.map((e) => (e.threadId === threadId ? { ...e, status: 'archived' } : e)))
     try {
-      const res = await fetch(`/api/inbox/${id}`, {
+      const res = await fetch(`/api/inbox/${headId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status: 'archived' }),
@@ -208,12 +222,12 @@ export function InboxClient({ initialItems, initialLastRun, canCreateProject, is
     }
   }
 
-  async function remove(id: string) {
+  async function remove(headId: string, threadId: string) {
     if (!confirm(t('inbox_delete_confirm'))) return
     const prev = items
-    setItems((list) => list.filter((e) => e.id !== id))
+    setItems((list) => list.filter((e) => e.threadId !== threadId))
     try {
-      const res = await fetch(`/api/inbox/${id}`, { method: 'DELETE' })
+      const res = await fetch(`/api/inbox/${headId}`, { method: 'DELETE' })
       if (!res.ok) throw new Error()
     } catch {
       setItems(prev)
@@ -242,7 +256,28 @@ export function InboxClient({ initialItems, initialLastRun, canCreateProject, is
     })
   }, [items, tab, search, dateFrom, dateTo])
 
-  const shown = filtered.slice(0, visible)
+  // Group the filtered emails into threads — one card per conversation, replies
+  // nested inside. Head = the hydrated message with a summary, else the earliest.
+  const threads = useMemo<ThreadView[]>(() => {
+    const map = new Map<string, InboxEmail[]>()
+    for (const e of filtered) {
+      const arr = map.get(e.threadId)
+      if (arr) arr.push(e)
+      else map.set(e.threadId, [e])
+    }
+    const list: ThreadView[] = []
+    for (const [threadId, msgs] of map) {
+      msgs.sort((a, b) => (a.date || '').localeCompare(b.date || ''))
+      const head = msgs.find((m) => m.hydrated && m.preview) || msgs[0]
+      const totalAttachments = msgs.reduce((n, m) => n + (m.hydrated ? m.attachments.length : m.attachmentCount), 0)
+      const latestDate = msgs.reduce((d, m) => ((m.date || '') > d ? (m.date || '') : d), '')
+      list.push({ threadId, head, messages: msgs, totalAttachments, latestDate })
+    }
+    list.sort((a, b) => b.latestDate.localeCompare(a.latestDate))
+    return list
+  }, [filtered])
+
+  const shownThreads = threads.slice(0, visible)
   const hasFilters = !!(search || dateFrom || dateTo)
 
   const tabs: Array<{ key: EmailStatus; label: string; icon: LucideIcon; count: number }> = [
@@ -383,11 +418,11 @@ export function InboxClient({ initialItems, initialLastRun, canCreateProject, is
 
       {/* Count line */}
       <p className="text-xs text-muted-foreground mb-3">
-        {t('inbox_showing')} {shown.length} {t('inbox_of')} {filtered.length}
+        {t('inbox_showing')} {shownThreads.length} {t('inbox_of')} {threads.length}
         {tab === 'new' && <span className="ms-2 opacity-80">· {t('inbox_list_hint')}</span>}
       </p>
 
-      {filtered.length === 0 ? (
+      {threads.length === 0 ? (
         <Card className="border-dashed">
           <CardContent className="py-16 text-center">
             <Inbox className="w-10 h-10 mx-auto text-muted-foreground/40 mb-3" />
@@ -398,54 +433,77 @@ export function InboxClient({ initialItems, initialLastRun, canCreateProject, is
       ) : (
         <>
           <div className="space-y-3">
-            {shown.map((e) => {
-              const c = fileCounts(e)
-              const attCount = e.hydrated ? e.attachments.length : e.attachmentCount
+            {shownThreads.map((thread) => {
+              const head = thread.head
+              const c = threadFileCounts(thread.messages)
+              const allAtts = thread.messages.flatMap((m) => m.attachments)
+              const requirements = Array.from(new Set(thread.messages.flatMap((m) => m.preview?.requirements || [])))
+              const busy = busyId === thread.threadId
+              const isConverted = head.status === 'converted' && !!head.projectId
+              const msgCount = thread.messages.length
               return (
-              <Card key={e.id}>
+              <Card key={thread.threadId}>
                 <CardContent className="p-4 flex flex-col gap-3">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
-                      <h3 className="font-semibold text-gray-900 leading-snug">{e.preview?.projectName || e.subject}</h3>
-                      {e.preview?.projectName && e.preview.projectName !== e.subject && (
-                        <p className="text-xs text-muted-foreground truncate mt-0.5">{e.subject}</p>
+                      <h3 className="font-semibold text-gray-900 leading-snug">{head.preview?.projectName || head.subject}</h3>
+                      {head.preview?.projectName && head.preview.projectName !== head.subject && (
+                        <p className="text-xs text-muted-foreground truncate mt-0.5">{head.subject}</p>
                       )}
                       <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground mt-1.5">
-                        <span className="flex items-center gap-1"><Mail className="w-3.5 h-3.5" />{t('inbox_from')}: {e.fromName || e.fromEmail}</span>
-                        {e.date && <span className="flex items-center gap-1"><CalendarDays className="w-3.5 h-3.5" />{t('inbox_received')}: {fmt(e.date, lang)}</span>}
-                        {attCount > 0 && <span className="flex items-center gap-1"><Paperclip className="w-3.5 h-3.5" />{attCount} {t('inbox_attachments')}</span>}
+                        <span className="flex items-center gap-1"><Mail className="w-3.5 h-3.5" />{t('inbox_from')}: {head.fromName || head.fromEmail}</span>
+                        {thread.latestDate && <span className="flex items-center gap-1"><CalendarDays className="w-3.5 h-3.5" />{t('inbox_received')}: {fmt(thread.latestDate, lang)}</span>}
+                        {thread.totalAttachments > 0 && <span className="flex items-center gap-1"><Paperclip className="w-3.5 h-3.5" />{thread.totalAttachments} {t('inbox_attachments')}</span>}
+                        {msgCount > 1 && <span className="flex items-center gap-1 text-blue-600 font-medium"><MessagesSquare className="w-3.5 h-3.5" />{msgCount} {t('inbox_thread_count')}</span>}
                       </div>
                     </div>
-                    <Button variant="ghost" size="icon-sm" onClick={() => remove(e.id)} className="text-muted-foreground hover:text-red-600 flex-shrink-0">
+                    <Button variant="ghost" size="icon-sm" onClick={() => remove(head.id, thread.threadId)} className="text-muted-foreground hover:text-red-600 flex-shrink-0">
                       <Trash2 className="w-4 h-4" />
                     </Button>
                   </div>
 
-                  {!e.hydrated ? (
+                  {!head.hydrated ? (
                     /* Listed-only envelope — names only, not yet fetched */
                     <span className="inline-flex w-fit items-center gap-1.5 px-2 py-0.5 rounded-full text-xs bg-gray-100 text-gray-500 border border-gray-200">
                       <Sparkles className="w-3.5 h-3.5" /> {t('inbox_not_prepared')}
                     </span>
                   ) : (
                     <>
-                      {e.preview?.summary && (
-                        <p className="text-sm text-gray-600 leading-relaxed">{e.preview.summary}</p>
+                      {head.preview?.summary && (
+                        <p className="text-sm text-gray-600 leading-relaxed">{head.preview.summary}</p>
                       )}
 
-                      {(e.preview?.highlights?.length || c.boq || c.drawing || c.spec) ? (
+                      {/* Requested terms — highlighted, so the pricer can't miss them */}
+                      {requirements.length > 0 && (
+                        <div className="rounded-lg border border-amber-300 bg-amber-50 p-2.5">
+                          <p className="text-xs font-semibold text-amber-900 flex items-center gap-1.5 mb-1.5">
+                            <ListChecks className="w-3.5 h-3.5" /> {t('inbox_requirements')}
+                          </p>
+                          <ul className="flex flex-col gap-1">
+                            {requirements.map((r, i) => (
+                              <li key={i} className="text-xs text-amber-900 flex items-start gap-1.5">
+                                <span className="mt-1.5 w-1 h-1 rounded-full bg-amber-500 flex-shrink-0" />
+                                <span>{r}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+
+                      {(head.preview?.highlights?.length || c.boq || c.drawing || c.spec) ? (
                         <div className="flex flex-wrap gap-1.5">
                           {c.boq > 0 && <span className="px-2 py-0.5 rounded-full text-xs bg-emerald-50 text-emerald-700 border border-emerald-200">{c.boq} {t('inbox_files_boq')}</span>}
                           {c.drawing > 0 && <span className="px-2 py-0.5 rounded-full text-xs bg-blue-50 text-blue-700 border border-blue-200">{c.drawing} {t('inbox_files_drawing')}</span>}
                           {c.spec > 0 && <span className="px-2 py-0.5 rounded-full text-xs bg-purple-50 text-purple-700 border border-purple-200">{c.spec} {t('inbox_files_spec')}</span>}
-                          {(e.preview?.highlights || []).map((h, i) => (
+                          {(head.preview?.highlights || []).map((h, i) => (
                             <span key={i} className="px-2 py-0.5 rounded-full text-xs bg-amber-50 text-amber-800 border border-amber-200">{h}</span>
                           ))}
                         </div>
                       ) : null}
 
-                      {e.attachments.length > 0 && (
+                      {allAtts.length > 0 && (
                         <div className="flex flex-wrap gap-1.5">
-                          {e.attachments.slice(0, 20).map((a, i) => {
+                          {allAtts.slice(0, 20).map((a, i) => {
                             const Icon = CAT_ICON[a.category] || FileIcon
                             return (
                               <a
@@ -462,32 +520,51 @@ export function InboxClient({ initialItems, initialLastRun, canCreateProject, is
                               </a>
                             )
                           })}
-                          {e.attachments.length > 20 && (
-                            <span className="inline-flex items-center px-2 py-1 text-xs text-muted-foreground">+{e.attachments.length - 20}</span>
+                          {allAtts.length > 20 && (
+                            <span className="inline-flex items-center px-2 py-1 text-xs text-muted-foreground">+{allAtts.length - 20}</span>
                           )}
                         </div>
                       )}
                     </>
                   )}
 
+                  {/* Nested replies — the rest of the conversation inside this card */}
+                  {msgCount > 1 && (
+                    <div className="rounded-lg border border-gray-100 bg-gray-50/70 p-2">
+                      <p className="text-[11px] font-medium text-muted-foreground mb-1.5">{t('inbox_conversation')} — {msgCount} {t('inbox_thread_count')}</p>
+                      <div className="flex flex-col gap-1">
+                        {thread.messages.map((m, i) => (
+                          <div key={m.id} className="flex items-center gap-2 text-xs text-muted-foreground">
+                            <span className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-gray-200 text-[9px] text-gray-600 flex-shrink-0">{i + 1}</span>
+                            <span className="truncate flex-1">{m.fromName || m.fromEmail}</span>
+                            <span className="whitespace-nowrap">{fmt(m.date, lang)}</span>
+                            {(m.hydrated ? m.attachments.length : m.attachmentCount) > 0 && (
+                              <span className="flex items-center gap-0.5 whitespace-nowrap"><Paperclip className="w-3 h-3" />{m.hydrated ? m.attachments.length : m.attachmentCount}</span>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
                   <div className="flex flex-wrap items-center gap-2 pt-1">
-                    {!e.hydrated ? (
-                      <Button size="sm" onClick={() => hydrate(e.id)} disabled={busyId === e.id} className="gap-1.5">
-                        {busyId === e.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
-                        {busyId === e.id ? t('inbox_hydrating') : t('inbox_hydrate')}
+                    {!head.hydrated ? (
+                      <Button size="sm" onClick={() => hydrate(head.id, thread.threadId)} disabled={busy} className="gap-1.5">
+                        {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+                        {busy ? t('inbox_hydrating') : t('inbox_hydrate')}
                       </Button>
-                    ) : e.status === 'converted' && e.projectId ? (
-                      <Button variant="outline" size="sm" onClick={() => router.push(`/projects/${e.projectId}`)} className="gap-1.5">
+                    ) : isConverted ? (
+                      <Button variant="outline" size="sm" onClick={() => router.push(`/projects/${head.projectId}`)} className="gap-1.5">
                         <ExternalLink className="w-3.5 h-3.5" /> {t('inbox_open_project')}
                       </Button>
                     ) : canCreateProject ? (
-                      <Button size="sm" onClick={() => convert(e.id)} disabled={busyId === e.id} className="gap-1.5">
-                        {busyId === e.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Briefcase className="w-3.5 h-3.5" />}
-                        {busyId === e.id ? t('inbox_converting') : t('inbox_convert')}
+                      <Button size="sm" onClick={() => convert(head.id, thread.threadId)} disabled={busy} className="gap-1.5">
+                        {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Briefcase className="w-3.5 h-3.5" />}
+                        {busy ? t('inbox_converting') : (msgCount > 1 ? t('inbox_convert_thread') : t('inbox_convert'))}
                       </Button>
                     ) : null}
-                    {e.status !== 'archived' && (
-                      <Button variant="ghost" size="sm" onClick={() => archive(e.id)} disabled={busyId === e.id} className="gap-1.5 text-muted-foreground">
+                    {head.status !== 'archived' && (
+                      <Button variant="ghost" size="sm" onClick={() => archive(head.id, thread.threadId)} disabled={busy} className="gap-1.5 text-muted-foreground">
                         <Archive className="w-3.5 h-3.5" /> {t('inbox_archive')}
                       </Button>
                     )}
@@ -497,10 +574,10 @@ export function InboxClient({ initialItems, initialLastRun, canCreateProject, is
             )})}
           </div>
 
-          {filtered.length > visible && (
+          {threads.length > visible && (
             <div className="mt-4 text-center">
               <Button variant="outline" onClick={() => setVisible((v) => v + PAGE)} className="gap-2">
-                {t('inbox_load_more')} ({filtered.length - visible})
+                {t('inbox_load_more')} ({threads.length - visible})
               </Button>
             </div>
           )}

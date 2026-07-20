@@ -1454,6 +1454,11 @@ const translations = {
   inbox_pin_saved:          { en: 'PIN changed ✓',         ar: 'تم تغيير الرقم السري ✓' },
   inbox_pin_mismatch:       { en: 'The two PINs do not match', ar: 'الرقمان غير متطابقين' },
   inbox_pin_too_short:      { en: 'PIN too short (min 4 digits)', ar: 'الرقم قصير جداً (٤ خانات على الأقل)' },
+  // Threads + requirements
+  inbox_requirements:       { en: 'Requested terms',       ar: '⭐ الشروط المطلوبة من العميل' },
+  inbox_conversation:       { en: 'Conversation',          ar: 'المحادثة' },
+  inbox_thread_count:       { en: 'messages',              ar: 'رسائل' },
+  inbox_convert_thread:     { en: 'Convert thread to project', ar: 'حوّل المحادثة لمشروع' },
 
   // ─── Target Companies (شركات مستهدفة) — the account list ──────────────────
   co_title:                 { en: 'Target Companies',     ar: 'شركات مستهدفة' },

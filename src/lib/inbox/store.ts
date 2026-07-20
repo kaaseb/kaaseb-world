@@ -32,8 +32,13 @@ export interface EmailAttachment {
 // older records simply won't carry it.
 export interface EmailPreview {
   projectName: string // AI's cleaned project title (falls back to subject)
-  summary: string // 2-3 sentences: what this project is
+  summary: string // 2-3 sentences: what this project is — ALWAYS Arabic
   highlights: string[] // key facts: "فيه جدول كميات", "موعد التسليم 15 أغسطس", "3 أبراج"
+  // The terms/conditions the CUSTOMER is asking us to answer in the quotation
+  // (unit price, delivery lead time, payment terms, validity, warranty, MOQ…).
+  // Surfaced highlighted in the inbox and copied into the project so the pricer
+  // sees them. Empty when the email states none.
+  requirements: string[]
 }
 
 export interface InboxEmail {
@@ -60,6 +65,12 @@ export interface InboxEmail {
   uid: number | null // IMAP UID, so hydrateEmail can re-fetch just this message
   uidValidity: number | null // guards the UID (a mailbox reset invalidates it)
   folder: string // the mailbox the UID belongs to
+  // ── Threading ──────────────────────────────────────────────────────────────
+  // A conversation shows as ONE item with its replies nested. inReplyTo is the
+  // parent's Message-ID (from the envelope); threadId groups a whole thread and
+  // is recomputed on every sync (header chain, then same-subject+sender).
+  inReplyTo: string | null
+  threadId: string
 }
 
 // The lightweight envelope a LIST sync produces — no bytes pulled, no AI.
@@ -74,6 +85,7 @@ export interface ListedEmail {
   uid: number
   uidValidity: number
   folder: string
+  inReplyTo: string | null
 }
 
 export type PullStatus = 'running' | 'done' | 'failed'
@@ -101,16 +113,73 @@ const EMPTY: InboxState = { items: [], lastRun: null }
 // always fully fetched, so normalise them to hydrated=true. Keeps old inboxes
 // working without a migration.
 function normalize(e: InboxEmail): InboxEmail {
-  if (typeof e.hydrated === 'boolean') return e
-  return {
-    ...e,
-    hydrated: true,
-    attachmentCount: Array.isArray(e.attachments) ? e.attachments.length : 0,
-    size: e.size ?? 0,
-    uid: e.uid ?? null,
-    uidValidity: e.uidValidity ?? null,
-    folder: e.folder || 'INBOX',
+  const out = { ...e }
+  if (typeof out.hydrated !== 'boolean') {
+    out.hydrated = true
+    out.attachmentCount = Array.isArray(e.attachments) ? e.attachments.length : 0
+    out.size = e.size ?? 0
+    out.uid = e.uid ?? null
+    out.uidValidity = e.uidValidity ?? null
+    out.folder = e.folder || 'INBOX'
   }
+  // Threading fields (added later) — an old record is its own single-email thread.
+  if (out.inReplyTo === undefined) out.inReplyTo = null
+  if (!out.threadId) out.threadId = out.id
+  return out
+}
+
+// Strip repeated Re:/Fwd:/رد: prefixes so replies group with their root.
+function normalizeSubject(s: string): string {
+  let t = (s || '').trim()
+  for (;;) {
+    const stripped = t.replace(/^\s*(re|fwd|fw|رد|اعاده توجيه|إعادة توجيه)\s*:\s*/i, '')
+    if (stripped === t) break
+    t = stripped
+  }
+  return t.trim().toLowerCase()
+}
+
+// Assign every email a threadId (mutates in place). Two passes of union-find:
+//   1) header chain — inReplyTo → the parent's Message-ID (rebuilds full threads
+//      even from just the immediate-parent link).
+//   2) fallback — same normalized subject AND same sender, for replies that
+//      arrived without a proper In-Reply-To. Requires a substantial subject so
+//      generic one-word subjects don't over-merge.
+// threadId = the id of the EARLIEST message in the component (stable as replies
+// keep arriving).
+function recomputeThreads(items: InboxEmail[]): void {
+  const n = items.length
+  const parent = Array.from({ length: n }, (_, i) => i)
+  const find = (x: number): number => { let r = x; while (parent[r] !== r) { parent[r] = parent[parent[r]]; r = parent[r] } return r }
+  const union = (a: number, b: number) => { const ra = find(a); const rb = find(b); if (ra !== rb) parent[ra] = rb }
+
+  const byMsgId = new Map<string, number>()
+  items.forEach((e, i) => { if (e.id) byMsgId.set(e.id, i) })
+
+  items.forEach((e, i) => {
+    if (e.inReplyTo && byMsgId.has(e.inReplyTo)) union(i, byMsgId.get(e.inReplyTo) as number)
+  })
+
+  const byKey = new Map<string, number>()
+  items.forEach((e, i) => {
+    const subj = normalizeSubject(e.subject)
+    if (subj.length < 6) return
+    const key = `${subj}|${(e.fromEmail || '').toLowerCase()}`
+    const seen = byKey.get(key)
+    if (seen === undefined) byKey.set(key, i)
+    else union(i, seen)
+  })
+
+  const earliestOf = new Map<number, number>()
+  items.forEach((_, i) => {
+    const r = find(i)
+    const cur = earliestOf.get(r)
+    if (cur === undefined || (items[i].date || '') < (items[cur].date || '')) earliestOf.set(r, i)
+  })
+  items.forEach((e, i) => {
+    const root = earliestOf.get(find(i))
+    e.threadId = root !== undefined ? items[root].id : e.id
+  })
 }
 
 async function readState(): Promise<InboxState> {
@@ -212,13 +281,39 @@ export async function upsertListed(listed: ListedEmail[]): Promise<number> {
       uid: l.uid,
       uidValidity: l.uidValidity,
       folder: l.folder,
+      inReplyTo: l.inReplyTo,
+      threadId: l.id, // provisional; recomputeThreads fixes it below
     }
     s.items.unshift(rec)
     byId.set(l.id, rec)
     added++
   }
+  recomputeThreads(s.items)
   await writeState(s)
   return added
+}
+
+/** All emails in a thread, oldest first. */
+export async function getThreadEmails(threadId: string): Promise<InboxEmail[]> {
+  const s = await readState()
+  return s.items
+    .filter((e) => e.threadId === threadId)
+    .sort((a, b) => (a.date || '').localeCompare(b.date || ''))
+}
+
+/** Apply a status/projectId patch to EVERY email in a thread (convert/archive
+ *  act on the whole conversation the owner sees as one item). */
+export async function updateThread(
+  threadId: string,
+  patch: Partial<Pick<InboxEmail, 'status' | 'projectId'>>,
+): Promise<number> {
+  const s = await readState()
+  let changed = 0
+  for (const e of s.items) {
+    if (e.threadId === threadId) { Object.assign(e, patch); changed++ }
+  }
+  if (changed > 0) await writeState(s)
+  return changed
 }
 
 // Second tier: fold a message's downloaded body/attachments/summary onto its
@@ -260,4 +355,14 @@ export async function deleteEmail(id: string): Promise<boolean> {
   s.items = s.items.filter((e) => e.id !== id)
   await writeState(s)
   return true
+}
+
+/** Delete every email in a thread (the inbox treats a thread as one item). */
+export async function deleteThread(threadId: string): Promise<number> {
+  const s = await readState()
+  const before = s.items.length
+  s.items = s.items.filter((e) => e.threadId !== threadId)
+  const removed = before - s.items.length
+  if (removed > 0) await writeState(s)
+  return removed
 }
