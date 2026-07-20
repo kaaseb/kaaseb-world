@@ -50,9 +50,13 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     }, { status: 400 })
   }
 
-  // Atomic compare-and-set lock — see the twin in the Furn process route for the
-  // full reasoning. The stale escape releases a lock orphaned by a crash/deploy.
-  const STALE_LOCK_MS = 30 * 60 * 1000
+  // Atomic compare-and-set lock — see the twin in the Furn process route. Keyed
+  // on status: a live run is status='in_progress', a fresh project is 'pending',
+  // a done one is 'completed'/'missing_products', a failed one 'rejected' — all of
+  // which the predicate lets through, so only a genuinely running job is blocked.
+  // A heartbeat (below) keeps a live run fresh, so the stale window is short and
+  // an orphaned lock (crash/deploy) frees in minutes, not half an hour.
+  const STALE_LOCK_MS = 5 * 60 * 1000
   const staleCutoff = new Date(Date.now() - STALE_LOCK_MS).toISOString()
   const { data: locked } = await supabase.from('tannoor_projects')
     .update({ status: 'in_progress', ai_error: null, updated_at: new Date().toISOString() })
@@ -63,10 +67,22 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
 
   if (!locked) {
     return NextResponse.json(
-      { error: 'المشروع قيد المعالجة بالفعل — انتظر لين تخلص التشغيلة الحالية.' },
+      { error: 'المشروع قيد المعالجة فعلاً الآن — انتظر دقيقة لين تخلص، أو أعد المحاولة.' },
       { status: 409 },
     )
   }
+
+  // Liveness heartbeat: keep updated_at fresh while this (synchronous) run is
+  // alive; the interval fires between the awaited Gemini calls. Cleared in the
+  // finally so a stray beat can't re-stick a finished lock.
+  let alive = true
+  const heartbeat = setInterval(() => {
+    if (!alive) return
+    void supabase.from('tannoor_projects')
+      .update({ updated_at: new Date().toISOString() })
+      .eq('id', id).eq('status', 'in_progress')
+      .then(() => {}, () => {})
+  }, 30_000)
 
   try {
     const colorStore = await getColors()
@@ -189,11 +205,16 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     })
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
+    // status='rejected' also frees the lock — the predicate lets any non
+    // in_progress project through, so a retry works immediately.
     await supabase.from('tannoor_projects').update({
       status: 'rejected',
       ai_error: msg.slice(0, 1000),
       updated_at: new Date().toISOString(),
     }).eq('id', id)
     return NextResponse.json({ error: msg }, { status: 500 })
+  } finally {
+    alive = false
+    clearInterval(heartbeat)
   }
 }

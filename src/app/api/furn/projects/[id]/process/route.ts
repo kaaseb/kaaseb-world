@@ -81,27 +81,31 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   // in flight (or its lock went stale after a crash/deploy). Two tabs cannot
   // both win — without this, interleaved delete+insert doubles every item.
   //
-  // We key the lock on STAGE, not status. A finished project sits at
-  // stage='pricing'/'quoted' with status='in_progress' (that status means "being
-  // priced by humans"), so keying on status would (a) 409 every re-process for
-  // 45 min and (b) — worse — the poller keys on stage==='processing' to detect
-  // "done", and a claim that left stage untouched made re-processing a quoted
-  // project report "done" instantly and then swap its items out underneath the
-  // user. Setting stage='processing' here fixes both: the poller sees a real
-  // running state, and the lock predicate distinguishes an active run from a
-  // priced project.
-  const STALE_LOCK_MS = 60 * 60 * 1000 // comfortably longer than the true worst-case run
+  // A LIVE run is the UNIQUE combination `status='in_progress' AND
+  // stage='processing'`. Keying on stage ALONE was wrong: a freshly created
+  // project is ALSO stage='processing' (status='pending'), and a priced project
+  // is stage='pricing' with status='in_progress' (that status means "being
+  // priced by humans"). So the old `stage.neq.processing` predicate 409'd every
+  // brand-new project for a full hour and never distinguished the two.
+  //
+  // Claim when NOT(live) OR stale — i.e. status≠in_progress OR stage≠processing
+  // OR the heartbeat went stale. This lets through: fresh (status=pending),
+  // priced (stage=pricing), and FAILED (status=rejected) projects immediately,
+  // while still blocking a genuinely running one. A live run heartbeats
+  // updated_at every 30s (see runProcessJob), so the stale window can be short —
+  // a crashed/deployed run self-heals in minutes, not an hour.
+  const STALE_LOCK_MS = 5 * 60 * 1000 // > 8 missed 30s heartbeats
   const staleCutoff = new Date(Date.now() - STALE_LOCK_MS).toISOString()
   const { data: locked } = await supabase.from('furn_projects')
     .update({ stage: 'processing', status: 'in_progress', ai_error: null, updated_at: new Date().toISOString() })
     .eq('id', id)
-    .or(`stage.neq.processing,updated_at.lt.${staleCutoff}`)
+    .or(`status.neq.in_progress,stage.neq.processing,updated_at.lt.${staleCutoff}`)
     .select('id')
     .maybeSingle()
 
   if (!locked) {
     return NextResponse.json(
-      { error: 'المشروع قيد المعالجة بالفعل — انتظر لين تخلص التشغيلة الحالية.' },
+      { error: 'المشروع قيد المعالجة فعلاً الآن — انتظر دقيقة لين تخلص، أو أعد المحاولة.' },
       { status: 409 },
     )
   }
@@ -134,8 +138,25 @@ async function runProcessJob(
   coveredDepartments: { name_en: string; name_ar: string }[],
 ): Promise<void> {
   const id = project.id
+
+  // Liveness heartbeat: bump updated_at every 30s WHILE this run holds the lock
+  // (status=in_progress AND stage=processing). This is what lets the stale window
+  // be short — as long as the job is alive it keeps the lock fresh; the instant
+  // it dies (crash/deploy/OOM), heartbeats stop and the lock frees within minutes
+  // instead of an hour. The `.eq` guards make a stray late beat a no-op.
+  let alive = true
+  const heartbeat = setInterval(() => {
+    if (!alive) return
+    void supabase.from('furn_projects')
+      .update({ updated_at: new Date().toISOString() })
+      .eq('id', id).eq('status', 'in_progress').eq('stage', 'processing')
+      .then(() => {}, () => {})
+  }, 30_000)
+  const stopHeartbeat = () => { alive = false; clearInterval(heartbeat) }
+
   try {
     const result: RouterResult = await runBoqRouter(input)
+    stopHeartbeat() // done with the long work — no more heartbeats past this point
 
     // ONLY NOW touch the items table — the risky work is done, so a mid-run
     // failure can no longer leave the project stripped of its previous items.
@@ -221,12 +242,17 @@ async function runProcessJob(
       `index ${result.coverage.filesIndexed}/${result.coverage.filesTotal} (cache ${result.coverage.filesFromCache})`,
     )
   } catch (e) {
+    stopHeartbeat()
     const msg = e instanceof Error ? e.message : String(e)
     console.log(`[furn] router FAILED for ${id}: ${msg}`)
+    // status='rejected' also RELEASES the lock: the claim predicate frees any
+    // project whose status isn't 'in_progress', so a retry works immediately.
     await supabase.from('furn_projects').update({
       status: 'rejected',
       ai_error: msg.slice(0, 1000),
       updated_at: new Date().toISOString(),
     }).eq('id', id)
+  } finally {
+    stopHeartbeat()
   }
 }
