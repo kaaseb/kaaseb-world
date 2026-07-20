@@ -15,6 +15,7 @@ import { verifyOrigin } from '@/lib/csrf'
 import { analyzeTannoorBoq } from '@/lib/tannoor/boq'
 import { setProjectItemSources } from '@/lib/tannoor/item-sources'
 import { guardItem } from '@/lib/boq/department-guard'
+import { friendlyAiError } from '@/lib/ai/friendly-error'
 import { getFxSettings, usdPrice } from '@/lib/settings/fx'
 import { getColors } from '@/lib/tannoor/colors'
 import type { TannoorProduct, FurnDepartment } from '@/types'
@@ -209,10 +210,10 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     // in_progress project through, so a retry works immediately.
     await supabase.from('tannoor_projects').update({
       status: 'rejected',
-      ai_error: msg.slice(0, 1000),
+      ai_error: friendlyAiError(msg).slice(0, 1000),
       updated_at: new Date().toISOString(),
     }).eq('id', id)
-    return NextResponse.json({ error: msg }, { status: 500 })
+    return NextResponse.json({ error: friendlyAiError(msg) }, { status: 500 })
   } finally {
     alive = false
     clearInterval(heartbeat)

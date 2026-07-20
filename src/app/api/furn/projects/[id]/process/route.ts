@@ -22,6 +22,7 @@ import { getProfileOrFallback, getEffectivePermissions } from '@/lib/profile'
 import { hasPermission } from '@/lib/permissions'
 import { setProjectItemSources } from '@/lib/furn/item-sources'
 import { guardItem } from '@/lib/boq/department-guard'
+import { friendlyAiError } from '@/lib/ai/friendly-error'
 import { runBoqRouter, type RouterInput, type RouterResult } from '@/lib/boq/router/pipeline'
 
 export const maxDuration = 300
@@ -249,7 +250,7 @@ async function runProcessJob(
     // project whose status isn't 'in_progress', so a retry works immediately.
     await supabase.from('furn_projects').update({
       status: 'rejected',
-      ai_error: msg.slice(0, 1000),
+      ai_error: friendlyAiError(msg).slice(0, 1000),
       updated_at: new Date().toISOString(),
     }).eq('id', id)
   } finally {
