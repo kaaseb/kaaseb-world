@@ -21,7 +21,7 @@ import { verifyOrigin } from '@/lib/csrf'
 import { getProfileOrFallback, getEffectivePermissions } from '@/lib/profile'
 import { hasPermission } from '@/lib/permissions'
 import { setProjectItemSources } from '@/lib/furn/item-sources'
-import { guardItem } from '@/lib/boq/department-guard'
+import { guardItem, guardDepartmentAnchor } from '@/lib/boq/department-guard'
 import { friendlyAiError } from '@/lib/ai/friendly-error'
 import { runBoqRouter, type RouterInput, type RouterResult } from '@/lib/boq/router/pipeline'
 
@@ -176,15 +176,23 @@ async function runProcessJob(
     const extraDepartments = new Set<string>()
 
     const keptItems = result.items.filter((it) => {
-      const verdict = guardItem(
-        `${it.description || ''} ${it.details || ''}`,
-        it.department_match,
-        coveredNames,
-      )
-      if (!verdict.disqualified) return true
-      rejected.push({ description: it.description, reason: verdict.reason || '' })
-      if (verdict.realDepartment) extraDepartments.add(verdict.realDepartment)
-      return false
+      const text = `${it.description || ''} ${it.details || ''}`
+      // Gate 1+2: manufactured look-alikes / explicitly-uncovered departments.
+      const verdict = guardItem(text, it.department_match, coveredNames)
+      if (verdict.disqualified) {
+        rejected.push({ description: it.description, reason: verdict.reason || '' })
+        if (verdict.realDepartment) extraDepartments.add(verdict.realDepartment)
+        return false
+      }
+      // Gate 3: positive anchor — the row must NAME a covered material, else it's
+      // an ambiguous non-stone line (a bare "vanity counter") the model only kept
+      // because department_match is required. Drop it; don't price it as stone.
+      const anchor = guardDepartmentAnchor(text, coveredNames)
+      if (anchor.disqualified) {
+        rejected.push({ description: it.description, reason: anchor.reason || '' })
+        return false
+      }
+      return true
     })
     if (rejected.length > 0) {
       console.log(`[furn] guard dropped ${rejected.length} non-stone item(s) from project ${id}:`)
@@ -226,9 +234,15 @@ async function runProcessJob(
 
     await setProjectItemSources(id, sourceMap)
 
+    // Tell the team, plainly, what the guard dropped — so a strict drop never
+    // reads as silent data loss. They can re-add a real row with "Item +".
+    const dropNote = rejected.length > 0
+      ? `تنبيه: أُسقط ${rejected.length} بند لا يذكر مادة من أقسامك المغطّاة (مبهم أو خارج النطاق) — راجعها وأضِفها يدوياً بزر «Item +» إن كانت ضمن نطاقك.`
+      : null
+
     await supabase.from('furn_projects').update({
       subject: result.subject,
-      ai_summary: result.notes,
+      ai_summary: [dropNote, result.notes].filter(Boolean).join('\n'),
       ai_detected_departments: departmentsOut,
       ai_error: null,
       stage: 'pricing',

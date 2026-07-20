@@ -14,7 +14,7 @@ import { createClient } from '@/lib/supabase/server'
 import { verifyOrigin } from '@/lib/csrf'
 import { analyzeTannoorBoq } from '@/lib/tannoor/boq'
 import { setProjectItemSources } from '@/lib/tannoor/item-sources'
-import { guardItem } from '@/lib/boq/department-guard'
+import { guardItem, guardDepartmentAnchor } from '@/lib/boq/department-guard'
 import { friendlyAiError } from '@/lib/ai/friendly-error'
 import { getFxSettings, usdPrice } from '@/lib/settings/fx'
 import { getColors } from '@/lib/tannoor/colors'
@@ -106,6 +106,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     // Audit sources (where each quantity came from), kept in a local map keyed
     // by the new item ids since tannoor_items has no source column.
     const sourceMap: Record<string, string> = {}
+    let droppedCount = 0
 
     if (result.items.length > 0) {
       // Join product prices when matched.
@@ -124,16 +125,30 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       const rejected: Array<{ description: string; reason: string }> = []
       const extraDepartments = new Set<string>()
       const keptItems = result.items.filter((it) => {
-        const verdict = guardItem(it.description || '', null, coveredNames)
-        if (!verdict.disqualified) return true
-        rejected.push({ description: it.description, reason: verdict.reason || '' })
-        if (verdict.realDepartment) extraDepartments.add(verdict.realDepartment)
-        return false
+        const text = it.description || ''
+        const verdict = guardItem(text, null, coveredNames)
+        if (verdict.disqualified) {
+          rejected.push({ description: it.description, reason: verdict.reason || '' })
+          if (verdict.realDepartment) extraDepartments.add(verdict.realDepartment)
+          return false
+        }
+        // Positive anchor — but ONLY for UNMATCHED rows. A row matched to a real
+        // catalog product is definitely covered (trust it); an unmatched row that
+        // names no covered material is the ambiguous non-stone line we must drop.
+        if (!it.product_id) {
+          const anchor = guardDepartmentAnchor(text, coveredNames)
+          if (anchor.disqualified) {
+            rejected.push({ description: it.description, reason: anchor.reason || '' })
+            return false
+          }
+        }
+        return true
       })
       if (rejected.length > 0) {
         console.log(`[tannoor] guard dropped ${rejected.length} non-stone item(s) from project ${id}:`)
         for (const r of rejected) console.log(`  • "${r.description}" — ${r.reason}`)
       }
+      droppedCount = rejected.length
       const rows = keptItems.map((it, idx) => {
         const product = it.product_id ? productMap.get(it.product_id) : null
         return {
@@ -186,9 +201,13 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       result.items.some(it => it.is_missing || !(it.quantity > 0)) ||
       (result.missing_items?.length || 0) > 0
 
+    const dropNote = droppedCount > 0
+      ? `تنبيه: أُسقط ${droppedCount} بند لا يذكر مادة من أقسامك المغطّاة (مبهم أو خارج النطاق) — راجعها.`
+      : null
+
     await supabase.from('tannoor_projects').update({
       subject:                 result.subject,
-      ai_summary:              result.notes,
+      ai_summary:              [dropNote, result.notes].filter(Boolean).join('\n'),
       ai_detected_departments: result.detected_departments,
       ai_missing_items:        result.missing_items || [],
       ai_error:                null,

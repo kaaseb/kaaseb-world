@@ -137,6 +137,7 @@ Dropped rows: record their real department in detected_departments[] (e.g. "Conc
 
 RULES:
 1. Items array = covered-department rows only. detected_departments = every department seen, covered and not, deduplicated, canonical English.
+1b. POSITIVE MATERIAL REQUIRED. A row goes into items[] ONLY if its own text ties it to a covered stone — it names a covered material (marble/granite/limestone/quartz or a covered department) OR is unmistakably a natural-stone product. A row described only by FUNCTION or LOCATION with no stone material — "Staff dining vanity counter", "reception desk", "external rainscreen cladding", "stone panel" with just dimensions — is NOT a covered item: LEAVE IT OUT. Do not guess a department for it. When unsure, EXCLUDE it and record its section in detected_departments. (A deterministic gate drops these anyway — don't waste a row on them.)
 2. Ranges: "150-200" → 200. "approx 200" → 200.
 3. Units normalized to {m, m2, m3, pcs, kg, ton, set, lot, lm}.
 4. description SHORT (3-8 words); details LONG (finish/thickness/color/dims from THIS row only). The team's notes column is not yours.

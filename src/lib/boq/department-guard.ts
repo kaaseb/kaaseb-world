@@ -179,6 +179,55 @@ export function guardDepartmentMatch(
   }
 }
 
+// Natural-stone MATERIAL words — bilingual. A row is "anchored" to the shop only
+// if its own text names one of these OR a covered department from /settings. This
+// is the deterministic answer to the real failure: a material-less fixture line
+// ("Staff dining vanity counter — 1590×600×250 mm", "External stone rainscreen
+// cladding") being priced as marble/granite just because department_match is a
+// REQUIRED field the model had to fill with SOMETHING. Product/location nouns
+// (counter, vanity, cladding, panel, rainscreen) are deliberately NOT anchors —
+// they say nothing about the substance and are exactly how the ambiguous rows
+// slip in. A bare "stone" is not an anchor either (cast stone, stone-effect…).
+const STONE_MATERIALS = [
+  'marble', 'granite', 'limestone', 'quartzite', 'quartz', 'onyx', 'travertine',
+  'basalt', 'sandstone', 'slate', 'dolomite', 'porphyry', 'gabbro', 'terrazzo',
+  'رخام', 'جرانيت', 'غرانيت', 'كوارتز', 'كوارتزايت', 'حجر جيري', 'ترافرتين',
+  'ترافورتين', 'أونيكس', 'اونيكس', 'بازلت', 'حجر رملي', 'دولوميت',
+]
+// terrazzo/quartz appear here for ANCHORING only (the text talks about stone at
+// all); the DISQUALIFYING pass above still drops engineered-quartz/terrazzo rows.
+
+/**
+ * Positive-anchor gate. A row survives only if it names a covered department
+ * (from /settings, either language) OR a natural-stone material in its OWN text.
+ * Rows that name neither are ambiguous non-stone lines — dropped, not priced.
+ * `text` should be the description PLUS details (that's where the material sits).
+ */
+export function guardDepartmentAnchor(
+  text: string,
+  coveredDepartments: string[],
+): GuardVerdict {
+  const hay = (text || '').toLowerCase()
+  if (!hay.trim()) {
+    return { disqualified: true, realDepartment: null, reason: 'بند بلا وصف كافٍ — لا يمكن ربطه بقسم مغطّى.' }
+  }
+  // Data-driven: any covered department name (en/ar) written in the row.
+  for (const d of coveredDepartments) {
+    const t = (d || '').trim().toLowerCase()
+    if (t.length >= 3 && hay.includes(t)) return CLEAN
+  }
+  // Fixed natural-stone lexicon — robust even if a /settings name is misspelled
+  // (e.g. "Quartez") or the row uses the material word instead of the dept name.
+  for (const m of STONE_MATERIALS) {
+    if (hay.includes(m)) return CLEAN
+  }
+  return {
+    disqualified: true,
+    realDepartment: null,
+    reason: 'البند لا يذكر أي مادة من أقسامك المغطّاة (مبهم) — لم يُسعّر.',
+  }
+}
+
 /** Both gates. A row survives only if neither fires. */
 export function guardItem(
   description: string,
