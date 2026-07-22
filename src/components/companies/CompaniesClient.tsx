@@ -18,6 +18,7 @@ import { Input } from '@/components/ui/input'
 import { Pagination, usePagination } from '@/components/ui/pagination'
 import { cn } from '@/lib/utils'
 import { useLanguage } from '@/contexts/LanguageContext'
+import { OutreachDialog } from '@/components/outreach/OutreachDialog'
 import {
   COMPANY_CATEGORIES,
   COMPANY_STATUSES,
@@ -92,6 +93,8 @@ export function CompaniesClient({ initialItems, initialLastRun }: Props) {
   const [starting, setStarting] = useState(false)
   const [noteDrafts, setNoteDrafts] = useState<Record<string, string>>({})
   const [busyId, setBusyId] = useState<string | null>(null)
+  // The company whose outreach composer is open (null = closed).
+  const [outreachFor, setOutreachFor] = useState<TargetCompany | null>(null)
   const [huntingId, setHuntingId] = useState<string | null>(null)
 
   const isScanning = lastRun?.status === 'running'
@@ -607,6 +610,22 @@ export function CompaniesClient({ initialItems, initialLastRun }: Props) {
 
                   {/* Actions — wrap on narrow phones so nothing overflows */}
                   <div className="flex flex-wrap items-center gap-2 pt-2 border-t">
+                    {/* Opens the composer; nothing is mailed until Send there. */}
+                    <Button
+                      variant="outline"
+                      size="xs"
+                      onClick={() => setOutreachFor(c)}
+                      disabled={c.status === 'contacted' || !c.contacts.some((x) => x.email)}
+                      title={c.status === 'contacted'
+                        ? (lang === 'ar' ? 'تم التواصل معهم' : 'Already contacted')
+                        : !c.contacts.some((x) => x.email)
+                          ? (lang === 'ar' ? 'ما فيه بريد' : 'No email')
+                          : undefined}
+                      className="gap-1.5 h-8"
+                    >
+                      <Mail className="w-3.5 h-3.5" />
+                      {lang === 'ar' ? 'أرسل التعريف' : 'Send profile'}
+                    </Button>
                     <select
                       value={c.status}
                       onChange={(e) => setStatus(c.id, e.target.value as CompanyStatus)}
@@ -646,6 +665,21 @@ export function CompaniesClient({ initialItems, initialLastRun }: Props) {
           />
         </div>
       )}
+
+      <OutreachDialog
+        open={!!outreachFor}
+        onClose={() => setOutreachFor(null)}
+        type="company"
+        id={outreachFor?.id || ''}
+        company={outreachFor?.name || ''}
+        city={outreachFor?.city || ''}
+        contactName={outreachFor?.contacts.find((x) => x.email)?.name || ''}
+        email={outreachFor?.contacts.find((x) => x.email)?.email || ''}
+        onSent={() => {
+          const id = outreachFor?.id
+          if (id) setItems((list) => list.map((c) => (c.id === id ? { ...c, status: 'contacted' as const } : c)))
+        }}
+      />
     </div>
   )
 }

@@ -21,6 +21,7 @@ import { Input } from '@/components/ui/input'
 import { Pagination, usePagination } from '@/components/ui/pagination'
 import { cn } from '@/lib/utils'
 import { useLanguage } from '@/contexts/LanguageContext'
+import { OutreachDialog } from '@/components/outreach/OutreachDialog'
 import {
   OPPORTUNITY_CATEGORIES,
   OPPORTUNITY_STATUSES,
@@ -110,6 +111,8 @@ export function OpportunitiesClient({ initialItems, initialLastRun }: Props) {
   const [busyId, setBusyId] = useState<string | null>(null)
   const [huntingId, setHuntingId] = useState<string | null>(null)
   const [convertingId, setConvertingId] = useState<string | null>(null)
+  // The opportunity whose outreach composer is open (null = closed).
+  const [outreachFor, setOutreachFor] = useState<Opportunity | null>(null)
 
   const isScanning = lastRun?.status === 'running'
 
@@ -694,6 +697,22 @@ export function OpportunitiesClient({ initialItems, initialLastRun }: Props) {
 
                   {/* Actions — wrap on narrow phones so nothing overflows */}
                   <div className="flex flex-wrap items-center gap-2 pt-2 border-t">
+                    {/* Opens the composer; nothing is mailed until Send there. */}
+                    <Button
+                      variant="outline"
+                      size="xs"
+                      onClick={() => setOutreachFor(o)}
+                      disabled={o.status === 'contacted' || !o.contacts.some((c) => c.email)}
+                      title={o.status === 'contacted'
+                        ? (lang === 'ar' ? 'تم التواصل معهم' : 'Already contacted')
+                        : !o.contacts.some((c) => c.email)
+                          ? (lang === 'ar' ? 'ما فيه بريد' : 'No email')
+                          : undefined}
+                      className="gap-1.5 h-8"
+                    >
+                      <Mail className="w-3.5 h-3.5" />
+                      {lang === 'ar' ? 'أرسل التعريف' : 'Send profile'}
+                    </Button>
                     <Button
                       variant="outline"
                       size="xs"
@@ -747,6 +766,22 @@ export function OpportunitiesClient({ initialItems, initialLastRun }: Props) {
           />
         </div>
       )}
+
+      <OutreachDialog
+        open={!!outreachFor}
+        onClose={() => setOutreachFor(null)}
+        type="opportunity"
+        id={outreachFor?.id || ''}
+        company={outreachFor?.owner || ''}
+        project={outreachFor?.title || ''}
+        city={outreachFor?.city || ''}
+        contactName={outreachFor?.contacts.find((c) => c.email)?.name || ''}
+        email={outreachFor?.contacts.find((c) => c.email)?.email || ''}
+        onSent={() => {
+          const id = outreachFor?.id
+          if (id) setItems((list) => list.map((o) => (o.id === id ? { ...o, status: 'contacted' as const } : o)))
+        }}
+      />
     </div>
   )
 }

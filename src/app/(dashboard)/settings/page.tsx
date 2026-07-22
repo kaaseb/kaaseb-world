@@ -18,6 +18,7 @@ import { TitanSettingsTab } from '@/components/integrations/TitanSettingsTab'
 import { DeliverySettingsTab } from '@/components/furn/DeliverySettingsTab'
 import { PreQualSettingsTab } from '@/components/pre-qualifications/PreQualSettingsTab'
 import { AiSettingsTab } from '@/components/ai/AiSettingsTab'
+import { OutreachSettingsCard } from '@/components/settings/OutreachSettingsCard'
 
 export default function SettingsPage() {
   const [profile, setProfile] = useState<Profile | null>(null)
@@ -499,6 +500,9 @@ export default function SettingsPage() {
             </div>
           </CardContent>
         </Card>
+
+        {/* Super-admin only: the outreach message + company profile attachment */}
+        {profile?.role === 'super_admin' && <OutreachSettingsCard />}
 
         {/* Super-admin only: Community permissions */}
         {profile?.role === 'super_admin' && (
