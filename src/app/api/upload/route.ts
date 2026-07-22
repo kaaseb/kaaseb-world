@@ -52,6 +52,9 @@ const KIND_POLICY: Record<string, KindPolicy> = {
   tannoor_products: { mimePrefixes: ['image/'] },
   // Magic-tunnel scene photos uploaded by the user to visualize marble on.
   visualize:      { mimePrefixes: ['image/'] },
+  // The company profile attached to every outreach email. Super-admin only —
+  // it is mailed to third parties under the company's name.
+  outreach:       { mimePrefixes: ['application/pdf'], superAdminOnly: true },
 }
 
 export async function POST(request: Request) {

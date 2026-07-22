@@ -63,6 +63,15 @@ export function OutreachSettingsCard() {
       fd.append('file', file)
       fd.append('kind', 'outreach')
       const res = await fetch('/api/upload', { method: 'POST', body: fd })
+      // 413 comes from the reverse proxy BEFORE the app sees the request, so
+      // there's no JSON to read — say exactly what to do instead of "failed".
+      if (res.status === 413) {
+        toast.error(
+          `الملف كبير على الخادم (${Math.round(file.size / 1024 / 1024)}MB). ارفع حد nginx: client_max_body_size 100M ثم أعد المحاولة.`,
+          { duration: 15000 },
+        )
+        return
+      }
       const j = await res.json().catch(() => ({}))
       if (!j.url) { toast.error(j.error || 'فشل الرفع'); return }
       setProfileUrl(j.url)

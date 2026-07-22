@@ -162,6 +162,14 @@ const SECTOR_BRIEF: Record<OpportunityCategory, string> = {
 هذي المشاريع أعلى استهلاكاً للرخام الفاخر — انتبه لها.`,
 }
 
+// Accounts that AGGREGATE Saudi project news — the owner reads them daily and
+// wants the robot reading them too. They are treated as LEADS, not as sources:
+// x.com blocks most crawlers, so the scan uses a handle to learn a project NAME
+// and then must verify that project on a primary source (Etimad/Argaam/Tadawul/
+// the entity's own site) and link THAT. A tweet alone is never enough evidence.
+const WATCH_ACCOUNTS = `**@SaudiProject** (x.com/SaudiProject) — يرصد مشاريع السعودية أولاً بأول؛ من أفضل مصادر الرصد المبكر.
+**@Saudi_Projects** • **@ArgaamPlus** (أرقام) • **@Tadawul_SA** (تداول) • **@spagov** (واس) • **@Etimad_sa** (اعتماد) • **@MEEDNews** • **@ZawyaProjects**.`
+
 function buildInstruction(category: OpportunityCategory): string {
   return `أنت محلل تطوير أعمال لشركة "كاسب" السعودية، متخصصة في **توريد وتركيب الرخام والجرانيت الطبيعي**.
 مهمتك الآن: قسم **"${categoryLabel(category, 'ar')}"** فقط، في **السعودية فقط**.
@@ -176,7 +184,12 @@ function buildInstruction(category: OpportunityCategory): string {
 ## 📚 مصادر هذا القسم
 ${SECTOR_BRIEF[category]}
 
-**سوشيل ميديا مقبول** بشرط أن يكون **حساباً رسمياً موثّقاً للجهة نفسها** أو صحيفة اقتصادية معتبرة، مع رابط المنشور في \`sourceUrls\`. ممنوع الحسابات المجهولة والإشاعات.
+## 📡 حسابات الرصد (ابدأ منها كل مرة)
+${WATCH_ACCOUNTS}
+
+**كيف تستخدمها — مهم:** هذي الحسابات **دليل لا مصدر**. ابحث عن أحدث ما نشرته عن مشاريع سعودية (ابحث باسم الحساب وبأسماء المشاريع اللي يذكرها). لو تعذّر فتح x.com، **خذ اسم المشروع** من أي اقتباس/إعادة نشر وابحث عنه في المصادر الأولية. ثم **تحقّق من المشروع في مصدر أولي** (اعتماد / أرقام / تداول / الموقع الرسمي للجهة / وكالة أنباء) و\`sourceUrls\` **لازم يحتوي رابط المصدر الأولي**؛ ضِف رابط المنشور بعده إن وُجد. **تغريدة لوحدها ليست دليلاً كافياً** ولا تُرجَع بدون تأكيد أولي.
+
+**سوشيل ميديا مقبول** بشرط أن يكون **حساباً رسمياً موثّقاً للجهة نفسها** أو حساب رصد/صحيفة اقتصادية معتبرة **مع تأكيد أولي**، ومع رابط المنشور في \`sourceUrls\`. ممنوع الحسابات المجهولة والإشاعات.
 
 ## القواعد الصارمة
 1. **السعودية فقط.** أي مشروع خارج المملكة يُرفض تماماً.
@@ -206,7 +219,7 @@ ${known.map((n) => `- ${n}`).join('\n')}
   return `تاريخ اليوم: ${today}.
 ابحث الآن في الإنترنت عن فرص توريد وتركيب رخام/جرانيت في السعودية ضمن قسم **"${categoryLabel(category, 'ar')}"**، من أخبار آخر ${LOOKBACK_DAYS} يوم.
 
-ابدأ بالبحث عن **ترسيات العقود** في أرقام/تداول، ثم غطِّ مصادر القسم المذكورة. استهدف **المقاول**، وقيّم حسب قرب مرحلة التشطيب.${exclusion}
+ابدأ بـ**حسابات الرصد** (خصوصاً @SaudiProject) لالتقاط أحدث المشاريع المعلنة، ثم ابحث عن **ترسيات العقود** في أرقام/تداول، ثم غطِّ مصادر القسم المذكورة. كل فرصة لازم يكون معها **رابط مصدر أولي** يؤكدها. استهدف **المقاول**، وقيّم حسب قرب مرحلة التشطيب.${exclusion}
 
 أرجع حتى ${MAX_PER_SECTOR} فرص **جديدة** موثّقة بروابط حقيقية. JSON فقط.`
 }
