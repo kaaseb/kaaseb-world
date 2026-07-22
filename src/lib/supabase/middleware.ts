@@ -29,6 +29,23 @@ function buildCsp(nonce: string): string {
     ? `https://${supabaseHost} wss://${supabaseHost}`
     : 'https://*.supabase.co wss://*.supabase.co'
 
+  // Direct-to-S3 uploads PUT straight from the browser to the bucket, so the
+  // bucket's own origin must be in connect-src or the browser refuses the
+  // request before it ever leaves ("Refused to connect ... violates CSP").
+  // Derived from env so it always matches the bucket actually in use; the
+  // wildcard fallback keeps uploads working if the vars aren't set here.
+  const s3Bucket = process.env.AWS_S3_BUCKET
+  const s3Region = process.env.AWS_REGION
+  const s3Public = process.env.AWS_S3_PUBLIC_URL
+  const s3Hosts = new Set<string>()
+  if (s3Bucket && s3Region) s3Hosts.add(`https://${s3Bucket}.s3.${s3Region}.amazonaws.com`)
+  if (s3Public) {
+    try { s3Hosts.add(new URL(s3Public).origin) } catch { /* ignore malformed */ }
+  }
+  const s3Connect = s3Hosts.size > 0
+    ? Array.from(s3Hosts).join(' ')
+    : 'https://*.amazonaws.com'
+
   // React dev-mode emits eval() for things like callstack reconstruction and
   // hot-reload internals. Allow it ONLY in development; never in production
   // (eval is a major XSS escalation surface).
@@ -42,7 +59,7 @@ function buildCsp(nonce: string): string {
     `style-src 'self' 'unsafe-inline'`,
     `img-src 'self' blob: data: https:`,
     `font-src 'self' data:`,
-    `connect-src 'self' ${supabaseConnect}`,
+    `connect-src 'self' ${supabaseConnect} ${s3Connect}`,
     `media-src 'self' https:`,
     `frame-ancestors 'none'`,
     `form-action 'self'`,
