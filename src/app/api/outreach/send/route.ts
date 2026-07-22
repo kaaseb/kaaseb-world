@@ -20,7 +20,7 @@ import { serverAudit } from '@/lib/audit-server'
 import { getOpportunity, updateOpportunity } from '@/lib/opportunities/store'
 import { getCompany, updateCompany } from '@/lib/companies/store'
 import { getOutreachTemplate, renderOutreach } from '@/lib/outreach/store'
-import { sendOutreachEmail, isEmail } from '@/lib/outreach/send'
+import { sendOutreachEmail, isEmail, normalizeRecipients } from '@/lib/outreach/send'
 
 export const runtime = 'nodejs'
 export const maxDuration = 120
@@ -57,8 +57,16 @@ export async function POST(request: Request) {
 
   const contacts = Array.isArray(record.contacts) ? record.contacts : []
   const firstWithEmail = contacts.find((c) => isEmail(c.email || ''))
-  const to = (typeof body.to === 'string' && body.to.trim()) || firstWithEmail?.email || ''
-  if (!isEmail(to)) {
+
+  // The composer sends the exact list the user ticked. With nothing specified we
+  // fall back to EVERY contact address on the record (procurement + head office
+  // + suppliers desk are usually all worth reaching), not just the first one.
+  const requested = normalizeRecipients(body.to)
+  const recipients = requested.length > 0
+    ? requested
+    : normalizeRecipients(contacts.map((c) => c.email || ''))
+
+  if (recipients.length === 0) {
     return NextResponse.json({ error: 'ما فيه بريد صالح لهذا السجل — أضف جهة اتصال أولاً.' }, { status: 400 })
   }
 
@@ -87,7 +95,7 @@ export async function POST(request: Request) {
   let attached = false
   try {
     const res = await sendOutreachEmail({
-      to,
+      to: recipients,
       subject,
       body: text,
       profileUrl: tpl.profileUrl,
@@ -100,7 +108,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: `تعذّر الإرسال: ${msg}` }, { status: 502 })
   }
 
-  const stampedNote = `📧 أُرسل التعريف إلى ${to} — ${new Date().toISOString().slice(0, 10)} بواسطة ${profile.full_name || profile.email || 'مستخدم'}`
+  const stampedNote = `📧 أُرسل التعريف إلى ${recipients.join('، ')} — ${new Date().toISOString().slice(0, 10)} بواسطة ${profile.full_name || profile.email || 'مستخدم'}`
   const notes = [record.notes, stampedNote].filter(Boolean).join('\n')
 
   if (isCompany) await updateCompany(id, { status: 'contacted', notes })
@@ -112,5 +120,5 @@ export async function POST(request: Request) {
     objectName: vars.company, objectId: id,
   })
 
-  return NextResponse.json({ ok: true, to, attached })
+  return NextResponse.json({ ok: true, to: recipients, attached })
 }

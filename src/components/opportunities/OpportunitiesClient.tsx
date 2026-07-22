@@ -776,7 +776,7 @@ export function OpportunitiesClient({ initialItems, initialLastRun }: Props) {
         project={outreachFor?.title || ''}
         city={outreachFor?.city || ''}
         contactName={outreachFor?.contacts.find((c) => c.email)?.name || ''}
-        email={outreachFor?.contacts.find((c) => c.email)?.email || ''}
+        contacts={outreachFor?.contacts || []}
         onSent={() => {
           const id = outreachFor?.id
           if (id) setItems((list) => list.map((o) => (o.id === id ? { ...o, status: 'contacted' as const } : o)))

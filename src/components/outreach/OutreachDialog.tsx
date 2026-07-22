@@ -9,7 +9,7 @@
 // single stray click.
 
 import { useEffect, useState } from 'react'
-import { Loader2, Mail, Paperclip, Send, X, AlertTriangle } from 'lucide-react'
+import { Loader2, Mail, Paperclip, Send, X, AlertTriangle, Check } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { useLanguage } from '@/contexts/LanguageContext'
@@ -25,21 +25,25 @@ interface Props {
   project?: string
   city?: string
   contactName?: string
-  /** Pre-filled recipient, usually the first contact with an email. */
-  email?: string
+  /** EVERY contact on the record — each address becomes a tickable recipient. */
+  contacts?: Array<{ name?: string; role?: string; email?: string }>
   /** Called after a successful send so the parent can flip the card to contacted. */
   onSent: () => void
 }
 
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/
+
 export function OutreachDialog({
-  open, onClose, type, id, company, project, city, contactName, email, onSent,
+  open, onClose, type, id, company, project, city, contactName, contacts, onSent,
 }: Props) {
   const { isRtl, lang } = useLanguage()
   const ar = lang === 'ar'
 
   const [loading, setLoading] = useState(false)
   const [sending, setSending] = useState(false)
+  // Extra addresses typed by hand (comma/؛ separated) on top of the ticked ones.
   const [to, setTo] = useState('')
+  const [picked, setPicked] = useState<string[]>([])
   const [subject, setSubject] = useState('')
   const [body, setBody] = useState('')
   const [profileName, setProfileName] = useState<string | null>(null)
@@ -49,7 +53,17 @@ export function OutreachDialog({
     let alive = true
     const run = setTimeout(() => {
       setLoading(true)
-      setTo(email || '')
+      setTo('')
+      // Every address on the record starts TICKED — procurement, head office and
+      // the suppliers desk are all worth reaching; untick what you don't want.
+      setPicked(
+        Array.from(new Set(
+          (contacts || [])
+            .map((c) => (c.email || '').trim())
+            .filter((e) => EMAIL_RE.test(e))
+            .map((e) => e.toLowerCase()),
+        )),
+      )
       fetch('/api/outreach')
         .then((r) => r.json())
         .then((j) => {
@@ -63,20 +77,29 @@ export function OutreachDialog({
         .finally(() => { if (alive) setLoading(false) })
     }, 0)
     return () => { alive = false; clearTimeout(run) }
-  }, [open, email, company, project, city, contactName, ar])
+  }, [open, contacts, company, project, city, contactName, ar])
 
   if (!open) return null
 
-  const validEmail = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(to.trim())
+  // Everyone who will actually receive it = ticked chips + hand-typed extras.
+  const typed = to.split(/[;,\n]/).map((s) => s.trim()).filter((s) => EMAIL_RE.test(s))
+  const recipients = Array.from(new Set([...picked, ...typed.map((e) => e.toLowerCase())]))
+  const canSend = recipients.length > 0
+  const withEmail = (contacts || []).filter((c) => EMAIL_RE.test((c.email || '').trim()))
+
+  function toggle(mail: string) {
+    const k = mail.toLowerCase()
+    setPicked((p) => (p.includes(k) ? p.filter((x) => x !== k) : [...p, k]))
+  }
 
   async function send() {
-    if (!validEmail || sending) return
+    if (!canSend || sending) return
     setSending(true)
     try {
       const res = await fetch('/api/outreach/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ type, id, to: to.trim(), subject, body }),
+        body: JSON.stringify({ type, id, to: recipients, subject, body }),
       })
       const j = await res.json().catch(() => ({}))
       if (!res.ok) { toast.error(j.error || (ar ? 'فشل الإرسال' : 'Send failed'), { duration: 10000 }); return }
@@ -120,19 +143,50 @@ export function OutreachDialog({
           </div>
         ) : (
           <div className="p-4 flex flex-col gap-3">
-            <label className="flex flex-col gap-1">
-              <span className="text-xs font-medium text-gray-700">{ar ? 'إلى' : 'To'}</span>
+            <div className="flex flex-col gap-1.5">
+              <span className="text-xs font-medium text-gray-700">
+                {ar ? 'إلى' : 'To'} — {recipients.length} {ar ? 'مستلِم' : 'recipient(s)'}
+              </span>
+
+              {/* Every address on the record. All ticked by default; untick any. */}
+              {withEmail.length > 0 && (
+                <div className="flex flex-col gap-1">
+                  {withEmail.map((c, i) => {
+                    const mail = (c.email || '').trim()
+                    const on = picked.includes(mail.toLowerCase())
+                    return (
+                      <button
+                        type="button" key={`${mail}-${i}`} onClick={() => toggle(mail)}
+                        className={`flex items-center gap-2 rounded-lg border p-2 text-start transition ${on ? 'border-blue-300 bg-blue-50' : 'border-gray-200 bg-white hover:bg-gray-50'}`}
+                      >
+                        <span className={`w-4 h-4 rounded flex items-center justify-center flex-shrink-0 border ${on ? 'bg-blue-600 border-blue-600 text-white' : 'border-gray-300'}`}>
+                          {on && <Check className="w-3 h-3" />}
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block text-sm text-gray-900 truncate" dir="ltr">{mail}</span>
+                          {(c.name || c.role) && (
+                            <span className="block text-[11px] text-muted-foreground truncate">
+                              {[c.name, c.role].filter(Boolean).join(' — ')}
+                            </span>
+                          )}
+                        </span>
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
+
               <input
-                type="email" dir="ltr" value={to} onChange={(e) => setTo(e.target.value)}
-                placeholder="name@company.com"
-                className={`h-10 rounded-lg border px-3 text-sm outline-none focus:ring-2 focus:ring-blue-100 ${validEmail ? 'border-gray-200 focus:border-blue-400' : 'border-red-300'}`}
+                type="text" dir="ltr" value={to} onChange={(e) => setTo(e.target.value)}
+                placeholder={ar ? 'إضافة بريد آخر (افصل بفاصلة)' : 'Add another email (comma separated)'}
+                className="h-10 rounded-lg border border-gray-200 px-3 text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
               />
-              {!validEmail && (
+              {!canSend && (
                 <span className="text-xs text-red-600 flex items-center gap-1">
-                  <AlertTriangle className="w-3 h-3" />{ar ? 'أدخل بريداً صالحاً' : 'Enter a valid email'}
+                  <AlertTriangle className="w-3 h-3" />{ar ? 'اختر مستلِماً واحداً على الأقل' : 'Pick at least one recipient'}
                 </span>
               )}
-            </label>
+            </div>
 
             <label className="flex flex-col gap-1">
               <span className="text-xs font-medium text-gray-700">{ar ? 'الموضوع' : 'Subject'}</span>
@@ -159,7 +213,7 @@ export function OutreachDialog({
 
             <div className="flex items-center justify-end gap-2 pt-1">
               <Button variant="ghost" onClick={onClose} disabled={sending}>{ar ? 'إلغاء' : 'Cancel'}</Button>
-              <Button onClick={send} disabled={!validEmail || sending} className="gap-2">
+              <Button onClick={send} disabled={!canSend || sending} className="gap-2">
                 {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
                 {sending ? (ar ? 'جاري الإرسال…' : 'Sending…') : (ar ? 'إرسال' : 'Send')}
               </Button>

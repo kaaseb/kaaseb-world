@@ -29,8 +29,35 @@ function textToHtml(text: string): string {
   return `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.7;color:#111827;white-space:pre-wrap">${escapeHtml(text)}</div>`
 }
 
+/** Never blast a record's whole contact book — a handful of desks at ONE company
+ *  is outreach, more than that starts to look like a mailing list. */
+export const MAX_RECIPIENTS = 6
+
+/** Clean a requested recipient list: trim, keep only real addresses, drop
+ *  case-insensitive duplicates, cap the count. Returns [] when nothing valid. */
+export function normalizeRecipients(input: unknown): string[] {
+  const raw: string[] = Array.isArray(input)
+    ? input.filter((x): x is string => typeof x === 'string')
+    : typeof input === 'string'
+      ? input.split(/[;,\n]/)
+      : []
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const r of raw) {
+    const e = r.trim()
+    if (!isEmail(e)) continue
+    const k = e.toLowerCase()
+    if (seen.has(k)) continue
+    seen.add(k)
+    out.push(e)
+    if (out.length >= MAX_RECIPIENTS) break
+  }
+  return out
+}
+
 export interface SendOutreachInput {
-  to: string
+  /** One or more recipients — all of them go on the same message. */
+  to: string[]
   subject: string
   body: string
   profileUrl?: string | null
@@ -40,7 +67,8 @@ export interface SendOutreachInput {
 }
 
 export async function sendOutreachEmail(input: SendOutreachInput): Promise<{ attached: boolean }> {
-  if (!isEmail(input.to)) throw new Error('عنوان البريد غير صالح')
+  const recipients = normalizeRecipients(input.to)
+  if (recipients.length === 0) throw new Error('ما فيه عنوان بريد صالح')
 
   const attachments: Array<{ filename: string; content: Buffer }> = []
   if (input.profileUrl) {
@@ -63,7 +91,9 @@ export async function sendOutreachEmail(input: SendOutreachInput): Promise<{ att
 
   await getTransport().sendMail({
     from: getFromAddress(),
-    to: input.to.trim(),
+    // All recipients belong to the SAME record (one company's desks), so a
+    // shared To: is expected here and doesn't leak anyone to a stranger.
+    to: recipients.join(', '),
     replyTo: input.replyTo || undefined,
     subject: input.subject,
     text: input.body,

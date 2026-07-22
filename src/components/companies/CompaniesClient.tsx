@@ -674,7 +674,7 @@ export function CompaniesClient({ initialItems, initialLastRun }: Props) {
         company={outreachFor?.name || ''}
         city={outreachFor?.city || ''}
         contactName={outreachFor?.contacts.find((x) => x.email)?.name || ''}
-        email={outreachFor?.contacts.find((x) => x.email)?.email || ''}
+        contacts={outreachFor?.contacts || []}
         onSent={() => {
           const id = outreachFor?.id
           if (id) setItems((list) => list.map((c) => (c.id === id ? { ...c, status: 'contacted' as const } : c)))
