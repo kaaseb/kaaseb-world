@@ -63,20 +63,36 @@ export async function uploadFile(
     if (e instanceof Error && e.message && !/fetch|network/i.test(e.message)) throw e
   }
 
-  // 2) Direct PUT to S3. Falls back only if the browser couldn't reach S3 at all
-  //    (almost always: bucket CORS not configured yet).
+  // 2) Direct PUT to S3 — the file never touches our server.
+  //
+  // If S3 ANSWERS but refuses (403 signature, 400 bad request), that is a real
+  // configuration fault: report it verbatim. Silently falling back here is what
+  // made the last bug invisible — the user saw a confusing "file too large /
+  // enable CORS" 413 when the actual problem was a bad signature.
   if (signed) {
+    let reached = false
     try {
       const put = await fetch(signed.uploadUrl, {
         method: 'PUT',
         headers: { 'Content-Type': contentType },
         body: file,
       })
+      reached = true
       if (put.ok) {
         return { url: signed.url, key: signed.key, bytes: file.size, name: file.name }
       }
-    } catch {
-      /* CORS/network — fall through to the classic path below */
+      const detail = await put.text().catch(() => '')
+      const code = /<Code>([^<]+)<\/Code>/.exec(detail)?.[1] || ''
+      throw new Error(
+        `أمازون S3 رفض الرفع (${put.status}${code ? ` ${code}` : ''}). ` +
+        (code === 'AccessDenied'
+          ? 'تأكد أن مستخدم AWS عنده صلاحية s3:PutObject على المخزن.'
+          : 'راجع إعدادات المخزن.'),
+      )
+    } catch (e) {
+      // Only a genuine "couldn't reach S3 at all" (CORS preflight blocked, no
+      // network) is worth retrying through our own server.
+      if (reached) throw e
     }
   }
 
