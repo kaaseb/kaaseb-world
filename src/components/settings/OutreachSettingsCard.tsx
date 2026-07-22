@@ -5,16 +5,18 @@
 // Super-admin only (this text goes out under the company's name).
 
 import { useEffect, useState } from 'react'
-import { Loader2, Mail, Upload, Paperclip, Save, X } from 'lucide-react'
+import { Loader2, Mail, Upload, Paperclip, Save, X, CloudCog } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
+import { uploadFile } from '@/lib/upload-client'
 
 export function OutreachSettingsCard() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [uploading, setUploading] = useState(false)
+  const [corsBusy, setCorsBusy] = useState(false)
   const [subject, setSubject] = useState('')
   const [body, setBody] = useState('')
   const [profileUrl, setProfileUrl] = useState<string | null>(null)
@@ -56,31 +58,34 @@ export function OutreachSettingsCard() {
     }
   }
 
+  // Goes browser → S3 directly (no nginx, no size ceiling); falls back to the
+  // classic POST when the bucket's CORS hasn't been enabled yet.
   async function uploadProfile(file: File) {
     setUploading(true)
     try {
-      const fd = new FormData()
-      fd.append('file', file)
-      fd.append('kind', 'outreach')
-      const res = await fetch('/api/upload', { method: 'POST', body: fd })
-      // 413 comes from the reverse proxy BEFORE the app sees the request, so
-      // there's no JSON to read — say exactly what to do instead of "failed".
-      if (res.status === 413) {
-        toast.error(
-          `الملف كبير على الخادم (${Math.round(file.size / 1024 / 1024)}MB). ارفع حد nginx: client_max_body_size 100M ثم أعد المحاولة.`,
-          { duration: 15000 },
-        )
-        return
-      }
-      const j = await res.json().catch(() => ({}))
-      if (!j.url) { toast.error(j.error || 'فشل الرفع'); return }
-      setProfileUrl(j.url)
+      const up = await uploadFile(file, 'outreach')
+      setProfileUrl(up.url)
       setProfileName(file.name)
-      await save({ profileUrl: j.url, profileName: file.name })
-    } catch {
-      toast.error('فشل الرفع')
+      await save({ profileUrl: up.url, profileName: file.name })
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'فشل الرفع', { duration: 15000 })
     } finally {
       setUploading(false)
+    }
+  }
+
+  // One-click: let the browser PUT straight to the bucket. Needed once, ever.
+  async function enableDirectUpload() {
+    setCorsBusy(true)
+    try {
+      const res = await fetch('/api/upload/cors', { method: 'POST' })
+      const j = await res.json().catch(() => ({}))
+      if (!res.ok) { toast.error(j.error || 'فشل الضبط', { duration: 15000 }); return }
+      toast.success('تم تفعيل الرفع المباشر إلى S3 ✓ — جرّب الرفع الآن')
+    } catch {
+      toast.error('فشل الضبط')
+    } finally {
+      setCorsBusy(false)
     }
   }
 
@@ -145,10 +150,22 @@ export function OutreachSettingsCard() {
               </label>
             </div>
 
-            <Button onClick={() => save()} disabled={saving} className="gap-2">
-              {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-              حفظ القالب
-            </Button>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button onClick={() => save()} disabled={saving} className="gap-2">
+                {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                حفظ القالب
+              </Button>
+              {/* One-time: allows the browser to PUT straight to S3, which is
+                  what makes big files immune to the proxy's 413. */}
+              <Button variant="outline" onClick={enableDirectUpload} disabled={corsBusy} className="gap-2">
+                {corsBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <CloudCog className="w-4 h-4" />}
+                فعّل الرفع المباشر إلى S3
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              لو فشل رفع ملف كبير (خطأ 413)، اضغط «فعّل الرفع المباشر إلى S3» مرة واحدة — بعدها الملفات تروح من متصفحك
+              إلى أمازون مباشرة بلا أي حد للحجم.
+            </p>
           </>
         )}
       </CardContent>

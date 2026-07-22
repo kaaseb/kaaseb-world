@@ -7,6 +7,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { verifyOrigin } from '@/lib/csrf'
 import { uploadToS3 } from '@/lib/s3'
+import { policyFor, mimeAllowed } from '@/lib/upload-policy'
 import { NextResponse } from 'next/server'
 
 // Allow long uploads — no app-level size cap. The actual ceiling is whatever
@@ -16,46 +17,12 @@ export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 export const maxDuration = 300
 
-// Upload size cap removed by request — we now only gate on MIME prefix so the
-// bucket can't host arbitrary executables, but file size is unlimited.
-type KindPolicy = {
-  mimePrefixes: string[]
-  superAdminOnly?: boolean
-}
-
-const KIND_POLICY: Record<string, KindPolicy> = {
-  avatars:        { mimePrefixes: ['image/'] },
-  posts:          { mimePrefixes: ['image/', 'video/'] },
-  stories:        { mimePrefixes: ['image/', 'video/'] },
-  chat:           { mimePrefixes: ['image/', 'video/', 'application/pdf'] },
-  rewards:        { mimePrefixes: ['image/'] },
-  goals:          { mimePrefixes: ['image/'] },
-  doodles:        { mimePrefixes: ['image/'] },
-  // Furn — BOQ Excel + spec/drawing PDFs / Word files.
-  furn:           { mimePrefixes: ['application/', 'image/', 'text/'] },
-  // Furn branding (header image + signature). Locked to super-admin.
-  furn_branding:  { mimePrefixes: ['image/'], superAdminOnly: true },
-  // Client projects — BOQs, contracts, drawings, photos.
-  projects:       { mimePrefixes: ['application/', 'image/', 'text/'] },
-  // Important Documents (Pre-qualification source documents).
-  documents:      { mimePrefixes: ['application/', 'image/'] },
-  // Pre-qualification rendered output (the merged packet).
-  prequal:        { mimePrefixes: ['application/pdf'] },
-  // Pre-qualification cover/back templates (PDF or image). Defaults are gated
-  // by the settings PATCH (super-admin); per-packet overrides are set by
-  // whoever creates the packet, so the upload itself isn't super-admin-only.
-  prequal_template: { mimePrefixes: ['application/pdf', 'image/'] },
-  // Tannoor — BOQ Excel + spec/drawing files.
-  tannoor:        { mimePrefixes: ['application/', 'image/', 'text/'] },
-  // Tannoor product photos (catalogue thumbnails + marble textures used by
-  // the visualization feature).
-  tannoor_products: { mimePrefixes: ['image/'] },
-  // Magic-tunnel scene photos uploaded by the user to visualize marble on.
-  visualize:      { mimePrefixes: ['image/'] },
-  // The company profile attached to every outreach email. Super-admin only —
-  // it is mailed to third parties under the company's name.
-  outreach:       { mimePrefixes: ['application/pdf'], superAdminOnly: true },
-}
+// Upload size cap removed by request — we only gate on MIME prefix so the
+// bucket can't host arbitrary executables. NOTE: the real ceiling on this path
+// is the reverse proxy (nginx client_max_body_size), which answers 413 before
+// the request ever reaches here. Large files should use /api/upload/presign,
+// which sends the bytes straight to S3 and has no such ceiling.
+// The kind policy is shared with the presign route — see lib/upload-policy.
 
 export async function POST(request: Request) {
   try {
@@ -87,11 +54,11 @@ export async function POST(request: Request) {
     if (!file) return NextResponse.json({ error: 'No file' }, { status: 400 })
 
     const kind = (formData.get('kind') as string | null) ?? 'projects'
-    const policy = KIND_POLICY[kind]
+    const policy = policyFor(kind)
     if (!policy) return NextResponse.json({ error: 'Invalid kind' }, { status: 400 })
 
     const mime = file.type || ''
-    if (!policy.mimePrefixes.some(p => mime.startsWith(p))) {
+    if (!mimeAllowed(policy, mime)) {
       return NextResponse.json({ error: 'Unsupported file type' }, { status: 415 })
     }
     if (policy.superAdminOnly) {
