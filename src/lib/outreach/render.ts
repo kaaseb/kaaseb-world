@@ -6,13 +6,13 @@
 // literally what is mailed. Never import S3/SMTP here.
 
 export const DEFAULT_SUBJECT =
-  'Marble & Granite Supply — Capital Tower (Abraj Al-Asima) Company Profile'
+  'Marble & Granite Supply — KAASEB (Capital Tower / Abraj Al-Asima) Company Profile'
 
 export const DEFAULT_BODY = `Dear {{contact}},
 
 I hope this message finds you well.
 
-I am writing on behalf of Capital Tower – Abraj Al-Asima for Marble & Granite, a Riyadh-based supplier and installer of natural marble, granite, limestone and quartz for major projects across the Kingdom.
+I am writing on behalf of KAASEB — Capital Tower / Abraj Al-Asima for Marble & Granite (kaaseb.sa), a Riyadh-based supplier and installer of natural marble, granite, limestone and quartz for major projects across the Kingdom.
 
 We have been following {{company}}'s work on {{project}}, and we believe our capabilities are a strong fit for your natural-stone scope.
 
@@ -21,7 +21,7 @@ Why clients work with us:
 • Fully integrated process — quarry selection, cutting, surface processing, quality control and packing
 • 35 machines and 10 vehicles supporting delivery schedules on large packages
 • Materials compliant with sustainability standards, supporting LEED and Mostadam certified projects
-• Trusted by Saudi Aramco, Red Sea Global, Riyadh Metro, KAFD, Ministry of Culture and Nesma United Industries
+• Proven on landmark projects including Red Sea Global, King Salman Park, Amaala and The Sheraton
 
 Our full company profile is attached for your review.
 
@@ -30,9 +30,35 @@ We would welcome the opportunity to be added to your approved supplier list, or 
 Thank you for your time and consideration.
 
 Best regards,
-Capital Tower – Abraj Al-Asima for Marble & Granite
+KAASEB — Capital Tower / Abraj Al-Asima for Marble & Granite
 Kharj Road, Al-Manakh District, Riyadh, Saudi Arabia
-+966 50 626 8080 | info@kaaseb.sa`
++966 50 626 8080 | info@kaaseb.sa | kaaseb.sa`
+
+// The general company-introduction blast (no placeholders — it goes to a whole
+// list at once). Editable before sending.
+export const DEFAULT_BROADCAST_SUBJECT =
+  'KAASEB — Marble, Granite & Natural Stone Supplier / Installer (Company Profile)'
+
+export const DEFAULT_BROADCAST_BODY = `Dear Sir/Madam,
+
+Greetings from KAASEB — Capital Tower / Abraj Al-Asima for Marble & Granite (kaaseb.sa).
+
+We are a Riyadh-based supplier and installer of natural marble, granite, limestone and quartz, serving major construction and finishing projects across the Kingdom.
+
+What we offer:
+• ISO 9001:2015 certified quality for natural marble, granite and stone
+• A fully integrated operation — quarry selection, cutting, surface processing, quality control and packing (35 machines, 10 vehicles)
+• Materials compliant with sustainability standards, supporting LEED and Mostadam certified projects
+• Proven on landmark projects including Red Sea Global, King Salman Park, Amaala and The Sheraton
+
+We would be glad to be added to your approved supplier list and to quote on any current or upcoming natural-stone package. Samples, technical submittals and pre-qualification documents are available on request.
+
+Our company profile is attached for your reference.
+
+Best regards,
+KAASEB — Capital Tower / Abraj Al-Asima for Marble & Granite
+Kharj Road, Al-Manakh District, Riyadh, Saudi Arabia
++966 50 626 8080 | info@kaaseb.sa | kaaseb.sa`
 
 // Neutral stand-ins so a missing value never reads as a mail-merge failure to
 // the customer ("Dear {{contact}}" is the classic embarrassment).

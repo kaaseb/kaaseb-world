@@ -22,6 +22,7 @@ import { Pagination, usePagination } from '@/components/ui/pagination'
 import { cn } from '@/lib/utils'
 import { useLanguage } from '@/contexts/LanguageContext'
 import { OutreachDialog } from '@/components/outreach/OutreachDialog'
+import { AutoScanToggle } from '@/components/scout/AutoScanToggle'
 import {
   OPPORTUNITY_CATEGORIES,
   OPPORTUNITY_STATUSES,
@@ -384,6 +385,7 @@ export function OpportunitiesClient({ initialItems, initialLastRun }: Props) {
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          <AutoScanToggle feature="opportunities" />
           <Button variant="outline" onClick={exportExcel} className="gap-2">
             <FileDown className="w-4 h-4" />
             {t('opp_export')}

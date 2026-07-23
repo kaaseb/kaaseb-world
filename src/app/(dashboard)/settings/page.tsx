@@ -19,6 +19,7 @@ import { DeliverySettingsTab } from '@/components/furn/DeliverySettingsTab'
 import { PreQualSettingsTab } from '@/components/pre-qualifications/PreQualSettingsTab'
 import { AiSettingsTab } from '@/components/ai/AiSettingsTab'
 import { OutreachSettingsCard } from '@/components/settings/OutreachSettingsCard'
+import { BroadcastCard } from '@/components/settings/BroadcastCard'
 
 export default function SettingsPage() {
   const [profile, setProfile] = useState<Profile | null>(null)
@@ -503,6 +504,9 @@ export default function SettingsPage() {
 
         {/* Super-admin only: the outreach message + company profile attachment */}
         {profile?.role === 'super_admin' && <OutreachSettingsCard />}
+
+        {/* Super-admin only: bulk "about KAASEB" broadcast to a pasted list */}
+        {profile?.role === 'super_admin' && <BroadcastCard />}
 
         {/* Super-admin only: Community permissions */}
         {profile?.role === 'super_admin' && (

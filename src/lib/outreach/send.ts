@@ -17,7 +17,7 @@ export function isEmail(v: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test((v || '').trim())
 }
 
-function escapeHtml(s: string): string {
+export function escapeHtml(s: string): string {
   return s
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
@@ -25,7 +25,9 @@ function escapeHtml(s: string): string {
     .replace(/"/g, '&quot;')
 }
 
-function textToHtml(text: string): string {
+// Plain text → safe HTML twin. Exported so the bulk broadcast sends the exact
+// same escaped markup — customer-supplied text can never inject tags.
+export function textToHtml(text: string): string {
   return `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.7;color:#111827;white-space:pre-wrap">${escapeHtml(text)}</div>`
 }
 

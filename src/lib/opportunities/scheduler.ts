@@ -19,6 +19,7 @@ import { getState, lastSuccessfulRunAt } from './store'
 import { runScan } from './search'
 import { getCompaniesState, lastSuccessfulCompanyRunAt } from '@/lib/companies/store'
 import { runCompanyScan } from '@/lib/companies/search'
+import { getAutoScan } from '@/lib/scout/auto'
 
 // 03:00 every day, Riyadh time — node-cron does the DST/offset maths for us.
 const CRON_EXPRESSION = '0 3 * * *'
@@ -79,7 +80,12 @@ export function startOpportunityScheduler(): void {
     () => {
       // Detached on purpose: a cron tick must never hold the event loop or
       // throw into node-cron's internals. runScan() records its own failures.
-      void runScan({ trigger: 'schedule' }).catch(() => {})
+      // The in-page pause switch is checked HERE so flipping it off stops the
+      // very next run without a redeploy.
+      void (async () => {
+        if (!(await getAutoScan('opportunities'))) return
+        await runScan({ trigger: 'schedule' })
+      })().catch(() => {})
     },
     { timezone: TIMEZONE },
   )
@@ -87,7 +93,10 @@ export function startOpportunityScheduler(): void {
   cron.schedule(
     COMPANIES_CRON_EXPRESSION,
     () => {
-      void runCompanyScan({ trigger: 'schedule' }).catch(() => {})
+      void (async () => {
+        if (!(await getAutoScan('companies'))) return
+        await runCompanyScan({ trigger: 'schedule' })
+      })().catch(() => {})
     },
     { timezone: TIMEZONE },
   )
@@ -98,12 +107,16 @@ export function startOpportunityScheduler(): void {
   setTimeout(() => {
     void (async () => {
       try {
-        if (await shouldCatchUp()) await runScan({ trigger: 'schedule' })
+        if ((await getAutoScan('opportunities')) && (await shouldCatchUp())) {
+          await runScan({ trigger: 'schedule' })
+        }
       } catch {
         /* never let the safety net take the server down */
       }
       try {
-        if (await shouldCatchUpCompanies()) await runCompanyScan({ trigger: 'schedule' })
+        if ((await getAutoScan('companies')) && (await shouldCatchUpCompanies())) {
+          await runCompanyScan({ trigger: 'schedule' })
+        }
       } catch {
         /* same */
       }
