@@ -11,9 +11,9 @@
 //   • the list is validated + de-duped (case-insensitive) and hard-capped;
 //   • same escaped-HTML twin as the single send, so no markup injection.
 
-import { getTransport, getFromAddress } from '@/lib/email/client'
 import { fetchAppOwned } from '@/lib/s3'
 import { isEmail, textToHtml } from './send'
+import { resolveMailer } from './transport'
 
 export const BROADCAST_MAX = 1000 // a hard ceiling on one run
 const BCC_BATCH = 40 // recipients per message — comfortably under provider caps
@@ -77,7 +77,7 @@ export async function sendBroadcast(input: BroadcastInput): Promise<BroadcastRes
     } catch { /* attachment is optional — a broadcast without it still sends */ }
   }
 
-  const from = getFromAddress()
+  const mailer = await resolveMailer()
   const html = textToHtml(input.body)
   const batches = chunk(recipients, BCC_BATCH)
   let sent = 0
@@ -85,13 +85,13 @@ export async function sendBroadcast(input: BroadcastInput): Promise<BroadcastRes
 
   for (const batch of batches) {
     try {
-      await getTransport().sendMail({
-        from,
+      await mailer.transport.sendMail({
+        from: mailer.from,
         // A valid To keeps some servers from binning it as spam; the real
         // recipients are BCC so they never see each other.
-        to: from,
+        to: mailer.from,
         bcc: batch.join(', '),
-        replyTo: input.replyTo || undefined,
+        replyTo: input.replyTo || mailer.replyToDefault || undefined,
         subject: input.subject,
         text: input.body,
         html,

@@ -8,8 +8,8 @@
 //   • the body is sent as plain text AND a minimally-escaped HTML twin, so no
 //     customer-supplied string can inject markup into the mail we send.
 
-import { getTransport, getFromAddress } from '@/lib/email/client'
 import { fetchAppOwned } from '@/lib/s3'
+import { resolveMailer } from './transport'
 
 const MAX_ATTACHMENT_BYTES = 15 * 1024 * 1024 // a company profile is a few MB
 
@@ -91,12 +91,13 @@ export async function sendOutreachEmail(input: SendOutreachInput): Promise<{ att
     }
   }
 
-  await getTransport().sendMail({
-    from: getFromAddress(),
+  const mailer = await resolveMailer()
+  await mailer.transport.sendMail({
+    from: mailer.from,
     // All recipients belong to the SAME record (one company's desks), so a
     // shared To: is expected here and doesn't leak anyone to a stranger.
     to: recipients.join(', '),
-    replyTo: input.replyTo || undefined,
+    replyTo: input.replyTo || mailer.replyToDefault || undefined,
     subject: input.subject,
     text: input.body,
     html: textToHtml(input.body),
