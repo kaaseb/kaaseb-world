@@ -2,6 +2,7 @@ import { createClient } from '@/lib/supabase/server'
 import { notFound, redirect } from 'next/navigation'
 import { QuotationPrint } from '@/components/furn/QuotationPrint'
 import { resolveDeliveryNote, resolveShipping } from '@/lib/furn/delivery-store'
+import { getProjectItemFlags } from '@/lib/furn/item-flags'
 import type { FurnProject, FurnItem, FurnQuotation, FurnSettings } from '@/types'
 
 export const dynamic = 'force-dynamic'
@@ -31,7 +32,10 @@ export default async function QuotationPrintPage({
   // "Not included" → a priced shipping line appended to the items so it shows
   // in the table and matches the shipping already folded into the stored total.
   const shipping = await resolveShipping(id)
-  const printItems = [...((items || []) as FurnItem[])]
+  // Rejected review-flagged rows never reach the customer PDF (they stayed in
+  // the DB but were excluded from the quotation total too).
+  const flags = await getProjectItemFlags(id)
+  const printItems = ((items || []) as FurnItem[]).filter((it) => flags[it.id]?.status !== 'rejected')
   if (shipping > 0) {
     printItems.push({
       id: 'shipping',

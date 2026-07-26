@@ -14,6 +14,7 @@ import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { verifyOrigin } from '@/lib/csrf'
+import { getProjectItemFlags } from '@/lib/furn/item-flags'
 
 const VAT_RATE = 0.15
 
@@ -40,7 +41,16 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     return NextResponse.json({ error: 'No items to quote' }, { status: 400 })
   }
 
-  const unpriced = items.filter(it => it.unit_price === null || it.unit_price === undefined)
+  // Rejected flagged rows leave the quotation entirely — they're not priced,
+  // not counted, and don't block the "all priced" gate. (They stay in the DB so
+  // the row is never lost; the flag just excludes it here.)
+  const flags = await getProjectItemFlags(id)
+  const activeItems = items.filter((it) => flags[it.id]?.status !== 'rejected')
+  if (activeItems.length === 0) {
+    return NextResponse.json({ error: 'كل البنود مرفوضة — لا يوجد ما يُسعَّر' }, { status: 400 })
+  }
+
+  const unpriced = activeItems.filter(it => it.unit_price === null || it.unit_price === undefined)
   if (unpriced.length > 0) {
     return NextResponse.json({
       error: `${unpriced.length} item(s) have no price set yet`,
@@ -48,7 +58,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     }, { status: 400 })
   }
 
-  const subtotal = items.reduce((s, it) => s + Number(it.quantity || 0) * Number(it.unit_price || 0), 0)
+  const subtotal = activeItems.reduce((s, it) => s + Number(it.quantity || 0) * Number(it.unit_price || 0), 0)
   const vatAmount = subtotal * VAT_RATE
   const total = subtotal + vatAmount
 

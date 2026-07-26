@@ -86,6 +86,38 @@ export function FurnDetail({ project: initialProject, initialItems, initialQuota
       .catch(() => {})
   }, [initialProject.id])
 
+  // Review flags — the router flags doubtful/duplicate rows; the team approves
+  // or rejects each here (nothing is ever auto-dropped).
+  interface ReviewFlag { reason: string; red: boolean; status: 'pending' | 'approved' | 'rejected' }
+  const [itemFlags, setItemFlags] = useState<Record<string, ReviewFlag>>({})
+  async function loadItemFlags() {
+    try {
+      const res = await fetch(`/api/furn/projects/${initialProject.id}/flags`)
+      if (res.ok) { const j = await res.json(); setItemFlags(j.flags || {}) }
+    } catch { /* ignore */ }
+  }
+  useEffect(() => {
+    fetch(`/api/furn/projects/${initialProject.id}/flags`)
+      .then(r => (r.ok ? r.json() : null))
+      .then(j => { if (j?.flags) setItemFlags(j.flags) })
+      .catch(() => {})
+  }, [initialProject.id])
+
+  async function setFlagStatus(itemId: string, status: 'approved' | 'rejected') {
+    const prev = itemFlags[itemId]
+    setItemFlags((m) => ({ ...m, [itemId]: { ...m[itemId], status } }))
+    try {
+      const res = await fetch(`/api/furn/projects/${initialProject.id}/flags`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ itemId, status }),
+      })
+      if (!res.ok) throw new Error()
+    } catch {
+      setItemFlags((m) => ({ ...m, [itemId]: prev }))
+    }
+  }
+
   // Default tab — drop the user where the project actually is in the
   // pipeline so they don't have to re-discover it.
   const [tab, setTab] = useState<Tab>(
@@ -147,6 +179,7 @@ export function FurnDetail({ project: initialProject, initialItems, initialQuota
           } else {
             toast.success(`${(j.items || []).length} ${t('furn_items_extracted')}`)
             await loadItemSources()
+            await loadItemFlags()
             setTab('pricing')
           }
           return
@@ -454,8 +487,16 @@ export function FurnDetail({ project: initialProject, initialItems, initialQuota
                         // the pricer can't miss that it needs a manual fix
                         // before the line is real.
                         const needsReview = Number(it.quantity) === 0
+                        const flag = itemFlags[it.id]
+                        // Red = likely mistake / not our department (call the
+                        // customer). Amber = doubtful/duplicate/no-qty. Rejected
+                        // rows dim out but are never deleted.
+                        const rowClass =
+                          flag?.status === 'rejected' ? 'bg-gray-100 opacity-60'
+                          : flag && flag.status === 'pending' ? (flag.red ? 'bg-red-50' : 'bg-amber-50/70')
+                          : needsReview ? 'bg-amber-50/60' : undefined
                         return (
-                          <tr key={it.id} className={needsReview ? 'bg-amber-50/60' : undefined}>
+                          <tr key={it.id} className={rowClass}>
                             <td className="px-3 py-2 text-muted-foreground">{idx + 1}</td>
                             {/* Description cell — short title on top in the
                                 normal table font, longer details under it in
@@ -479,6 +520,26 @@ export function FurnDetail({ project: initialProject, initialItems, initialQuota
                               />
                               {itemSources[it.id] && (
                                 <p className="text-[11px] text-muted-foreground/80 mt-1" title={isRtl ? 'المصدر (داخلي)' : 'Source (internal)'}>📄 {itemSources[it.id]}</p>
+                              )}
+                              {flag && (
+                                <div className={`mt-1 rounded-md border p-1.5 text-[11px] ${flag.red ? 'border-red-300 bg-red-50 text-red-800' : 'border-amber-300 bg-amber-50 text-amber-900'}`}>
+                                  <div className="flex items-start gap-1">
+                                    <span>⚠️</span>
+                                    <span className="flex-1">{flag.reason}{flag.red ? (isRtl ? ' — راجع مع العميل' : ' — check with customer') : ''}</span>
+                                  </div>
+                                  {canEditPrices && (
+                                    <div className="flex items-center gap-1.5 mt-1">
+                                      <button type="button" onClick={() => setFlagStatus(it.id, 'approved')}
+                                        className={`px-2 py-0.5 rounded border ${flag.status === 'approved' ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white hover:bg-emerald-50 border-emerald-300 text-emerald-700'}`}>
+                                        {flag.status === 'approved' ? (isRtl ? '✓ معتمد' : '✓ approved') : (isRtl ? 'اعتماد' : 'approve')}
+                                      </button>
+                                      <button type="button" onClick={() => setFlagStatus(it.id, 'rejected')}
+                                        className={`px-2 py-0.5 rounded border ${flag.status === 'rejected' ? 'bg-red-600 text-white border-red-600' : 'bg-white hover:bg-red-50 border-red-300 text-red-700'}`}>
+                                        {flag.status === 'rejected' ? (isRtl ? '✗ مرفوض' : '✗ rejected') : (isRtl ? 'رفض' : 'reject')}
+                                      </button>
+                                    </div>
+                                  )}
+                                </div>
                               )}
                             </td>
                             <td className="px-3 py-2">

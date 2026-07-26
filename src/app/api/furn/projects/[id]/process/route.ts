@@ -21,6 +21,7 @@ import { verifyOrigin } from '@/lib/csrf'
 import { getProfileOrFallback, getEffectivePermissions } from '@/lib/profile'
 import { hasPermission } from '@/lib/permissions'
 import { setProjectItemSources } from '@/lib/furn/item-sources'
+import { setProjectItemFlags, type ItemFlag } from '@/lib/furn/item-flags'
 import { guardItem, guardDepartmentAnchor } from '@/lib/boq/department-guard'
 import { friendlyAiError } from '@/lib/ai/friendly-error'
 import { runBoqRouter, type RouterInput, type RouterResult } from '@/lib/boq/router/pipeline'
@@ -166,6 +167,8 @@ async function runProcessJob(
     // Audit sources kept in a separate S3 map (keyed by new item id) so they
     // stay out of the editable `details` field and the customer PDF.
     const sourceMap: Record<string, string> = {}
+    // Review flags (keyed by new item id) — approve/reject workflow.
+    const flagsMap: Record<string, ItemFlag> = {}
 
     // The guard NO LONGER DROPS. The owner's rule: never lose a requested line —
     // instead flag the doubtful ones (unclear material / look-alike / out of our
@@ -177,8 +180,10 @@ async function runProcessJob(
     const warned: Array<{ description: string; reason: string }> = []
     const extraDepartments = new Set<string>()
     const seenDesc = new Map<string, number>()
+    // Per-item review flag, aligned by index with flaggedItems (→ position idx+1).
+    const flagByIndex: Array<ItemFlag | null> = []
 
-    const flaggedItems = result.items.map((it) => {
+    const flaggedItems = result.items.map((it, idx) => {
       const text = `${it.description || ''} ${it.details || ''}`
       const verdict = guardItem(text, it.department_match, coveredNames)
       const problem = verdict.disqualified ? verdict : guardDepartmentAnchor(text, coveredNames)
@@ -190,20 +195,26 @@ async function runProcessJob(
       const isDuplicate = key.length > 0 && dupSeen > 0
 
       const marks: string[] = []
+      // RED = a likely upload mistake / not one of our departments (the model or
+      // guard could name a real other department). The team should call the
+      // customer. Ambiguous-but-maybe-ours and duplicates are amber, not red.
+      let red = false
       if (problem.disqualified) {
-        if (problem.realDepartment) extraDepartments.add(problem.realDepartment)
+        if (problem.realDepartment) { extraDepartments.add(problem.realDepartment); red = true }
         marks.push(problem.reason || 'مادة غير مؤكدة')
       }
       if (isDuplicate) marks.push('مكرر محتمل — راجعه')
 
-      if (marks.length === 0) return it
+      if (marks.length === 0) { flagByIndex[idx] = null; return it }
 
-      warned.push({ description: it.description, reason: marks.join(' • ') })
-      // Prepend a visible warning to details (until the dedicated approve/reject
-      // column ships) and cap confidence so it sorts/reads as "needs a human".
+      const reason = marks.join(' • ')
+      flagByIndex[idx] = { reason, red, status: 'pending' }
+      warned.push({ description: it.description, reason })
+      // Prepend a visible warning to details AND cap confidence so it reads as
+      // "needs a human" even before the review column renders.
       return {
         ...it,
-        details: `⚠️ يحتاج اعتماد: ${marks.join(' • ')}${it.details ? `\n${it.details}` : ''}`,
+        details: `⚠️ يحتاج اعتماد: ${reason}${it.details ? `\n${it.details}` : ''}`,
         ai_confidence: Math.min(it.ai_confidence ?? 0.5, 0.35),
       }
     })
@@ -239,13 +250,17 @@ async function runProcessJob(
       if (insErr) throw new Error(`Failed to persist items: ${insErr.message}`)
 
       const sourceByPos = new Map(flaggedItems.map((it, idx) => [idx + 1, it.source || '']))
+      const flagByPos = new Map(flagByIndex.map((f, idx) => [idx + 1, f]))
       for (const r of inserted || []) {
         const s = sourceByPos.get(r.position as number)
         if (s) sourceMap[r.id as string] = s
+        const f = flagByPos.get(r.position as number)
+        if (f) flagsMap[r.id as string] = f
       }
     }
 
     await setProjectItemSources(id, sourceMap)
+    await setProjectItemFlags(id, flagsMap)
 
     // Nothing is dropped now — surface the count that needs a human eye instead.
     const warnNote = warned.length > 0
