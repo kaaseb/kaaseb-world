@@ -81,8 +81,8 @@ const PHASE1_SCHEMA: JsonSchema = {
         additionalProperties: false,
         required: ['description', 'details', 'quantity', 'quantity_stated', 'unit', 'department_match', 'reference_hint', 'ai_confidence'],
         properties: {
-          description: { type: 'string', description: 'SHORT catalog-style title, 3-8 words. No dimensions/finishes here.' },
-          details: { type: 'string', description: 'LONG line: finish, thickness, color, dimensions — ONLY what this BOQ row itself states. Empty string if nothing.' },
+          description: { type: 'string', description: 'SHORT catalog-style title, 3-8 words. No dimensions/finishes here. If the row is identified by a CODE (e.g. MA-003, K-RL21B), the title is the CODE itself, not the stone name.' },
+          details: { type: 'string', description: 'ONE line, in THIS ORDER, only what the row states (omit any part not stated): thickness – finish/treatment – size – type – colour. Empty string if nothing.' },
           quantity: { type: 'number', description: 'The quantity AS WRITTEN IN THIS BOQ ROW. 0 when the row states none. NEVER invent — the attachments are read in a later phase, not by you.' },
           quantity_stated: { type: 'boolean', description: 'true only when this BOQ row itself contains the quantity number.' },
           unit: { type: 'string', description: 'Normalize to {m, m2, m3, pcs, kg, ton, set, lot, lm}.' },
@@ -137,10 +137,10 @@ Dropped rows: record their real department in detected_departments[] (e.g. "Conc
 
 RULES:
 1. Items array = covered-department rows only. detected_departments = every department seen, covered and not, deduplicated, canonical English.
-1b. POSITIVE MATERIAL REQUIRED. A row goes into items[] ONLY if its own text ties it to a covered stone — it names a covered material (marble/granite/limestone/quartz or a covered department) OR is unmistakably a natural-stone product. A row described only by FUNCTION or LOCATION with no stone material — "Staff dining vanity counter", "reception desk", "external rainscreen cladding", "stone panel" with just dimensions — is NOT a covered item: LEAVE IT OUT. Do not guess a department for it. When unsure, EXCLUDE it and record its section in detected_departments. (A deterministic gate drops these anyway — don't waste a row on them.)
+1b. NEVER DROP A REQUESTED LINE. Include EVERY BOQ line in items[] — never silently omit anything the customer asked for (a missing line is the worst failure). If a row's material is unclear, or it looks like a manufactured look-alike (concrete / GRC / porcelain / terrazzo / engineered quartz…), STILL include it and be honest in details about what's uncertain — a deterministic gate marks doubtful rows "needs review" for the team to approve or reject. The ONLY thing forbidden is INVENTING a material/finish/size that the row doesn't state. When a row clearly isn't ours, include it AND record its real department in detected_departments.
 2. Ranges: "150-200" → 200. "approx 200" → 200.
 3. Units normalized to {m, m2, m3, pcs, kg, ton, set, lot, lm}.
-4. description SHORT (3-8 words); details LONG (finish/thickness/color/dims from THIS row only). The team's notes column is not yours.
+4. description = SHORT catalog title (3-8 words) — or the CODE if the row is identified by one (MA-003…). details = one line in THIS ORDER, only what's stated: السماكة – نوع المعالجة/الفنش – المقاس – النوع – اللون (thickness – finish – size – type – colour). Omit any part the row doesn't state. The team's notes column is not yours.
 5. Merge rows only when descriptions are identical after normalization.
 6. JSON only.
 

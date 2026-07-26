@@ -167,36 +167,49 @@ async function runProcessJob(
     // stay out of the editable `details` field and the customer PDF.
     const sourceMap: Record<string, string> = {}
 
-    // LAST LINE OF DEFENCE before a manufactured look-alike reaches the pricing
-    // table and then a customer PDF as stone. The prompt already forbids these
-    // and the model answers `department_match` — but a prompt rule can drift;
-    // this gate is deterministic and cannot be talked out of it.
+    // The guard NO LONGER DROPS. The owner's rule: never lose a requested line —
+    // instead flag the doubtful ones (unclear material / look-alike / out of our
+    // departments / a likely upload mistake / a duplicate) with a ⚠️ marker the
+    // team reviews and approves or rejects. A dropped row was a real bug: it made
+    // quotations silently miss items the customer asked for. So we KEEP every row
+    // and mark the suspect ones loudly.
     const coveredNames = coveredDepartments.flatMap((d) => [d.name_en, d.name_ar]).filter(Boolean)
-    const rejected: Array<{ description: string; reason: string }> = []
+    const warned: Array<{ description: string; reason: string }> = []
     const extraDepartments = new Set<string>()
+    const seenDesc = new Map<string, number>()
 
-    const keptItems = result.items.filter((it) => {
+    const flaggedItems = result.items.map((it) => {
       const text = `${it.description || ''} ${it.details || ''}`
-      // Gate 1+2: manufactured look-alikes / explicitly-uncovered departments.
       const verdict = guardItem(text, it.department_match, coveredNames)
-      if (verdict.disqualified) {
-        rejected.push({ description: it.description, reason: verdict.reason || '' })
-        if (verdict.realDepartment) extraDepartments.add(verdict.realDepartment)
-        return false
+      const problem = verdict.disqualified ? verdict : guardDepartmentAnchor(text, coveredNames)
+
+      // Duplicate: same description already seen this run → flag the repeat.
+      const key = (it.description || '').trim().toLowerCase().replace(/\s+/g, ' ')
+      const dupSeen = seenDesc.get(key) || 0
+      seenDesc.set(key, dupSeen + 1)
+      const isDuplicate = key.length > 0 && dupSeen > 0
+
+      const marks: string[] = []
+      if (problem.disqualified) {
+        if (problem.realDepartment) extraDepartments.add(problem.realDepartment)
+        marks.push(problem.reason || 'مادة غير مؤكدة')
       }
-      // Gate 3: positive anchor — the row must NAME a covered material, else it's
-      // an ambiguous non-stone line (a bare "vanity counter") the model only kept
-      // because department_match is required. Drop it; don't price it as stone.
-      const anchor = guardDepartmentAnchor(text, coveredNames)
-      if (anchor.disqualified) {
-        rejected.push({ description: it.description, reason: anchor.reason || '' })
-        return false
+      if (isDuplicate) marks.push('مكرر محتمل — راجعه')
+
+      if (marks.length === 0) return it
+
+      warned.push({ description: it.description, reason: marks.join(' • ') })
+      // Prepend a visible warning to details (until the dedicated approve/reject
+      // column ships) and cap confidence so it sorts/reads as "needs a human".
+      return {
+        ...it,
+        details: `⚠️ يحتاج اعتماد: ${marks.join(' • ')}${it.details ? `\n${it.details}` : ''}`,
+        ai_confidence: Math.min(it.ai_confidence ?? 0.5, 0.35),
       }
-      return true
     })
-    if (rejected.length > 0) {
-      console.log(`[furn] guard dropped ${rejected.length} non-stone item(s) from project ${id}:`)
-      for (const r of rejected) console.log(`  • "${r.description}" — ${r.reason}`)
+    if (warned.length > 0) {
+      console.log(`[furn] flagged ${warned.length} item(s) for review in project ${id}:`)
+      for (const r of warned) console.log(`  • "${r.description}" — ${r.reason}`)
     }
 
     // Case-insensitive union — never emit both "Marble" and "marble".
@@ -209,8 +222,8 @@ async function runProcessJob(
       ).values(),
     )
 
-    if (keptItems.length > 0) {
-      const rows = keptItems.map((it, idx) => ({
+    if (flaggedItems.length > 0) {
+      const rows = flaggedItems.map((it, idx) => ({
         project_id: id,
         position: idx + 1,
         description: it.description,
@@ -225,7 +238,7 @@ async function runProcessJob(
         .from('furn_items').insert(rows).select('id, position')
       if (insErr) throw new Error(`Failed to persist items: ${insErr.message}`)
 
-      const sourceByPos = new Map(keptItems.map((it, idx) => [idx + 1, it.source || '']))
+      const sourceByPos = new Map(flaggedItems.map((it, idx) => [idx + 1, it.source || '']))
       for (const r of inserted || []) {
         const s = sourceByPos.get(r.position as number)
         if (s) sourceMap[r.id as string] = s
@@ -234,15 +247,14 @@ async function runProcessJob(
 
     await setProjectItemSources(id, sourceMap)
 
-    // Tell the team, plainly, what the guard dropped — so a strict drop never
-    // reads as silent data loss. They can re-add a real row with "Item +".
-    const dropNote = rejected.length > 0
-      ? `تنبيه: أُسقط ${rejected.length} بند لا يذكر مادة من أقسامك المغطّاة (مبهم أو خارج النطاق) — راجعها وأضِفها يدوياً بزر «Item +» إن كانت ضمن نطاقك.`
+    // Nothing is dropped now — surface the count that needs a human eye instead.
+    const warnNote = warned.length > 0
+      ? `⚠️ ${warned.length} بند يحتاج مراجعة/اعتماد (مادة غير مؤكدة أو خارج النطاق أو مكرر) — مُعلّمة بـ«يحتاج اعتماد» في الجدول.`
       : null
 
     await supabase.from('furn_projects').update({
       subject: result.subject,
-      ai_summary: [dropNote, result.notes].filter(Boolean).join('\n'),
+      ai_summary: [warnNote, result.notes].filter(Boolean).join('\n'),
       ai_detected_departments: departmentsOut,
       ai_error: null,
       stage: 'pricing',
@@ -251,7 +263,7 @@ async function runProcessJob(
     }).eq('id', id)
 
     console.log(
-      `[furn] router done for ${id}: ${keptItems.length} items, ` +
+      `[furn] router done for ${id}: ${flaggedItems.length} items (${warned.length} flagged), ` +
       `${result.coverage.rowsResolved} resolved, ${result.coverage.rowsConflict} conflicts, ` +
       `${result.coverage.pagesRead} pages read (${result.coverage.visualReads} visual), ` +
       `index ${result.coverage.filesIndexed}/${result.coverage.filesTotal} (cache ${result.coverage.filesFromCache})`,
