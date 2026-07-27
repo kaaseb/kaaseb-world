@@ -105,6 +105,31 @@ export function FurnNewForm() {
     boq: [], spec: [], drawing: [], other: [],
   })
 
+  // Import a file from a public cloud link (WeTransfer/GoFile/Drive/Dropbox…).
+  const [linkUrl, setLinkUrl] = useState('')
+  const [linkBusy, setLinkBusy] = useState(false)
+  async function importLink() {
+    const u = linkUrl.trim()
+    if (!u || linkBusy) return
+    setLinkBusy(true)
+    try {
+      const res = await fetch('/api/fetch-link', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: u, kind: 'furn' }),
+      })
+      const j = await res.json().catch(() => ({}))
+      if (!res.ok || !j.url) { toast.error(j.error || 'تعذّر جلب الملف', { duration: 12000 }); return }
+      // Lands in "drawings" by default; the bucket's "move to" re-files it.
+      setDrawingFiles(prev => [...prev, { url: j.url, name: j.name, size: j.bytes || 0 }])
+      setLinkUrl('')
+      toast.success(`تم جلب: ${j.name}`)
+    } catch {
+      toast.error('تعذّر جلب الملف')
+    } finally {
+      setLinkBusy(false)
+    }
+  }
+
   // Client-project picker state.
   const [clientProjects, setClientProjects] = useState<ClientProject[] | null>(null)
   const [pickerOpen, setPickerOpen] = useState(false)
@@ -397,6 +422,24 @@ export function FurnNewForm() {
               setEn={setSpecialConditionsEn} setAr={setSpecialConditionsAr}
               isLong
             />
+          </CardContent>
+        </Card>
+
+        {/* Import a file from a public cloud link. Direct links only — a
+            login/OTP-gated page can't be pulled; download + upload those. */}
+        <Card className="border-0 shadow-sm">
+          <CardContent className="py-3 flex flex-col sm:flex-row sm:items-center gap-2">
+            <div className="text-sm font-medium flex-shrink-0">استيراد من رابط</div>
+            <Input
+              dir="ltr" value={linkUrl} onChange={e => setLinkUrl(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); importLink() } }}
+              placeholder="https://we.tl/…  ·  drive.google.com/…  ·  dropbox.com/…"
+              className="flex-1"
+            />
+            <Button type="button" onClick={importLink} disabled={linkBusy || !linkUrl.trim()} variant="outline" className="gap-2">
+              {linkBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+              جلب
+            </Button>
           </CardContent>
         </Card>
 
