@@ -6,6 +6,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { notFound, redirect } from 'next/navigation'
 import { QuotationPrint } from '@/components/furn/QuotationPrint'
+import { getProjectItemImages } from '@/lib/tannoor/item-images'
 import type {
   FurnProject, FurnItem, FurnQuotation, FurnSettings,
   TannoorProject, TannoorItem, TannoorQuotation,
@@ -34,6 +35,9 @@ export default async function TannoorPrintPage({
     supabase.from('furn_settings').select('*').eq('id', 1).maybeSingle(),
   ])
   if (!project || !quotation || !settings) notFound()
+
+  // Optional per-line thumbnails live in S3 (no DB column), keyed by item id.
+  const itemImages = await getProjectItemImages(id)
 
   const tProject = project as TannoorProject
   const tQuote = quotation as TannoorQuotation
@@ -83,11 +87,12 @@ export default async function TannoorPrintPage({
     created_at: tProject.created_at,
     updated_at: tProject.updated_at,
   }
-  const itemsShim: FurnItem[] = tItems.map((it, idx) => ({
+  const itemsShim: Array<FurnItem & { imageUrl?: string | null }> = tItems.map((it, idx) => ({
     id: it.id,
     project_id: it.project_id,
     position: it.position || idx + 1,
     description: it.description,
+    imageUrl: itemImages[it.id] || null,
     // Tannoor items have no long descriptive line (that's a Furn-only field);
     // null renders nothing under the title in the shared print component.
     details: null,

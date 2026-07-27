@@ -9,8 +9,10 @@ import { toast } from 'sonner'
 import {
   ArrowLeft, ArrowRight, Cookie, Loader2, Sparkles, AlertTriangle,
   FileSpreadsheet, FileText as FileTextIcon, FileDown, Globe2, CheckCircle2, RefreshCw, Save,
+  ImagePlus, X,
 } from 'lucide-react'
 import { useLanguage } from '@/contexts/LanguageContext'
+import { uploadFile } from '@/lib/upload-client'
 import type { TannoorProject, TannoorItem, TannoorQuotation, TannoorAvailability } from '@/types'
 
 type ItemWithProduct = TannoorItem & {
@@ -56,6 +58,9 @@ export function TannoorDetail({ project: initialProject, initialItems, initialQu
   const [currency, setCurrency] = useState<'SAR' | 'USD'>('SAR')
   // Audit "source" per item (where the quantity came from) — internal only.
   const [sources, setSources] = useState<Record<string, string>>({})
+  // Optional per-line thumbnail (itemId → S3 url) — shows on the PDF.
+  const [images, setImages] = useState<Record<string, string>>({})
+  const [uploadingImgId, setUploadingImgId] = useState<string | null>(null)
 
   const ChevronStart = isRtl ? ArrowRight : ArrowLeft
 
@@ -65,12 +70,47 @@ export function TannoorDetail({ project: initialProject, initialItems, initialQu
       if (res.ok) { const j = await res.json(); setSources(j.sources || {}) }
     } catch { /* ignore */ }
   }
+  async function loadImages() {
+    try {
+      const res = await fetch(`/api/tannoor/projects/${initialProject.id}/item-images`)
+      if (res.ok) { const j = await res.json(); setImages(j.images || {}) }
+    } catch { /* ignore */ }
+  }
   useEffect(() => {
     fetch(`/api/tannoor/projects/${initialProject.id}/sources`)
       .then(r => (r.ok ? r.json() : null))
       .then(j => { if (j?.sources) setSources(j.sources) })
       .catch(() => {})
+    fetch(`/api/tannoor/projects/${initialProject.id}/item-images`)
+      .then(r => (r.ok ? r.json() : null))
+      .then(j => { if (j?.images) setImages(j.images) })
+      .catch(() => {})
   }, [initialProject.id])
+
+  async function uploadItemImage(itemId: string, file: File) {
+    setUploadingImgId(itemId)
+    try {
+      const up = await uploadFile(file, 'tannoor_products')
+      const res = await fetch(`/api/tannoor/projects/${project.id}/item-images`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ itemId, url: up.url }),
+      })
+      if (!res.ok) { const j = await res.json().catch(() => ({})); toast.error(j.error || 'فشل حفظ الصورة'); return }
+      setImages(prev => ({ ...prev, [itemId]: up.url }))
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'فشل رفع الصورة')
+    } finally {
+      setUploadingImgId(null)
+    }
+  }
+  async function removeItemImage(itemId: string) {
+    const res = await fetch(`/api/tannoor/projects/${project.id}/item-images`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ itemId, url: null }),
+    })
+    if (res.ok) setImages(prev => { const n = { ...prev }; delete n[itemId]; return n })
+    else toast.error('فشل حذف الصورة')
+  }
 
   async function refreshProject() {
     const res = await fetch(`/api/tannoor/projects/${project.id}`)
@@ -80,6 +120,7 @@ export function TannoorDetail({ project: initialProject, initialItems, initialQu
     setItems(j.items || [])
     setQuotations(j.quotations || [])
     loadSources()
+    loadImages()
   }
 
   async function runProcess() {
@@ -316,6 +357,28 @@ export function TannoorDetail({ project: initialProject, initialItems, initialQu
                           {it.description}
                           {sources[it.id] && (
                             <div className="text-xs text-muted-foreground mt-0.5" title={isRtl ? 'المصدر (داخلي)' : 'Source (internal)'}>📄 {sources[it.id]}</div>
+                          )}
+                          {canExport && (
+                            <div className="mt-1 flex items-center gap-1.5">
+                              <label className="w-10 h-10 rounded-md border bg-muted/40 flex items-center justify-center cursor-pointer overflow-hidden hover:bg-muted/60 shrink-0" title={isRtl ? 'صورة اختيارية للعرض' : 'Optional quotation image'}>
+                                {uploadingImgId === it.id ? (
+                                  <Loader2 className="w-4 h-4 animate-spin" />
+                                ) : images[it.id] ? (
+                                  // eslint-disable-next-line @next/next/no-img-element
+                                  <img src={images[it.id]} alt="" className="w-full h-full object-cover" />
+                                ) : (
+                                  <ImagePlus className="w-4 h-4 text-muted-foreground" />
+                                )}
+                                <input type="file" accept="image/*" className="hidden"
+                                  onChange={e => { const f = e.target.files?.[0]; if (f) uploadItemImage(it.id, f); e.target.value = '' }} />
+                              </label>
+                              {images[it.id] && (
+                                <button type="button" onClick={() => removeItemImage(it.id)}
+                                  className="text-muted-foreground hover:text-red-600" title={isRtl ? 'حذف الصورة' : 'Remove image'}>
+                                  <X className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                            </div>
                           )}
                         </td>
                         <td className="px-3 py-2 text-xs">

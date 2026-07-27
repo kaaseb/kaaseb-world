@@ -21,9 +21,14 @@ import { useEffect } from 'react'
 import { Printer } from 'lucide-react'
 import type { FurnProject, FurnItem, FurnQuotation, FurnSettings } from '@/types'
 
+// A print row is a Furn/Tannoor item plus an OPTIONAL per-line thumbnail. The
+// property is optional, so callers passing plain FurnItem[] (Furn) stay valid
+// and simply render no image column.
+type PrintItem = FurnItem & { imageUrl?: string | null }
+
 interface Props {
   project: FurnProject
-  items: FurnItem[]
+  items: PrintItem[]
   quotation: FurnQuotation
   settings: FurnSettings
   // Resolved "delivery included / not included" sentence for this quotation's
@@ -219,6 +224,9 @@ export function QuotationPrint({ project, items, quotation, settings, deliveryNo
   // note. The AI fills `notes` for rows where finish/thickness/color
   // matters; empty rows shouldn't take up a column of whitespace.
   const showNotes = items.some(it => !!(it.notes && it.notes.trim()))
+  // Optional image column — only appears when at least one line carries a photo,
+  // so quotations without images keep their exact current layout.
+  const showImages = items.some(it => !!it.imageUrl)
 
   return (
     <>
@@ -272,6 +280,7 @@ export function QuotationPrint({ project, items, quotation, settings, deliveryNo
           <thead>
             <tr>
               <th className="col-pos">{S.col_pos}</th>
+              {showImages && <th className="col-img"></th>}
               <th className="col-desc">{S.col_desc}</th>
               <th className="col-qty">{S.col_qty}</th>
               <th className="col-unit">{S.col_unit}</th>
@@ -287,6 +296,12 @@ export function QuotationPrint({ project, items, quotation, settings, deliveryNo
               return (
                 <tr key={it.id}>
                   <td className="col-pos">{idx + 1}</td>
+                  {showImages && (
+                    <td className="col-img">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      {it.imageUrl ? <img src={it.imageUrl} alt="" className="item-img" /> : null}
+                    </td>
+                  )}
                   {/* Description cell prints the short item title at the
                       normal cell font with the long `details` line below in
                       a smaller muted style. `notes` keeps its own column on
@@ -578,6 +593,16 @@ export function QuotationPrint({ project, items, quotation, settings, deliveryNo
           background: var(--q-soft-hi);
         }
         .col-pos { width: 26px; text-align: center; font-weight: 600; color: var(--q-olive); }
+        .col-img { width: 50px; text-align: center; }
+        .item-img {
+          width: 44px;
+          height: 44px;
+          object-fit: cover;
+          border-radius: 3px;
+          border: 1px solid var(--q-line);
+          display: inline-block;
+          vertical-align: middle;
+        }
         .col-desc { text-align: start; min-width: 180px; }
         /* The title is the catalog item; details are the long descriptive
            line the AI extracted. Kept on its own line in a smaller muted
