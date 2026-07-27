@@ -11,7 +11,7 @@
 // scrolling, and the act of sending the quotation is a single deliberate
 // click (no more two-button "Download AR / Download EN" dance).
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, Fragment } from 'react'
 import Link from 'next/link'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -113,16 +113,18 @@ export function FurnDetail({ project: initialProject, initialItems, initialQuota
   // or rejects each here (nothing is ever auto-dropped).
   interface ReviewFlag { reason: string; red: boolean; status: 'pending' | 'approved' | 'rejected' }
   const [itemFlags, setItemFlags] = useState<Record<string, ReviewFlag>>({})
+  // Section (Excel sheet) per item — grouped as headers on the pricing screen.
+  const [itemSections, setItemSections] = useState<Record<string, string>>({})
   async function loadItemFlags() {
     try {
       const res = await fetch(`/api/furn/projects/${initialProject.id}/flags`)
-      if (res.ok) { const j = await res.json(); setItemFlags(j.flags || {}) }
+      if (res.ok) { const j = await res.json(); setItemFlags(j.flags || {}); setItemSections(j.sections || {}) }
     } catch { /* ignore */ }
   }
   useEffect(() => {
     fetch(`/api/furn/projects/${initialProject.id}/flags`)
       .then(r => (r.ok ? r.json() : null))
-      .then(j => { if (j?.flags) setItemFlags(j.flags) })
+      .then(j => { if (j?.flags) setItemFlags(j.flags); if (j?.sections) setItemSections(j.sections) })
       .catch(() => {})
   }, [initialProject.id])
 
@@ -511,6 +513,10 @@ export function FurnDetail({ project: initialProject, initialItems, initialQuota
                         // before the line is real.
                         const needsReview = Number(it.quantity) === 0
                         const flag = itemFlags[it.id]
+                        // Section header: render once when the sheet changes.
+                        const sec = itemSections[it.id] || ''
+                        const prevSec = idx > 0 ? (itemSections[items[idx - 1].id] || '') : ''
+                        const showSection = sec && sec !== prevSec
                         // Red = likely mistake / not our department (call the
                         // customer). Amber = doubtful/duplicate/no-qty. Rejected
                         // rows dim out but are never deleted.
@@ -519,7 +525,13 @@ export function FurnDetail({ project: initialProject, initialItems, initialQuota
                           : flag && flag.status === 'pending' ? (flag.red ? 'bg-red-50' : 'bg-amber-50/70')
                           : needsReview ? 'bg-amber-50/60' : undefined
                         return (
-                          <tr key={it.id} className={rowClass}>
+                          <Fragment key={it.id}>
+                          {showSection && (
+                            <tr className="bg-gray-100/80">
+                              <td colSpan={8} className="px-3 py-1.5 text-xs font-bold text-gray-700">📑 {sec}</td>
+                            </tr>
+                          )}
+                          <tr className={rowClass}>
                             <td className="px-3 py-2 text-muted-foreground">{idx + 1}</td>
                             {/* Description cell — short title on top in the
                                 normal table font, longer details under it in
@@ -611,6 +623,7 @@ export function FurnDetail({ project: initialProject, initialItems, initialQuota
                               )}
                             </td>
                           </tr>
+                          </Fragment>
                         )
                       })}
                     </tbody>

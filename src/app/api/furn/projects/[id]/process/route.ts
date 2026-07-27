@@ -21,6 +21,7 @@ import { verifyOrigin } from '@/lib/csrf'
 import { getProfileOrFallback, getEffectivePermissions } from '@/lib/profile'
 import { hasPermission } from '@/lib/permissions'
 import { setProjectItemSources } from '@/lib/furn/item-sources'
+import { setProjectItemSections } from '@/lib/furn/item-sections'
 import { setProjectItemFlags, type ItemFlag } from '@/lib/furn/item-flags'
 import { guardItem, guardDepartmentAnchor } from '@/lib/boq/department-guard'
 import { friendlyAiError } from '@/lib/ai/friendly-error'
@@ -177,6 +178,8 @@ async function runProcessJob(
     const sourceMap: Record<string, string> = {}
     // Review flags (keyed by new item id) — approve/reject workflow.
     const flagsMap: Record<string, ItemFlag> = {}
+    // Section heading per item (Excel sheet) — pricing-screen grouping only.
+    const sectionMap: Record<string, string> = {}
 
     // The guard NO LONGER DROPS. The owner's rule: never lose a requested line —
     // instead flag the doubtful ones (unclear material / look-alike / out of our
@@ -259,16 +262,20 @@ async function runProcessJob(
 
       const sourceByPos = new Map(flaggedItems.map((it, idx) => [idx + 1, it.source || '']))
       const flagByPos = new Map(flagByIndex.map((f, idx) => [idx + 1, f]))
+      const sectionByPos = new Map(flaggedItems.map((it, idx) => [idx + 1, it.section || '']))
       for (const r of inserted || []) {
         const s = sourceByPos.get(r.position as number)
         if (s) sourceMap[r.id as string] = s
         const f = flagByPos.get(r.position as number)
         if (f) flagsMap[r.id as string] = f
+        const sec = sectionByPos.get(r.position as number)
+        if (sec) sectionMap[r.id as string] = sec
       }
     }
 
     await setProjectItemSources(id, sourceMap)
     await setProjectItemFlags(id, flagsMap)
+    await setProjectItemSections(id, sectionMap)
 
     // Nothing is dropped now — surface the count that needs a human eye instead.
     const warnNote = warned.length > 0

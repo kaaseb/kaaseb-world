@@ -52,6 +52,10 @@ export interface BoqExtractedItem {
   // was searched. This is what makes every number verifiable, and is rendered
   // as the "Source" line on each item.
   source: string | null
+  // The BOQ sheet / section heading this row falls under (e.g. an Excel tab
+  // name). Shown as a group header on the PRICING screen only; the customer
+  // quotation lists the items flat, without these headers.
+  section?: string | null
 }
 
 export interface BoqAnalysisResult {

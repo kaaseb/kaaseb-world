@@ -86,10 +86,11 @@ const PHASE1_SCHEMA: JsonSchema = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['description', 'details', 'quantity', 'quantity_stated', 'unit', 'department_match', 'reference_hint', 'ai_confidence'],
+        required: ['description', 'details', 'section', 'quantity', 'quantity_stated', 'unit', 'department_match', 'reference_hint', 'ai_confidence'],
         properties: {
           description: { type: 'string', description: 'SHORT catalog-style title, 3-8 words. No dimensions/finishes here. If the row is identified by a CODE (e.g. MA-003, K-RL21B), the title is the CODE itself, not the stone name.' },
           details: { type: 'string', description: 'ONE line, in THIS ORDER, only what the row states (omit any part not stated): thickness – finish/treatment – size – type – colour. Empty string if nothing.' },
+          section: { type: 'string', description: 'The SHEET/section heading this row falls under — for a multi-sheet Excel it is the tab name (the "## Sheet: X" it appears beneath). Empty string if there is only one sheet / no heading.' },
           quantity: { type: 'number', description: 'The quantity AS WRITTEN IN THIS BOQ ROW. 0 when the row states none. NEVER invent — the attachments are read in a later phase, not by you.' },
           quantity_stated: { type: 'boolean', description: 'true only when this BOQ row itself contains the quantity number.' },
           unit: { type: 'string', description: 'Normalize to {m, m2, m3, pcs, kg, ton, set, lot, lm}.' },
@@ -109,6 +110,8 @@ interface RawPhase1 {
   items?: Array<Record<string, unknown>>
   notes?: unknown
 }
+
+// One item per Excel sheet becomes a section header on the pricing screen only.
 
 async function extractBoqRows(input: RouterInput): Promise<{
   subject: string
@@ -202,6 +205,7 @@ PROJECT: ${input.projectName} — ${input.companyName}`
         ? Math.max(0, Math.min(1, Number(it.ai_confidence)))
         : 0.5,
       referenceHint: String(it.reference_hint || '').trim().slice(0, 200),
+      section: String(it.section || '').trim().slice(0, 120) || null,
     }))
     .filter((r) => r.description)
     // Re-number after the filter so positions stay dense and stable.
@@ -533,6 +537,7 @@ export async function runBoqRouter(input: RouterInput): Promise<RouterResult> {
       department_match: row.department_match,
       ai_confidence: confidence,
       source,
+      section: row.section,
     }
   })
 

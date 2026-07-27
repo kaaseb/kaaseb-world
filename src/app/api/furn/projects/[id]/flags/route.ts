@@ -10,6 +10,7 @@ import { verifyOrigin } from '@/lib/csrf'
 import { getProfileOrFallback, getEffectivePermissions } from '@/lib/profile'
 import { hasPermission } from '@/lib/permissions'
 import { getProjectItemFlags, updateItemFlagStatus, type FlagStatus } from '@/lib/furn/item-flags'
+import { getProjectItemSections } from '@/lib/furn/item-sections'
 
 export const runtime = 'nodejs'
 
@@ -18,7 +19,8 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  return NextResponse.json({ flags: await getProjectItemFlags(id) })
+  const [flags, sections] = await Promise.all([getProjectItemFlags(id), getProjectItemSections(id)])
+  return NextResponse.json({ flags, sections })
 }
 
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {

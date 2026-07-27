@@ -98,6 +98,8 @@ export interface RouterRow {
   ai_confidence: number
   /** Free-text pointer from the BOQ row, e.g. "Sold.pdf ص40", "" if none. */
   referenceHint: string
+  /** The sheet/section heading this row came from (Excel tab name). */
+  section: string | null
 }
 
 export interface Candidate {
