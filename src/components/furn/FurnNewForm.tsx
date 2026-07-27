@@ -232,7 +232,9 @@ export function FurnNewForm() {
     // expected to be pulled from the client project on import, and the
     // server accepts placeholders so the project can still be saved when
     // the team imports a project that's only partly filled out.
-    if (!boqFile) {
+    // BOQ is optional now — a project can be drawings-only. Require at least
+    // ONE file overall so we never create an empty project with nothing to read.
+    if (!boqFile && specFiles.length === 0 && drawingFiles.length === 0 && otherFiles.length === 0) {
       toast.error(t('furn_form_boq_required'))
       return
     }
@@ -241,7 +243,7 @@ export function FurnNewForm() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        project_name: projectName.trim() || (boqFile.name || 'Untitled project'),
+        project_name: projectName.trim() || (boqFile?.name || 'Untitled project'),
         company_name: companyName.trim() || '—',
         engineer_name: engineerName,
         engineer_phone: engineerPhone,
@@ -262,8 +264,8 @@ export function FurnNewForm() {
         offer_duration_en: offerDurationEn,
         special_conditions_ar: specialConditionsAr,
         special_conditions_en: specialConditionsEn,
-        boq_url: boqFile.url,
-        boq_filename: boqFile.name,
+        boq_url: boqFile?.url ?? null,
+        boq_filename: boqFile?.name ?? null,
         spec_files: specFiles.map(f => ({ url: f.url, name: f.name })),
         drawing_files: drawingFiles.map(f => ({ url: f.url, name: f.name })),
         other_files: otherFiles.map(f => ({ url: f.url, name: f.name })),
@@ -401,7 +403,7 @@ export function FurnNewForm() {
         {/* Files — 4 buckets. Each row carries a "move to" dropdown so
             imported files can be re-categorized after the fact. */}
         <FileBucketCard
-          title={`${t('furn_form_boq')} *`}
+          title={t('furn_form_boq')}
           hint={t('furn_form_boq_hint')}
           icon={<FileSpreadsheet className="w-4 h-4 text-emerald-600" />}
           accept=".xlsx,.xls,.csv,.png,.jpg,.jpeg,.webp,.pdf"
@@ -460,7 +462,7 @@ export function FurnNewForm() {
           t={t}
         />
 
-        <Button type="submit" disabled={submitting || !boqFile} size="lg" className="w-full bg-orange-600 hover:bg-orange-700 text-white">
+        <Button type="submit" disabled={submitting || (!boqFile && specFiles.length === 0 && drawingFiles.length === 0 && otherFiles.length === 0)} size="lg" className="w-full bg-orange-600 hover:bg-orange-700 text-white">
           {submitting
             ? <><Loader2 className={`w-5 h-5 animate-spin ${isRtl ? 'ml-2' : 'mr-2'}`} />{t('furn_form_submitting')}</>
             : <>{t('furn_form_submit')} <ChevronEnd className={`w-5 h-5 ${isRtl ? 'mr-2' : 'ml-2'}`} /></>}

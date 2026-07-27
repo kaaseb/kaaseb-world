@@ -69,8 +69,8 @@ export async function POST(request: Request) {
     offer_duration_ar?: string
     special_conditions_en?: string
     special_conditions_ar?: string
-    boq_url?: string
-    boq_filename?: string
+    boq_url?: string | null
+    boq_filename?: string | null
     spec_files?: { url: string; name: string }[]
     drawing_files?: { url: string; name: string }[]
     other_files?: { url: string; name: string }[]
@@ -78,12 +78,14 @@ export async function POST(request: Request) {
   }
   try { body = await request.json() } catch { return NextResponse.json({ error: 'Bad JSON' }, { status: 400 }) }
 
-  // Only the BOQ is mandatory now — every other identifier (name, company,
-  // engineer, phone) is expected to come from the imported client project,
-  // and the form accepts placeholders so an unattached new project can
-  // still be saved.
-  if (!body.boq_url) {
-    return NextResponse.json({ error: 'BOQ file is required' }, { status: 400 })
+  // BOQ is OPTIONAL now — a project can be drawings-only. Require at least one
+  // file overall so we never store an empty project with nothing to process.
+  const anyFile = !!body.boq_url
+    || (Array.isArray(body.spec_files) && body.spec_files.length > 0)
+    || (Array.isArray(body.drawing_files) && body.drawing_files.length > 0)
+    || (Array.isArray(body.other_files) && body.other_files.length > 0)
+  if (!anyFile) {
+    return NextResponse.json({ error: 'ارفع ملف BOQ أو رسومات على الأقل' }, { status: 400 })
   }
   const projectName = (body.project_name || '').trim() || 'Untitled project'
   const companyName = (body.company_name || '').trim() || '—'
@@ -107,8 +109,8 @@ export async function POST(request: Request) {
     offer_duration_ar: body.offer_duration_ar?.trim() || null,
     special_conditions_en: body.special_conditions_en?.trim() || null,
     special_conditions_ar: body.special_conditions_ar?.trim() || null,
-    boq_url: body.boq_url,
-    boq_filename: body.boq_filename || 'BOQ',
+    boq_url: body.boq_url ?? null,
+    boq_filename: body.boq_url ? (body.boq_filename || 'BOQ') : null,
     // Raised from 20. AGENTS.md promises "a real project can ship 200+
     // attachments", and the team confirms it: a job can genuinely arrive as 200
     // PDFs. The old cap silently threw away 140 of them — no error, no warning,

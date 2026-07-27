@@ -37,7 +37,9 @@ const CONFLICT_TOLERANCE = 0.02
 
 export interface RouterInput {
   projectId: string
-  boqUrl: string
+  // Optional now: a project may arrive as drawings only. When absent, items are
+  // extracted from the drawings/specs instead of a BOQ table.
+  boqUrl: string | null
   boqFilename: string
   specFiles: { url: string; name: string }[]
   drawingFiles: { url: string; name: string }[]
@@ -46,6 +48,11 @@ export interface RouterInput {
   projectName: string
   companyName: string
 }
+
+// When there's no BOQ, how many drawing/spec files we feed the extractor. Capped
+// so a drawings-only run stays "خفيف" — vision over every one of 200 sheets is
+// exactly the token spike we avoid elsewhere.
+const DRAWINGS_FOR_EXTRACTION = 6
 
 export interface RouterCoverage {
   filesTotal: number
@@ -109,31 +116,48 @@ async function extractBoqRows(input: RouterInput): Promise<{
   rows: RouterRow[]
   notes: string | null
 }> {
-  const files = await fetchAiFiles(input.boqUrl, `BOQ: ${input.boqFilename}`)
-  if (files.length === 0) throw new Error('تعذّرت قراءة ملف الـBOQ')
+  const drawingsMode = !input.boqUrl
+  let files
+  if (input.boqUrl) {
+    files = await fetchAiFiles(input.boqUrl, `BOQ: ${input.boqFilename}`)
+  } else {
+    // No BOQ → extract the items from the drawings/specs themselves (capped).
+    const src = [...input.drawingFiles, ...input.specFiles, ...input.otherFiles].slice(0, DRAWINGS_FOR_EXTRACTION)
+    files = []
+    for (const f of src) {
+      try { files.push(...(await fetchAiFiles(f.url, `Drawing: ${f.name}`))) } catch { /* skip a bad file */ }
+    }
+  }
+  if (files.length === 0) throw new Error(drawingsMode ? 'لا توجد رسومات لاستخراج البنود' : 'تعذّرت قراءة ملف الـBOQ')
 
   const coveredList = input.coveredDepartments.map((d) => `- ${d.name_en} (${d.name_ar})`).join('\n')
+
+  // Drawings-only extraction needs a different opening — there's no table to
+  // read down; the model must FIND the stone elements in the drawings.
+  const sourceBrief = drawingsMode
+    ? `THERE IS NO BOQ TABLE. You are reading DRAWINGS / SPEC sheets (mostly images — read them visually). Identify EVERY distinct natural-stone element shown or specified: flooring, wall cladding, stairs (treads/risers), skirtings, copings, thresholds, sills, pavers, countertops, facades. For each, capture whatever the drawing states — dimensions, thickness, finish, colour, drawing/type code — and a quantity ONLY if a count/area is written (never measure geometry). One item per distinct element/type.`
+    : `You are reading a BOQ file (Excel/CSV, PDF table, scan, or a photograph of a paper BOQ — read images visually, every row, despite rotation/shadows/handwriting).`
 
   // The classification rules are the battle-tested ones from the single-call
   // engine (compound-name trap included). What changed: this phase sees the BOQ
   // ONLY, so it must never chase quantities — it records POINTERS instead, and
   // the router/reader phases resolve them against the real files.
-  const systemInstruction = `You are an expert quantity surveyor at Kaaseb — a Saudi marble & granite supplier. You are reading a BOQ file (Excel/CSV, PDF table, scan, or a photograph of a paper BOQ — read images visually, every row, despite rotation/shadows/handwriting).
+  const systemInstruction = `You are an expert quantity surveyor at Kaaseb — a Saudi marble & granite supplier. ${sourceBrief}
 
-YOU SEE THE BOQ ONLY. The project's other attachments (specs, drawings, schedules) are processed in a LATER phase by a different system. Therefore:
-- quantity = ONLY what this BOQ row itself states. If the row has no number, quantity=0 and quantity_stated=false. NEVER estimate or pull from memory.
-- reference_hint = ONLY a real, explicit pointer the row makes to another document, copied verbatim ("as per Sold.pdf p.40", "refer to drawing A-301", "حسب جدول التشطيبات ورقة 2"). If the row has no explicit pointer, leave it EMPTY — do not paraphrase the item into a search phrase; the next phase searches by the description itself. A wrong pointer sends the search to the wrong file.
-- Do NOT write "searched all attachments" — you searched nothing; that is not your job here.
+The project's OTHER attachments are indexed and read in a LATER phase by a different system. Therefore, in THIS phase:
+- quantity = ONLY what THIS source itself states/shows. If none, quantity=0 and quantity_stated=false. NEVER estimate, measure geometry, or pull from memory.
+- reference_hint = ONLY a real, explicit pointer to another document, copied verbatim ("as per Sold.pdf p.40", "refer to drawing A-301", "حسب جدول التشطيبات ورقة 2"). No explicit pointer → leave it EMPTY (the next phase searches by the description itself). A wrong pointer sends the search to the wrong file.
+- Do NOT write "searched all attachments" — that's not your job here.
 
 DEPARTMENT CLASSIFICATION — COMPOUND-NAME TRAP (a real production failure):
 "granite"/"marble" appearing in a description does NOT make the item granite or marble. The HEAD noun decides:
-  "Precast Concrete Granite Wall Cladding" → Precast Concrete → drop.
-  "GRC Panel with granite finish" → GRC → drop.
-  "Terrazzo Tile Marble Pattern" → Terrazzo → drop.
-  "Porcelain Granite-Effect Floor" → Porcelain → drop.
-Disqualifying keywords (item is NOT ours if any appears as the product): concrete, precast, cast stone, GRC, GFRC, GRG, agglomerate, terrazzo, engineered quartz, sintered, porcelain, ceramic, vinyl, HPL, laminate, composite, faux, artificial stone, simulated, look, effect.
+  "Precast Concrete Granite Wall Cladding" → Precast Concrete → NOT ours.
+  "GRC Panel with granite finish" → GRC → NOT ours.
+  "Terrazzo Tile Marble Pattern" → Terrazzo → NOT ours.
+  "Porcelain Granite-Effect Floor" → Porcelain → NOT ours.
+Disqualifying keywords (NOT ours if any is the product): concrete, precast, cast stone, GRC, GFRC, GRG, agglomerate, terrazzo, engineered quartz, sintered, porcelain, ceramic, vinyl, HPL, laminate, composite, faux, artificial stone, simulated, look, effect.
 BUT the stone may legitimately sit ON such a material: "Marble tile on concrete screed" IS marble — the concrete is the substrate. Judge the head noun.
-Dropped rows: record their real department in detected_departments[] (e.g. "Concrete", "Porcelain") so the admin can expand coverage.
+For a NOT-ours row: STILL include it (never silently omit), set its real department, and add that department to detected_departments[] — a deterministic gate marks it for the team to reject.
 
 RULES:
 1. Items array = covered-department rows only. detected_departments = every department seen, covered and not, deduplicated, canonical English.
@@ -154,7 +178,9 @@ PROJECT: ${input.projectName} — ${input.companyName}`
     provider.generateStructured<RawPhase1>({
       systemInstruction,
       files,
-      userText: 'Extract the BOQ rows now. Remember: quantities from THIS file only; pointers go into reference_hint. JSON only.',
+      userText: drawingsMode
+        ? 'Extract every distinct stone element from these drawings/specs now. Quantity only if written; put thickness/finish/size/colour into details; explicit pointers into reference_hint. JSON only.'
+        : 'Extract the BOQ rows now. Quantities from THIS file only; pointers go into reference_hint. JSON only.',
       schema: PHASE1_SCHEMA,
       schemaName: 'boq_rows',
       temperature: 0.1,

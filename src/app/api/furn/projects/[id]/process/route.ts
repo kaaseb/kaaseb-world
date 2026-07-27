@@ -61,7 +61,15 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   const { data: project, error: pErr } = await supabase
     .from('furn_projects').select('*').eq('id', id).single()
   if (pErr || !project) return NextResponse.json({ error: 'Project not found' }, { status: 404 })
-  if (!project.boq_url) return NextResponse.json({ error: 'No BOQ uploaded' }, { status: 400 })
+  // BOQ is optional now: a project may be drawings-only. Require SOMETHING to
+  // read, though — a BOQ, or at least one spec/drawing/other file.
+  const hasFiles = !!project.boq_url
+    || (Array.isArray(project.spec_files) && project.spec_files.length > 0)
+    || (Array.isArray(project.drawing_files) && project.drawing_files.length > 0)
+    || (Array.isArray(project.other_files) && project.other_files.length > 0)
+  if (!hasFiles) {
+    return NextResponse.json({ error: 'ارفع ملف BOQ أو رسومات أولاً' }, { status: 400 })
+  }
 
   // Pull only enabled departments. The AI uses these as the allow-list.
   const { data: depts } = await supabase
