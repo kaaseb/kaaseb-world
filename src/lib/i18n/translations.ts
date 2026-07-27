@@ -5,6 +5,7 @@ const translations = {
   nav_home: { en: 'Home', ar: 'الرئيسية' },
   nav_departments: { en: 'Departments', ar: 'الأقسام' },
   nav_furn: { en: 'Furn', ar: 'الفرن' },
+  nav_manual_quotes: { en: 'Manual Quotes', ar: 'عروض يدوية' },
   // Legacy nav keys retained because some components still reference them.
   // Sidebar no longer renders App/Washhouses.
   nav_washhouses: { en: 'Washhouses', ar: 'المغاسل' },
