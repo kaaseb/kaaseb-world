@@ -17,6 +17,7 @@ import { getEmail, getThreadEmails, updateThread, type InboxEmail, type EmailAtt
 import { inboxUnlocked } from '@/lib/inbox/lock'
 import { buildProjectDraft } from '@/lib/inbox/convert'
 import { hydrateEmail } from '@/lib/inbox/imap'
+import { setProjectEmail } from '@/lib/projects/email'
 
 export const runtime = 'nodejs'
 export const maxDuration = 300
@@ -97,6 +98,9 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       engineer_name_ar: draft.engineer_name_ar,
       engineer_name_en: draft.engineer_name_en,
       engineer_phone: draft.engineer_phone,
+      // The email subject becomes the project's keywords — which is the subject
+      // line used when the quotation is emailed back to the client.
+      keywords: (email.subject || '').slice(0, 300) || null,
       notes: draft.notes,
       // Furn's + Tannoor's import cards read {url,name,key,bytes,category} — build them exact.
       files: draft.files,
@@ -106,6 +110,10 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     .single()
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+
+  // The sender's address is the project's client email (recipient for a direct
+  // send). Stored in S3 (no DB column). Best-effort — a convert must not fail here.
+  if (email.fromEmail) { try { await setProjectEmail(data.id, email.fromEmail) } catch { /* ignore */ } }
 
   await serverAudit({
     user, supabase, action: 'add', objectType: 'client_project',

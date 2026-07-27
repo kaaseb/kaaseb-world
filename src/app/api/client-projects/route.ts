@@ -5,6 +5,7 @@ import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { verifyOrigin } from '@/lib/csrf'
 import { serverAudit } from '@/lib/audit-server'
+import { setProjectEmail } from '@/lib/projects/email'
 
 export async function GET(request: Request) {
   const supabase = await createClient()
@@ -85,6 +86,9 @@ export async function POST(request: Request) {
   }).select('*, responsible_user:profiles!client_projects_responsible_user_id_fkey(id, full_name, email, avatar_url)').single()
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+
+  // Client email (recipient for a direct send) — stored in S3, no DB column.
+  if (typeof body.email === 'string') { try { await setProjectEmail(data.id, body.email) } catch { /* ignore */ } }
 
   await serverAudit({
     user, supabase, action: 'add', objectType: 'client_project',

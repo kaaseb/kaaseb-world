@@ -20,6 +20,7 @@ import { PreQualSettingsTab } from '@/components/pre-qualifications/PreQualSetti
 import { AiSettingsTab } from '@/components/ai/AiSettingsTab'
 import { OutreachSettingsCard } from '@/components/settings/OutreachSettingsCard'
 import { BroadcastCard } from '@/components/settings/BroadcastCard'
+import { QuoteMessageCard } from '@/components/settings/QuoteMessageCard'
 
 export default function SettingsPage() {
   const [profile, setProfile] = useState<Profile | null>(null)
@@ -507,6 +508,9 @@ export default function SettingsPage() {
 
         {/* Super-admin only: bulk "about KAASEB" broadcast to a pasted list */}
         {profile?.role === 'super_admin' && <BroadcastCard />}
+
+        {/* Super-admin only: the bilingual quotation cover message */}
+        {profile?.role === 'super_admin' && <QuoteMessageCard />}
 
         {/* Super-admin only: Community permissions */}
         {profile?.role === 'super_admin' && (

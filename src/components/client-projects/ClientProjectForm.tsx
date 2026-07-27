@@ -26,6 +26,9 @@ type Mode = 'create' | 'edit'
 interface Props {
   mode: Mode
   initial?: ClientProject
+  // Client email — recipient for a direct quotation send. Stored in S3 (not a
+  // DB column), so it's passed in separately from `initial`.
+  initialEmail?: string
   // Full team list to populate the "responsible person" dropdown.
   profiles?: ProfileLite[]
   canEdit?: boolean
@@ -92,7 +95,7 @@ function bucketOf(f: ClientProjectFile): ClientProjectFileCategory {
   return (f.category && BUCKETS.includes(f.category)) ? f.category : 'other'
 }
 
-export function ClientProjectForm({ mode, initial, profiles = [], canEdit = true, canDelete = false }: Props) {
+export function ClientProjectForm({ mode, initial, initialEmail = '', profiles = [], canEdit = true, canDelete = false }: Props) {
   const { t, isRtl } = useLanguage()
   const router = useRouter()
   const editable = mode === 'create' || canEdit
@@ -114,6 +117,7 @@ export function ClientProjectForm({ mode, initial, profiles = [], canEdit = true
   const [status, setStatus]   = useState<ClientProjectStatus>((initial?.status as ClientProjectStatus) || 'new')
   const [stage,  setStage]    = useState<ClientProjectStage>((initial?.stage  as ClientProjectStage)  || 'receive_quotes')
   const [keywords, setKeywords] = useState(initial?.keywords || '')
+  const [email, setEmail] = useState(initialEmail)
   const [notes,  setNotes]    = useState(initial?.notes || '')
   const [responsibleId, setResponsibleId] = useState<string>(initial?.responsible_user_id || '')
   const [files,  setFiles]    = useState<ClientProjectFile[]>(initial?.files || [])
@@ -193,7 +197,7 @@ export function ClientProjectForm({ mode, initial, profiles = [], canEdit = true
       engineer_phone: engPhone,
       end_date: endDate || null,
       pricing_currency: currency,
-      status, stage, keywords, notes,
+      status, stage, keywords, email, notes,
       // Empty string from the "—" option in the dropdown becomes null on
       // the server side so the FK clears cleanly.
       responsible_user_id: responsibleId || null,
@@ -348,9 +352,21 @@ export function ClientProjectForm({ mode, initial, profiles = [], canEdit = true
             </div>
 
             <div className="space-y-1.5">
-              <Label>{t('cp_form_keywords')}</Label>
-              {/* Single-language free text. Comma-separated phrases keep the
-                  search index simple (the list view does a substring match). */}
+              <Label>{isRtl ? 'إيميل العميل (يُرسل له العرض)' : 'Client email (quotation recipient)'}</Label>
+              {/* Auto-filled from the inbox when the project came from an email;
+                  typed in for a manual project. Stored in S3, not a DB column. */}
+              <Input
+                type="email" dir="ltr"
+                value={email}
+                onChange={e => setEmail(e.target.value)}
+                disabled={!editable}
+                placeholder="client@company.com"
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label>{t('cp_form_keywords')}{isRtl ? ' (عنوان رسالة العرض)' : ' (quotation email subject)'}</Label>
+              {/* Doubles as the SUBJECT line when the quotation is emailed. */}
               <Input
                 value={keywords}
                 onChange={e => setKeywords(e.target.value)}

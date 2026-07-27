@@ -8,6 +8,7 @@ import { verifyOrigin } from '@/lib/csrf'
 import { serverAudit } from '@/lib/audit-server'
 import { getProfileOrFallback, getEffectivePermissions } from '@/lib/profile'
 import { hasPermission } from '@/lib/permissions'
+import { setProjectEmail } from '@/lib/projects/email'
 
 // Status (and stage) can be touched by anyone who can see the project, so the
 // outer table can be used as a quick "drag to next column". Every other field
@@ -67,14 +68,16 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
       patch[k] = v
     }
   }
-  if (Object.keys(patch).length === 0) {
+  // `email` is not a DB column — it lives in S3. Handle it alongside the patch.
+  const emailGiven = typeof body.email === 'string'
+  if (Object.keys(patch).length === 0 && !emailGiven) {
     return NextResponse.json({ error: 'No allowed fields' }, { status: 400 })
   }
 
   // Permission gate: status/stage flips are open to any authenticated user
   // (so the table inline dropdown works for employees). Anything else
-  // requires the edit permission.
-  const touchesNonStatus = Object.keys(patch).some(k => !STATUS_FIELDS.has(k))
+  // (including the client email) requires the edit permission.
+  const touchesNonStatus = emailGiven || Object.keys(patch).some(k => !STATUS_FIELDS.has(k))
   if (touchesNonStatus) {
     const profile = await getProfileOrFallback(supabase, user)
     const permissions = await getEffectivePermissions(supabase, profile)
@@ -89,6 +92,8 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     .select('*, responsible_user:profiles!client_projects_responsible_user_id_fkey(id, full_name, email, avatar_url)')
     .single()
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+
+  if (emailGiven) { try { await setProjectEmail(id, String(body.email)) } catch { /* ignore */ } }
 
   await serverAudit({
     user, supabase, action: 'edit', objectType: 'client_project',

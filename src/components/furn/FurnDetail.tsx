@@ -46,6 +46,29 @@ export function FurnDetail({ project: initialProject, initialItems, initialQuota
   const [processing, setProcessing] = useState(false)
   const [savingPrices, setSavingPrices] = useState(false)
   const [finalizing, setFinalizing] = useState(false)
+  // Email the finished quotation PDF to the client.
+  const [emailLang, setEmailLang] = useState<'ar' | 'en'>('ar')
+  const [emailTo, setEmailTo] = useState('')
+  const [emailingQuote, setEmailingQuote] = useState(false)
+  async function emailQuotation() {
+    if (emailingQuote) return
+    setEmailingQuote(true)
+    try {
+      const res = await fetch(`/api/furn/projects/${project.id}/send-quote`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ language: emailLang, to: emailTo.trim() || undefined }),
+      })
+      const j = await res.json().catch(() => ({}))
+      if (!res.ok) { toast.error(j.error || 'فشل الإرسال', { duration: 12000 }); return }
+      toast.success(`${isRtl ? 'أُرسل العرض إلى' : 'Quotation sent to'} ${j.to} ✓`)
+      setEmailTo('')
+    } catch {
+      toast.error(isRtl ? 'فشل الإرسال' : 'Send failed')
+    } finally {
+      setEmailingQuote(false)
+    }
+  }
 
   // Delivery on the quotation: included → prints a fixed sentence; excluded →
   // adds a priced shipping line into the total; none → nothing. Loaded from /
@@ -712,6 +735,35 @@ export function FurnDetail({ project: initialProject, initialItems, initialQuota
                   {finalizing
                     ? <><Loader2 className={`w-4 h-4 animate-spin ${isRtl ? 'ml-2' : 'mr-2'}`} />{t('furn_quotation_generating')}</>
                     : <><Send className={`w-4 h-4 ${isRtl ? 'ml-2' : 'mr-2'}`} />{t('furn_send_quotation')}</>}
+                </Button>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Email the finished PDF straight to the client — recipient + subject
+              come from the linked project; language picks which PDF + message. */}
+          {canExport && quotations.length > 0 && (
+            <Card className="border-0 shadow-sm border-blue-200 bg-blue-50/40">
+              <CardContent className="py-3 flex flex-col sm:flex-row sm:items-center gap-2">
+                <div className="flex items-center gap-2 text-sm font-semibold text-blue-900 flex-shrink-0">
+                  <Send className="w-4 h-4" /> {isRtl ? 'أرسل العرض للعميل' : 'Email to client'}
+                </div>
+                <div className="inline-flex rounded-lg border bg-white p-0.5 text-xs">
+                  {(['ar', 'en'] as const).map((l) => (
+                    <button key={l} type="button" onClick={() => setEmailLang(l)}
+                      className={`px-3 py-1 rounded-md ${emailLang === l ? 'bg-blue-600 text-white' : 'text-muted-foreground'}`}>
+                      {l === 'ar' ? 'عربي' : 'EN'}
+                    </button>
+                  ))}
+                </div>
+                <input
+                  type="email" dir="ltr" value={emailTo} onChange={(e) => setEmailTo(e.target.value)}
+                  placeholder={isRtl ? 'إيميل العميل (أو اتركه ليُسحب من المشروع)' : 'Client email (or leave to pull from project)'}
+                  className="h-9 flex-1 min-w-[180px] rounded-lg border border-gray-200 bg-white px-3 text-sm outline-none focus:border-blue-400"
+                />
+                <Button onClick={emailQuotation} disabled={emailingQuote} className="gap-2">
+                  {emailingQuote ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                  {isRtl ? 'إرسال' : 'Send'}
                 </Button>
               </CardContent>
             </Card>
