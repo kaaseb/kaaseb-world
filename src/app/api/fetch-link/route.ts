@@ -16,6 +16,8 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { verifyOrigin } from '@/lib/csrf'
+import { getProfileOrFallback, getEffectivePermissions } from '@/lib/profile'
+import { hasPermission } from '@/lib/permissions'
 import { uploadBufferToS3, safeExtension, safeNameStem } from '@/lib/s3'
 import { policyFor, mimeAllowed } from '@/lib/upload-policy'
 
@@ -75,6 +77,14 @@ export async function POST(request: Request) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
+  // Gate on a real intake permission — this fetches an arbitrary external URL
+  // server-side, so it must not be callable by every signed-in account.
+  const profile = await getProfileOrFallback(supabase, user)
+  const permissions = await getEffectivePermissions(supabase, profile)
+  if (!hasPermission(profile, permissions, 'page.furn') && !hasPermission(profile, permissions, 'page.client_projects')) {
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+  }
+
   let body: { url?: unknown; kind?: unknown; folder?: unknown }
   try { body = await request.json() } catch { return NextResponse.json({ error: 'Bad JSON' }, { status: 400 }) }
 
@@ -102,6 +112,15 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: `تعذّر الوصول للرابط: ${e instanceof Error ? e.message : 'فشل'}` }, { status: 502 })
   }
   if (!res.ok) { clearTimeout(timer); return NextResponse.json({ error: `الرابط رد بخطأ ${res.status}` }, { status: 502 }) }
+
+  // Re-check the FINAL host after redirects — a public link that 30x-redirects
+  // to an internal address would otherwise slip past the initial-URL guard.
+  try {
+    if (res.url && isBlockedHost(new URL(res.url).hostname)) {
+      clearTimeout(timer)
+      return NextResponse.json({ error: 'الرابط يعيد التوجيه لعنوان غير مسموح' }, { status: 400 })
+    }
+  } catch { /* keep going — res.url malformed is not itself a breach */ }
 
   // A share LANDING page (needs login/OTP) usually returns HTML — reject with a
   // clear message instead of storing a webpage as a "drawing".

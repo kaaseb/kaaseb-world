@@ -25,6 +25,7 @@ import { verifyOrigin } from '@/lib/csrf'
 import { renderQuotationPdf } from '@/lib/quotation-pdf'
 import { uploadBufferToS3 } from '@/lib/s3'
 import { resolveShipping } from '@/lib/furn/delivery-store'
+import { getProjectItemFlags } from '@/lib/furn/item-flags'
 
 export const runtime = 'nodejs'
 export const maxDuration = 300
@@ -49,7 +50,16 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   if (!items || items.length === 0) {
     return NextResponse.json({ error: 'No items to quote' }, { status: 400 })
   }
-  const unpriced = items.filter(it => it.unit_price === null || it.unit_price === undefined)
+
+  // Rejected review-flagged rows leave the quotation: they aren't priced, aren't
+  // counted, and don't block the "all priced" gate — MUST match the print page
+  // and the /quote route, or the PDF total wouldn't equal the sum of its lines.
+  const flags = await getProjectItemFlags(id)
+  const activeItems = items.filter((it) => flags[it.id]?.status !== 'rejected')
+  if (activeItems.length === 0) {
+    return NextResponse.json({ error: 'كل البنود مرفوضة — لا يوجد ما يُسعَّر' }, { status: 400 })
+  }
+  const unpriced = activeItems.filter(it => it.unit_price === null || it.unit_price === undefined)
   if (unpriced.length > 0) {
     return NextResponse.json({
       error: `${unpriced.length} item(s) have no price set yet`,
@@ -57,7 +67,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     }, { status: 400 })
   }
 
-  const itemsSum = items.reduce((s, it) => s + Number(it.quantity || 0) * Number(it.unit_price || 0), 0)
+  const itemsSum = activeItems.reduce((s, it) => s + Number(it.quantity || 0) * Number(it.unit_price || 0), 0)
   // "Not included" delivery adds a priced shipping line into the subtotal (so
   // VAT applies to it and it flows into the grand total).
   const shipping = await resolveShipping(id)
