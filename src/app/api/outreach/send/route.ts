@@ -25,6 +25,14 @@ import { sendOutreachEmail, isEmail, normalizeRecipients } from '@/lib/outreach/
 export const runtime = 'nodejs'
 export const maxDuration = 120
 
+// In-flight guard: the `contacted` status check and the stamp that follows it are
+// separated by the whole (slow) send, so two concurrent requests — a double
+// click, a second tab, a client retry — could both pass the status check and
+// mail the customer twice. This process-local set serialises sends per record so
+// the second request 409s while the first is still in flight (single-process
+// deployment; the status check + S3 still guard the sequential case).
+const inFlight = new Set<string>()
+
 export async function POST(request: Request) {
   const csrfError = verifyOrigin(request)
   if (csrfError) return csrfError
@@ -40,6 +48,12 @@ export async function POST(request: Request) {
   const id = typeof body.id === 'string' ? body.id : ''
   if (!type || !id) return NextResponse.json({ error: 'type و id مطلوبان' }, { status: 400 })
 
+  const lockKey = `${type}:${id}`
+  if (inFlight.has(lockKey)) {
+    return NextResponse.json({ error: 'جاري الإرسال لهذا السجل بالفعل — انتظر لحظة.' }, { status: 409 })
+  }
+  inFlight.add(lockKey)
+  try {
   const profile = await getProfileOrFallback(supabase, user)
   const permissions = await getEffectivePermissions(supabase, profile)
   const page = type === 'company' ? 'page.companies' : 'page.opportunities'
@@ -121,4 +135,7 @@ export async function POST(request: Request) {
   })
 
   return NextResponse.json({ ok: true, to: recipients, attached })
+  } finally {
+    inFlight.delete(lockKey)
+  }
 }

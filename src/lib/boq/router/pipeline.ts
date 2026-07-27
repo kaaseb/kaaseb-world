@@ -560,7 +560,7 @@ export async function runBoqRouter(input: RouterInput): Promise<RouterResult> {
     items,
     notes: noteParts.length ? noteParts.join(' • ') : null,
     skippedFiles,
-    filesSent: readable.length + 1, // +1 = the BOQ itself
+    filesSent: readable.length + (input.boqUrl ? 1 : 0), // +1 = the BOQ (none in drawings-only mode)
     coverage: {
       filesTotal: entryCount,
       filesIndexed: readable.length,

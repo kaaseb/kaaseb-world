@@ -206,6 +206,7 @@ const STONE_MATERIALS = [
 export function guardDepartmentAnchor(
   text: string,
   coveredDepartments: string[],
+  departmentMatch?: string | null,
 ): GuardVerdict {
   const hay = (text || '').toLowerCase()
   if (!hay.trim()) {
@@ -221,6 +222,13 @@ export function guardDepartmentAnchor(
   for (const m of STONE_MATERIALS) {
     if (hay.includes(m)) return CLEAN
   }
+  // Code-titled rows (title IS the SKU code, e.g. "MA-003" / "K-RL21B") carry
+  // their spec in the code, not a material word. If extraction already matched
+  // the row to a COVERED department, a code-like token is a valid anchor — don't
+  // flag it as "mentions no material" (that over-flags every coded line).
+  const dm = (departmentMatch || '').trim().toLowerCase()
+  const deptCovered = dm.length >= 3 && coveredDepartments.some((d) => (d || '').trim().toLowerCase() === dm)
+  if (deptCovered && /\b[a-z]{1,4}-?\d[a-z0-9-]*\b/i.test(text || '')) return CLEAN
   return {
     disqualified: true,
     realDepartment: null,

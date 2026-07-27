@@ -338,14 +338,19 @@ export function FurnDetail({ project: initialProject, initialItems, initialQuota
     }
   }
 
-  const itemsSum = items.reduce((s, it) => s + Number(it.quantity || 0) * Number(it.unit_price || 0), 0)
+  // Rejected review-flagged rows leave the quotation on the server (finalize /
+  // quote / print all drop them), so the on-screen preview and the "all priced"
+  // gate MUST drop them too — otherwise the preview total disagrees with the PDF
+  // and an unpriced REJECTED row would wrongly keep the Finalize button disabled.
+  const activeItems = items.filter(it => itemFlags[it.id]?.status !== 'rejected')
+  const itemsSum = activeItems.reduce((s, it) => s + Number(it.quantity || 0) * Number(it.unit_price || 0), 0)
   // Mirror the PDF: "not included" delivery adds a shipping line into the total,
   // so the on-screen totals match what the customer will see.
   const shippingLine = deliveryChoice === 'excluded' ? Number(shippingAmount) || 0 : 0
   const subtotal = itemsSum + shippingLine
   const vat = subtotal * 0.15
   const total = subtotal + vat
-  const allPriced = items.length > 0 && items.every(it => it.unit_price !== null && it.unit_price !== undefined)
+  const allPriced = activeItems.length > 0 && activeItems.every(it => it.unit_price !== null && it.unit_price !== undefined)
 
   const fileCount =
     (project.boq_url ? 1 : 0) +

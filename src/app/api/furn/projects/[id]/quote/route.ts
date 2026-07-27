@@ -15,6 +15,7 @@ import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { verifyOrigin } from '@/lib/csrf'
 import { getProjectItemFlags } from '@/lib/furn/item-flags'
+import { resolveShipping } from '@/lib/furn/delivery-store'
 
 const VAT_RATE = 0.15
 
@@ -58,7 +59,12 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     }, { status: 400 })
   }
 
-  const subtotal = activeItems.reduce((s, it) => s + Number(it.quantity || 0) * Number(it.unit_price || 0), 0)
+  // "Not included" delivery adds a priced shipping line — MUST match finalize
+  // and the print page (which appends a Delivery line whenever shipping > 0), or
+  // the stored total wouldn't equal the sum of the PDF's visible lines.
+  const itemsSum = activeItems.reduce((s, it) => s + Number(it.quantity || 0) * Number(it.unit_price || 0), 0)
+  const shipping = await resolveShipping(id)
+  const subtotal = itemsSum + shipping
   const vatAmount = subtotal * VAT_RATE
   const total = subtotal + vatAmount
 

@@ -197,7 +197,7 @@ async function runProcessJob(
     const flaggedItems = result.items.map((it, idx) => {
       const text = `${it.description || ''} ${it.details || ''}`
       const verdict = guardItem(text, it.department_match, coveredNames)
-      const problem = verdict.disqualified ? verdict : guardDepartmentAnchor(text, coveredNames)
+      const problem = verdict.disqualified ? verdict : guardDepartmentAnchor(text, coveredNames, it.department_match)
 
       // Duplicate: same description already seen this run → flag the repeat.
       const key = (it.description || '').trim().toLowerCase().replace(/\s+/g, ' ')
@@ -221,11 +221,13 @@ async function runProcessJob(
       const reason = marks.join(' • ')
       flagByIndex[idx] = { reason, red, status: 'pending' }
       warned.push({ description: it.description, reason })
-      // Prepend a visible warning to details AND cap confidence so it reads as
-      // "needs a human" even before the review column renders.
+      // Cap confidence so the row reads as "needs a human". The warning REASON
+      // lives only in the flag store (rendered as the ⚠️ banner + approve/reject
+      // in the pricing table) — never in `details`, because `details` is printed
+      // verbatim on the customer PDF and an approved-but-unedited flag would leak
+      // the internal note to the client (same reason `source` is kept out of it).
       return {
         ...it,
-        details: `⚠️ يحتاج اعتماد: ${reason}${it.details ? `\n${it.details}` : ''}`,
         ai_confidence: Math.min(it.ai_confidence ?? 0.5, 0.35),
       }
     })
