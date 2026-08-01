@@ -60,7 +60,7 @@ const STR = {
     col_total: 'المجموع',
     col_notes: 'ملاحظات',
     subtotal: 'الإجمالي',
-    vat: 'الضريبة 15%',
+    vat: 'الضريبة',
     grand_total: 'المجموع الكلي شامل الضريبة',
     in_words: 'فقط',
     only_suffix: 'لا غير',
@@ -93,7 +93,7 @@ const STR = {
     col_total: 'Total',
     col_notes: 'Notes',
     subtotal: 'Subtotal',
-    vat: 'VAT 15%',
+    vat: 'VAT',
     grand_total: 'Grand Total (incl. VAT)',
     in_words: 'In words:',
     only_suffix: 'only',
@@ -115,8 +115,12 @@ function formatMoney(n: number): string {
 }
 
 function arabicAmountInWords(amount: number, majorWord: string, minorWord: string): string {
-  const sar = Math.floor(amount)
-  const halalas = Math.round((amount - sar) * 100)
+  // Work in integer cents so the fraction can never round to 100 and desync from
+  // formatMoney (which rounds the shown number). The old (amount - sar)*100 could
+  // yield 100 halalas — wrong riyal count, and tens[10] === undefined in English.
+  const cents = Math.round(amount * 100)
+  const sar = Math.floor(cents / 100)
+  const halalas = cents % 100
   const ones = ['', 'واحد', 'اثنان', 'ثلاثة', 'أربعة', 'خمسة', 'ستة', 'سبعة', 'ثمانية', 'تسعة', 'عشرة', 'أحد عشر', 'اثنا عشر', 'ثلاثة عشر', 'أربعة عشر', 'خمسة عشر', 'ستة عشر', 'سبعة عشر', 'ثمانية عشر', 'تسعة عشر']
   const tens = ['', '', 'عشرون', 'ثلاثون', 'أربعون', 'خمسون', 'ستون', 'سبعون', 'ثمانون', 'تسعون']
   const hundreds = ['', 'مائة', 'مائتان', 'ثلاثمائة', 'أربعمائة', 'خمسمائة', 'ستمائة', 'سبعمائة', 'ثمانمائة', 'تسعمائة']
@@ -131,25 +135,29 @@ function arabicAmountInWords(amount: number, majorWord: string, minorWord: strin
     }
     return out
   }
-  if (sar >= 1_000_000) return `${formatMoney(amount)} ${majorWord}`
-  let out = ''
-  if (sar >= 1000) {
-    const thousands = Math.floor(sar / 1000)
-    const rest = sar % 1000
-    const tWord = thousands === 1 ? 'ألف' : thousands === 2 ? 'ألفان' : thousands < 11 ? `${under1000(thousands)} آلاف` : `${under1000(thousands)} ألفاً`
-    out = tWord
-    if (rest > 0) out += ` و${under1000(rest)}`
-  } else {
-    out = under1000(sar) || 'صفر'
+  function intWords(n: number): string {
+    if (n === 0) return 'صفر'
+    const millions = Math.floor(n / 1_000_000)
+    const thousands = Math.floor((n % 1_000_000) / 1000)
+    const rest = n % 1000
+    const parts: string[] = []
+    if (millions > 0) parts.push(millions === 1 ? 'مليون' : millions === 2 ? 'مليونان' : millions < 11 ? `${under1000(millions)} ملايين` : `${under1000(millions)} مليوناً`)
+    if (thousands > 0) parts.push(thousands === 1 ? 'ألف' : thousands === 2 ? 'ألفان' : thousands < 11 ? `${under1000(thousands)} آلاف` : `${under1000(thousands)} ألفاً`)
+    if (rest > 0) parts.push(under1000(rest))
+    return parts.join(' و')
   }
-  out += ` ${majorWord}`
+  if (sar >= 1_000_000_000) return `${formatMoney(amount)} ${majorWord}`
+  let out = `${intWords(sar)} ${majorWord}`
   if (halalas > 0) out += ` و${under1000(halalas)} ${minorWord}`
   return out
 }
 
 function englishAmountInWords(amount: number, majorWord: string, minorWord: string): string {
-  const sar = Math.floor(amount)
-  const halalas = Math.round((amount - sar) * 100)
+  // Integer cents — see the Arabic note; avoids the 100-cent carry that printed
+  // the literal word "undefined" (tens[10]) on the customer PDF.
+  const cents = Math.round(amount * 100)
+  const sar = Math.floor(cents / 100)
+  const halalas = cents % 100
   const ones = ['', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen']
   const tens = ['', '', 'twenty', 'thirty', 'forty', 'fifty', 'sixty', 'seventy', 'eighty', 'ninety']
   function under100(n: number): string {
@@ -166,17 +174,19 @@ function englishAmountInWords(amount: number, majorWord: string, minorWord: stri
       ? r ? `${ones[h]} hundred ${under100(r)}` : `${ones[h]} hundred`
       : under100(r)
   }
-  if (sar >= 1_000_000) return `${formatMoney(amount)} ${majorWord}`
-  let out = ''
-  if (sar >= 1000) {
-    const thousands = Math.floor(sar / 1000)
-    const rest = sar % 1000
-    out = `${under1000(thousands)} thousand`
-    if (rest > 0) out += ` ${under1000(rest)}`
-  } else {
-    out = under1000(sar) || 'zero'
+  function intWords(n: number): string {
+    if (n === 0) return 'zero'
+    const millions = Math.floor(n / 1_000_000)
+    const thousands = Math.floor((n % 1_000_000) / 1000)
+    const rest = n % 1000
+    const parts: string[] = []
+    if (millions > 0) parts.push(`${under1000(millions)} million`)
+    if (thousands > 0) parts.push(`${under1000(thousands)} thousand`)
+    if (rest > 0) parts.push(under1000(rest))
+    return parts.join(' ')
   }
-  out = out.trim() + ` ${majorWord}`
+  if (sar >= 1_000_000_000) return `${formatMoney(amount)} ${majorWord}`
+  let out = `${intWords(sar)} ${majorWord}`
   if (halalas > 0) out += ` and ${under100(halalas)} ${minorWord}`
   return out
 }
@@ -204,9 +214,12 @@ export function QuotationPrint({ project, items, quotation, settings, deliveryNo
   // pixel-identical; 'USD' flips the pill next to every amount AND the total-in-
   // words so the document is internally consistent.
   const isUsd = currency === 'USD'
-  const curInline = isUsd ? (isRtl ? '$' : 'USD') : S.sar
+  const curInline = isUsd ? 'USD' : S.sar
   const majorWord = isUsd ? (isRtl ? 'دولار أمريكي' : 'US Dollars') : (isRtl ? 'ريال سعودي' : 'Saudi Riyals')
   const minorWord = isUsd ? (isRtl ? 'سنتاً' : 'cents') : (isRtl ? 'هللة' : 'halalas')
+  // VAT % label derived from the actual stored rate (not a hardcoded 15%) so the
+  // label can never disagree with the computed VAT amount.
+  const vatPct = Math.round((Number(quotation.vat_rate) || 0) * 100)
 
   useEffect(() => {
     document.documentElement.lang = lang
@@ -340,7 +353,7 @@ export function QuotationPrint({ project, items, quotation, settings, deliveryNo
             <span className="totals-value">{formatMoney(subtotal)} {curInline}</span>
           </div>
           <div className="totals-row">
-            <span className="totals-label">{S.vat}</span>
+            <span className="totals-label">{S.vat} {vatPct}%</span>
             <span className="totals-value">{formatMoney(vatAmount)} {curInline}</span>
           </div>
           <div className="totals-row totals-grand">
