@@ -56,7 +56,8 @@ async function classicUpload(file: File, kind: string, folder?: string): Promise
 
   if (res.status === 413) {
     throw new Error(
-      `الملف كبير على الخادم (${Math.round(file.size / 1024 / 1024)}MB) والرفع المباشر غير مفعّل. فعّل CORS للمخزن من الإعدادات ثم أعد المحاولة.`,
+      `الملف كبير (${Math.round(file.size / 1024 / 1024)}MB) وتعذّر الرفع المباشر لأمازون. ` +
+      `عادةً يُضبط CORS تلقائياً — إذا تكرر، تأكد أن مستخدم AWS عنده صلاحية s3:PutBucketCors و s3:GetBucketCors.`,
     )
   }
   const j = await res.json().catch(() => ({}))

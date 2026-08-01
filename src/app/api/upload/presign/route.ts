@@ -15,7 +15,7 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { verifyOrigin } from '@/lib/csrf'
-import { presignUpload } from '@/lib/s3'
+import { presignUpload, autoEnsureUploadCors } from '@/lib/s3'
 import { policyFor, mimeAllowed } from '@/lib/upload-policy'
 
 export const runtime = 'nodejs'
@@ -52,6 +52,14 @@ export async function POST(request: Request) {
   // Same sanitising as the classic route: no slashes, short.
   const rawFolder = typeof body.folder === 'string' ? body.folder.trim() : ''
   const folder = rawFolder ? rawFolder.replace(/[^a-zA-Z0-9._-]/g, '').slice(0, 64) || undefined : undefined
+
+  // Smart auto-CORS: make sure the bucket lets THIS verified site origin PUT
+  // directly, so the browser preflight passes without anyone touching AWS. Runs
+  // real work at most once per origin per process; never blocks the upload if it
+  // can't (the client then falls back to the classic path). verifyOrigin above
+  // already proved the origin is one of our allowed sites.
+  const origin = request.headers.get('origin') || ''
+  if (/^https?:\/\//.test(origin)) await autoEnsureUploadCors(origin)
 
   try {
     const signed = await presignUpload({
