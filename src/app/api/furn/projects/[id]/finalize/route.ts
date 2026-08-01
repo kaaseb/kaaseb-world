@@ -26,6 +26,8 @@ import { renderQuotationPdf } from '@/lib/quotation-pdf'
 import { uploadBufferToS3 } from '@/lib/s3'
 import { resolveShipping } from '@/lib/furn/delivery-store'
 import { getProjectItemFlags } from '@/lib/furn/item-flags'
+import { getProfileOrFallback, getEffectivePermissions } from '@/lib/profile'
+import { hasPermission } from '@/lib/permissions'
 
 export const runtime = 'nodejs'
 export const maxDuration = 300
@@ -41,6 +43,15 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  // Server-side authorization: generating quotations (allocates the number,
+  // renders PDFs via Puppeteer, writes to S3) must require furn access, not just
+  // any authenticated session — matching the process/flags/send-quote routes.
+  const profile = await getProfileOrFallback(supabase, user)
+  const permissions = await getEffectivePermissions(supabase, profile)
+  if (!hasPermission(profile, permissions, 'page.furn')) {
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+  }
 
   const [{ data: project }, { data: items }] = await Promise.all([
     supabase.from('furn_projects').select('*').eq('id', id).maybeSingle(),

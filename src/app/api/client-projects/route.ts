@@ -29,10 +29,16 @@ export async function GET(request: Request) {
   if (status) query = query.eq('status', status)
   if (stage)  query = query.eq('stage',  stage)
   if (q) {
-    // Search across both languages so users can query in whichever they entered.
-    query = query.or(
-      `name_en.ilike.%${q}%,name_ar.ilike.%${q}%,company_en.ilike.%${q}%,company_ar.ilike.%${q}%,engineer_name_en.ilike.%${q}%,engineer_name_ar.ilike.%${q}%`
-    )
+    // Strip the PostgREST or-filter metacharacters (comma / parens / quote /
+    // backslash) so a search term can't inject extra conditions or break out of
+    // the ilike pattern; cap the length. The remaining value is a plain pattern.
+    const safeQ = q.replace(/[,()"\\]/g, '').trim().slice(0, 100)
+    if (safeQ) {
+      // Search across both languages so users can query in whichever they entered.
+      query = query.or(
+        `name_en.ilike.%${safeQ}%,name_ar.ilike.%${safeQ}%,company_en.ilike.%${safeQ}%,company_ar.ilike.%${safeQ}%,engineer_name_en.ilike.%${safeQ}%,engineer_name_ar.ilike.%${safeQ}%`
+      )
+    }
   }
 
   const { data, error } = await query

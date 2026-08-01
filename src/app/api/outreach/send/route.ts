@@ -72,13 +72,15 @@ export async function POST(request: Request) {
   const contacts = Array.isArray(record.contacts) ? record.contacts : []
   const firstWithEmail = contacts.find((c) => isEmail(c.email || ''))
 
-  // The composer sends the exact list the user ticked. With nothing specified we
-  // fall back to EVERY contact address on the record (procurement + head office
-  // + suppliers desk are usually all worth reaching), not just the first one.
-  const requested = normalizeRecipients(body.to)
-  const recipients = requested.length > 0
-    ? requested
-    : normalizeRecipients(contacts.map((c) => c.email || ''))
+  // The composer sends the exact list the user ticked — but recipients MUST
+  // belong to this record. We constrain the requested list to the record's own
+  // contact addresses so a crafted `to` can't mail the company template to an
+  // arbitrary third party. With nothing (valid) specified we fall back to EVERY
+  // contact address on the record.
+  const allowed = normalizeRecipients(contacts.map((c) => c.email || ''))
+  const allowedSet = new Set(allowed.map((e) => e.toLowerCase()))
+  const requested = normalizeRecipients(body.to).filter((e) => allowedSet.has(e.toLowerCase()))
+  const recipients = requested.length > 0 ? requested : allowed
 
   if (recipients.length === 0) {
     return NextResponse.json({ error: 'ما فيه بريد صالح لهذا السجل — أضف جهة اتصال أولاً.' }, { status: 400 })

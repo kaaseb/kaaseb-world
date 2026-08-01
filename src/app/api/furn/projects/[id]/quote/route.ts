@@ -16,6 +16,8 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { verifyOrigin } from '@/lib/csrf'
 import { getProjectItemFlags } from '@/lib/furn/item-flags'
 import { resolveShipping } from '@/lib/furn/delivery-store'
+import { getProfileOrFallback, getEffectivePermissions } from '@/lib/profile'
+import { hasPermission } from '@/lib/permissions'
 
 const VAT_RATE = 0.15
 
@@ -27,6 +29,13 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  // Same authorization as /finalize: quotation generation requires furn access.
+  const profile = await getProfileOrFallback(supabase, user)
+  const permissions = await getEffectivePermissions(supabase, profile)
+  if (!hasPermission(profile, permissions, 'page.furn')) {
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+  }
 
   let body: { language?: 'ar' | 'en' }
   try { body = await request.json() } catch { body = {} }

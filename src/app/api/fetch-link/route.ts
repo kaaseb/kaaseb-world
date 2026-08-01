@@ -6,16 +6,21 @@
 // Common share links that resolve to a direct download are transformed here
 // (Google Drive, Dropbox). Anything needing a login/OTP is out.
 //
-// SSRF: this fetches an ARBITRARY external URL server-side, so the guard is
-// resolve-then-validate — the host is DNS-resolved and EVERY resulting IP must
-// be public (this also normalises decimal/hex/octal/IPv6 encodings, which a
-// string check misses). Redirects are followed MANUALLY so each hop is
-// re-validated, and the body is size-capped WHILE streaming so a chunked
-// response with no content-length can't blow past the cap into memory. Gated on
-// a real intake permission.
+// SSRF: this fetches an ARBITRARY external URL server-side. The guard PINS the
+// resolved IP — a custom DNS `lookup` resolves the host, rejects the request if
+// ANY resolved address is private/internal, and hands the SAME validated IP to
+// the socket. Because validation and connection use one resolution, there is no
+// DNS-rebinding window (the classic resolve-then-fetch TOCTOU where the fetch
+// re-resolves to an internal IP is closed). Redirects are followed MANUALLY so
+// each hop is re-validated, and the body is size-capped WHILE streaming so a
+// chunked response can't blow past the cap into memory. Gated on a real intake
+// permission.
 
 import net from 'net'
-import dns from 'dns/promises'
+import dns from 'dns'
+import http from 'http'
+import https from 'https'
+import type { LookupFunction } from 'net'
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { verifyOrigin } from '@/lib/csrf'
@@ -31,7 +36,7 @@ const MAX_BYTES = 80 * 1024 * 1024
 const TIMEOUT_MS = 60_000
 const MAX_HOPS = 5
 
-// ─── SSRF: validate that a host resolves ONLY to public addresses ────────────
+// ─── SSRF: classify an IP as private/internal ────────────────────────────────
 
 function ipv4ToInt(ip: string): number | null {
   const p = ip.split('.')
@@ -70,17 +75,22 @@ function isPrivateIp(ip: string): boolean {
   }
   return true // not a real IP → unsafe
 }
-async function assertPublicHost(hostname: string): Promise<void> {
-  if (net.isIP(hostname)) {
-    if (isPrivateIp(hostname)) throw new Error('internal')
-    return
-  }
-  // Resolving normalises numeric encodings (2130706433, 0x7f..., octal) to real
-  // IPs and catches DNS names pointing at internal addresses.
-  let addrs: Array<{ address: string }>
-  try { addrs = await dns.lookup(hostname, { all: true }) } catch { throw new Error('resolve') }
-  if (addrs.length === 0) throw new Error('resolve')
-  for (const a of addrs) if (isPrivateIp(a.address)) throw new Error('internal')
+
+// Pinning lookup: resolve ALL addresses (this normalises decimal/hex/octal/IPv6
+// encodings too), reject if any is private, and return exactly one validated
+// public IP — which is the address the socket then connects to. No second,
+// unvalidated resolution happens, so a rebind between check and connect is
+// impossible.
+const safeLookup: LookupFunction = (hostname, options, callback) => {
+  const family = (options && typeof options === 'object' ? (options as dns.LookupOptions).family : 0) || 0
+  dns.lookup(hostname, { all: true, verbatim: true }, (err, addresses) => {
+    if (err) { callback(err, '', 0); return }
+    let list = addresses as dns.LookupAddress[]
+    if (family === 4 || family === 6) list = list.filter((a) => a.family === family)
+    const publics = list.filter((a) => !isPrivateIp(a.address))
+    if (publics.length === 0) { callback(new Error('blocked: resolves to a private/internal address'), '', 0); return }
+    callback(null, publics[0].address, publics[0].family)
+  })
 }
 
 // Turn common SHARE links into their DIRECT-download form.
@@ -97,38 +107,52 @@ function directUrl(raw: string): string {
   } catch { return raw }
 }
 
-function filenameFrom(res: Response, url: string): string {
-  const cd = res.headers.get('content-disposition') || ''
+function filenameFrom(headers: http.IncomingHttpHeaders, url: string): string {
+  const cd = (headers['content-disposition'] as string) || ''
   const m = /filename\*?=(?:UTF-8''|")?([^";]+)/i.exec(cd)
   if (m && m[1]) { try { return decodeURIComponent(m[1].trim()) } catch { return m[1].trim() } }
   try { const p = new URL(url).pathname.split('/').filter(Boolean).pop(); if (p) return decodeURIComponent(p) } catch { /* ignore */ }
   return 'file'
 }
 
-// Manual-redirect fetch: validate the host at EVERY hop.
-async function safeFetch(startUrl: string): Promise<{ ok: true; res: Response; finalUrl: string } | { ok: false; error: string; status: number }> {
+// One request through the pinning lookup; resolves to the raw response stream.
+function requestOnce(u: URL): Promise<http.IncomingMessage> {
+  return new Promise((resolve, reject) => {
+    const mod = u.protocol === 'https:' ? https : http
+    const req = mod.request(u, {
+      method: 'GET',
+      lookup: safeLookup,
+      headers: { 'User-Agent': 'KaasebBot/1.0', Accept: '*/*' },
+    }, resolve)
+    req.setTimeout(TIMEOUT_MS, () => req.destroy(new Error('timeout')))
+    req.on('error', reject)
+    req.end()
+  })
+}
+
+// Manual-redirect fetch: every hop goes through the pinning lookup.
+async function safeFetch(startUrl: string): Promise<{ ok: true; res: http.IncomingMessage; finalUrl: string } | { ok: false; error: string; status: number }> {
   let url = startUrl
   for (let hop = 0; hop < MAX_HOPS; hop++) {
     let u: URL
     try { u = new URL(url) } catch { return { ok: false, error: 'رابط غير صالح', status: 400 } }
     if (u.protocol !== 'http:' && u.protocol !== 'https:') return { ok: false, error: 'يُسمح بروابط http/https فقط', status: 400 }
-    try { await assertPublicHost(u.hostname) } catch { return { ok: false, error: 'هذا العنوان غير مسموح', status: 400 } }
+    // Fast-fail for a literal private IP in the URL; DNS hostnames are validated
+    // at connect time by safeLookup (which pins the IP — no re-resolution).
+    if (net.isIP(u.hostname) && isPrivateIp(u.hostname)) return { ok: false, error: 'هذا العنوان غير مسموح', status: 400 }
 
-    const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
-    let res: Response
+    let res: http.IncomingMessage
     try {
-      res = await fetch(u.toString(), { redirect: 'manual', signal: controller.signal, headers: { 'User-Agent': 'KaasebBot/1.0' } })
+      res = await requestOnce(u)
     } catch (e) {
-      clearTimeout(timer)
+      // A blocked internal address surfaces here as a connect error.
       return { ok: false, error: `تعذّر الوصول للرابط: ${e instanceof Error ? e.message : 'فشل'}`, status: 502 }
     }
-    clearTimeout(timer)
 
-    if (res.status >= 300 && res.status < 400) {
-      const loc = res.headers.get('location')
-      if (!loc) return { ok: false, error: 'إعادة توجيه بلا وجهة', status: 502 }
-      try { url = new URL(loc, u).toString() } catch { return { ok: false, error: 'وجهة إعادة التوجيه غير صالحة', status: 502 } }
+    const status = res.statusCode || 0
+    if (status >= 300 && status < 400 && res.headers.location) {
+      res.resume() // drain & free the socket before the next hop
+      try { url = new URL(res.headers.location, u).toString() } catch { return { ok: false, error: 'وجهة إعادة التوجيه غير صالحة', status: 502 } }
       continue
     }
     return { ok: true, res, finalUrl: u.toString() }
@@ -136,25 +160,19 @@ async function safeFetch(startUrl: string): Promise<{ ok: true; res: Response; f
   return { ok: false, error: 'تحويلات كثيرة جداً', status: 502 }
 }
 
-// Read the body with the cap enforced WHILE streaming.
-async function readCapped(res: Response, max: number): Promise<Buffer | null> {
-  const reader = res.body?.getReader()
-  if (!reader) {
-    const ab = await res.arrayBuffer()
-    return ab.byteLength <= max ? Buffer.from(ab) : null
-  }
-  const chunks: Uint8Array[] = []
-  let total = 0
-  for (;;) {
-    const { done, value } = await reader.read()
-    if (done) break
-    if (value) {
-      total += value.byteLength
-      if (total > max) { try { await reader.cancel() } catch { /* ignore */ } return null }
-      chunks.push(value)
-    }
-  }
-  return Buffer.concat(chunks.map((c) => Buffer.from(c)))
+// Read the body with the cap enforced WHILE streaming (null = over the cap).
+function readCapped(res: http.IncomingMessage, max: number): Promise<Buffer | null> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = []
+    let total = 0
+    res.on('data', (c: Buffer) => {
+      total += c.length
+      if (total > max) { res.destroy(); resolve(null); return }
+      chunks.push(c)
+    })
+    res.on('end', () => resolve(Buffer.concat(chunks)))
+    res.on('error', reject)
+  })
 }
 
 export async function POST(request: Request) {
@@ -182,19 +200,31 @@ export async function POST(request: Request) {
   const fetched = await safeFetch(directUrl(rawUrl))
   if (!fetched.ok) return NextResponse.json({ error: fetched.error }, { status: fetched.status })
   const res = fetched.res
-  if (!res.ok) return NextResponse.json({ error: `الرابط رد بخطأ ${res.status}` }, { status: 502 })
 
-  const ctype = (res.headers.get('content-type') || '').toLowerCase()
-  if (ctype.startsWith('text/html')) {
+  const status = res.statusCode || 0
+  if (status < 200 || status >= 300) {
+    res.resume()
+    return NextResponse.json({ error: `الرابط رد بخطأ ${status}` }, { status: 502 })
+  }
+
+  const ctypeHeader = ((res.headers['content-type'] as string) || '').toLowerCase()
+  if (ctypeHeader.startsWith('text/html')) {
+    res.resume()
     return NextResponse.json({ error: 'الرابط صفحة ويب لا ملف مباشر — إذا يطلب تسجيل/كلمة سر، حمّل الملف وارفعه يدوياً.' }, { status: 415 })
+  }
+  // Early reject on a declared over-limit size (streaming cap still guards the rest).
+  const declared = Number(res.headers['content-length'] || 0)
+  if (declared && declared > MAX_BYTES) {
+    res.destroy()
+    return NextResponse.json({ error: 'الملف أكبر من الحد المسموح (80MB)' }, { status: 413 })
   }
 
   const buf = await readCapped(res, MAX_BYTES)
   if (buf === null) return NextResponse.json({ error: 'الملف أكبر من الحد المسموح (80MB)' }, { status: 413 })
   if (buf.byteLength === 0) return NextResponse.json({ error: 'الملف فارغ' }, { status: 422 })
 
-  const name = filenameFrom(res, fetched.finalUrl)
-  const contentType = ctype.split(';')[0] || 'application/octet-stream'
+  const name = filenameFrom(res.headers, fetched.finalUrl)
+  const contentType = ctypeHeader.split(';')[0] || 'application/octet-stream'
   if (!mimeAllowed(policy, contentType) && !mimeAllowed(policy, 'application/octet-stream')) {
     return NextResponse.json({ error: 'نوع الملف غير مسموح لهذه الوجهة' }, { status: 415 })
   }
