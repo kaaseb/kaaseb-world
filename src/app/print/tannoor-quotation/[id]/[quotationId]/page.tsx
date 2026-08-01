@@ -128,6 +128,7 @@ export default async function TannoorPrintPage({
       items={itemsShim}
       quotation={quotationShim}
       settings={settings as FurnSettings}
+      currency={tQuote.currency === 'USD' ? 'USD' : 'SAR'}
     />
   )
 }

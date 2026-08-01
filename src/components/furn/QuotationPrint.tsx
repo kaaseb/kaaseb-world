@@ -35,6 +35,10 @@ interface Props {
   // language, or null when the team chose not to show one. Computed server-side
   // from the delivery store (src/lib/furn/delivery-store).
   deliveryNote?: string | null
+  // Currency the amounts are in. Defaults to SAR (Furn is SAR-only); Tannoor and
+  // manual quotes pass 'USD' when quoting in dollars so the label + the spelled-
+  // out total match the numbers.
+  currency?: 'SAR' | 'USD'
 }
 
 const STR = {
@@ -110,7 +114,7 @@ function formatMoney(n: number): string {
   return Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
-function arabicAmountInWords(amount: number): string {
+function arabicAmountInWords(amount: number, majorWord: string, minorWord: string): string {
   const sar = Math.floor(amount)
   const halalas = Math.round((amount - sar) * 100)
   const ones = ['', 'واحد', 'اثنان', 'ثلاثة', 'أربعة', 'خمسة', 'ستة', 'سبعة', 'ثمانية', 'تسعة', 'عشرة', 'أحد عشر', 'اثنا عشر', 'ثلاثة عشر', 'أربعة عشر', 'خمسة عشر', 'ستة عشر', 'سبعة عشر', 'ثمانية عشر', 'تسعة عشر']
@@ -127,7 +131,7 @@ function arabicAmountInWords(amount: number): string {
     }
     return out
   }
-  if (sar >= 1_000_000) return `${formatMoney(amount)} ريال سعودي`
+  if (sar >= 1_000_000) return `${formatMoney(amount)} ${majorWord}`
   let out = ''
   if (sar >= 1000) {
     const thousands = Math.floor(sar / 1000)
@@ -138,12 +142,12 @@ function arabicAmountInWords(amount: number): string {
   } else {
     out = under1000(sar) || 'صفر'
   }
-  out += ' ريال سعودي'
-  if (halalas > 0) out += ` و${under1000(halalas)} هللة`
+  out += ` ${majorWord}`
+  if (halalas > 0) out += ` و${under1000(halalas)} ${minorWord}`
   return out
 }
 
-function englishAmountInWords(amount: number): string {
+function englishAmountInWords(amount: number, majorWord: string, minorWord: string): string {
   const sar = Math.floor(amount)
   const halalas = Math.round((amount - sar) * 100)
   const ones = ['', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen']
@@ -162,7 +166,7 @@ function englishAmountInWords(amount: number): string {
       ? r ? `${ones[h]} hundred ${under100(r)}` : `${ones[h]} hundred`
       : under100(r)
   }
-  if (sar >= 1_000_000) return `${formatMoney(amount)} Saudi Riyals`
+  if (sar >= 1_000_000) return `${formatMoney(amount)} ${majorWord}`
   let out = ''
   if (sar >= 1000) {
     const thousands = Math.floor(sar / 1000)
@@ -172,8 +176,8 @@ function englishAmountInWords(amount: number): string {
   } else {
     out = under1000(sar) || 'zero'
   }
-  out = out.trim() + ' Saudi Riyals'
-  if (halalas > 0) out += ` and ${under100(halalas)} halalas`
+  out = out.trim() + ` ${majorWord}`
+  if (halalas > 0) out += ` and ${under100(halalas)} ${minorWord}`
   return out
 }
 
@@ -191,10 +195,18 @@ function pickTerm(
   return (langValue || legacy || fallback || '').trim() || null
 }
 
-export function QuotationPrint({ project, items, quotation, settings, deliveryNote }: Props) {
+export function QuotationPrint({ project, items, quotation, settings, deliveryNote, currency }: Props) {
   const lang = quotation.language === 'en' ? 'en' : 'ar'
   const isRtl = lang === 'ar'
   const S = STR[lang]
+
+  // Currency-aware money label + spelled-out unit words. Default SAR keeps Furn
+  // pixel-identical; 'USD' flips the pill next to every amount AND the total-in-
+  // words so the document is internally consistent.
+  const isUsd = currency === 'USD'
+  const curInline = isUsd ? (isRtl ? '$' : 'USD') : S.sar
+  const majorWord = isUsd ? (isRtl ? 'دولار أمريكي' : 'US Dollars') : (isRtl ? 'ريال سعودي' : 'Saudi Riyals')
+  const minorWord = isUsd ? (isRtl ? 'سنتاً' : 'cents') : (isRtl ? 'هللة' : 'halalas')
 
   useEffect(() => {
     document.documentElement.lang = lang
@@ -218,7 +230,7 @@ export function QuotationPrint({ project, items, quotation, settings, deliveryNo
     year: 'numeric', month: '2-digit', day: '2-digit',
   })
 
-  const totalInWords = isRtl ? arabicAmountInWords(total) : englishAmountInWords(total)
+  const totalInWords = isRtl ? arabicAmountInWords(total, majorWord, minorWord) : englishAmountInWords(total, majorWord, minorWord)
 
   // Only render the notes column when at least one item actually has a
   // note. The AI fills `notes` for rows where finish/thickness/color
@@ -325,15 +337,15 @@ export function QuotationPrint({ project, items, quotation, settings, deliveryNo
         <div className="totals">
           <div className="totals-row">
             <span className="totals-label">{S.subtotal}</span>
-            <span className="totals-value">{formatMoney(subtotal)} {S.sar}</span>
+            <span className="totals-value">{formatMoney(subtotal)} {curInline}</span>
           </div>
           <div className="totals-row">
             <span className="totals-label">{S.vat}</span>
-            <span className="totals-value">{formatMoney(vatAmount)} {S.sar}</span>
+            <span className="totals-value">{formatMoney(vatAmount)} {curInline}</span>
           </div>
           <div className="totals-row totals-grand">
             <span className="totals-label">{S.grand_total}</span>
-            <span className="totals-value">{formatMoney(total)} {S.sar}</span>
+            <span className="totals-value">{formatMoney(total)} {curInline}</span>
           </div>
         </div>
 

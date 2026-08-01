@@ -93,10 +93,12 @@ export function ManualQuoteEditor({ initial }: { initial: ManualQuote }) {
 
       <Card className="mb-4"><CardHeader><CardTitle className="text-base">{ar ? 'بيانات العميل' : 'Client'}</CardTitle></CardHeader>
         <CardContent className="grid md:grid-cols-2 gap-3">
+          <div className="space-y-1"><Label>{ar ? 'اسم المشروع' : 'Project name'}</Label><Input value={q.project_name ?? ''} onChange={(e) => set('project_name', e.target.value)} /></div>
           <div className="space-y-1"><Label>{ar ? 'الشركة' : 'Company'}</Label><Input value={q.company} onChange={(e) => set('company', e.target.value)} /></div>
-          <div className="space-y-1"><Label>{ar ? 'اسم العميل' : 'Contact name'}</Label><Input value={q.client_name} onChange={(e) => set('client_name', e.target.value)} /></div>
+          <div className="space-y-1"><Label>{ar ? 'اسم المهندس / العميل' : 'Contact name'}</Label><Input value={q.client_name} onChange={(e) => set('client_name', e.target.value)} /></div>
           <div className="space-y-1"><Label>{ar ? 'الإيميل' : 'Email'}</Label><Input dir="ltr" value={q.email} onChange={(e) => set('email', e.target.value)} /></div>
           <div className="space-y-1"><Label>{ar ? 'الجوال' : 'Phone'}</Label><Input dir="ltr" value={q.phone} onChange={(e) => set('phone', e.target.value)} /></div>
+          <div className="space-y-1 md:col-span-2"><Label>{ar ? 'الموضوع' : 'Subject'}</Label><Input value={q.subject ?? ''} onChange={(e) => set('subject', e.target.value)} placeholder={ar ? 'مثال: توريد رخام لمشروع الفلل' : 'e.g. Marble supply for the villas'} /></div>
         </CardContent>
       </Card>
 

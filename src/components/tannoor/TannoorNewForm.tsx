@@ -14,6 +14,7 @@ import {
   Loader2, Upload, X, Sparkles, Search, Link2, Briefcase,
 } from 'lucide-react'
 import { useLanguage } from '@/contexts/LanguageContext'
+import { uploadFile } from '@/lib/upload-client'
 import type { ClientProject } from '@/types'
 
 interface UploadedFile { url: string; name: string; key?: string; size?: number }
@@ -104,30 +105,39 @@ export function TannoorNewForm() {
     setPickerQuery('')
   }
 
-  async function upload(file: File): Promise<UploadedFile | null> {
-    const fd = new FormData()
-    fd.append('file', file); fd.append('kind', 'tannoor')
-    const res = await fetch('/api/upload', { method: 'POST', body: fd })
-    const j = await res.json()
-    if (!j.url) { toast.error(j.error || `Upload failed: ${file.name}`); return null }
-    return { url: j.url, name: file.name, key: j.key, size: file.size }
+  // Direct-to-S3 (bypasses the nginx size limit); throws on failure so the
+  // callers below can surface it and, via try/finally, always clear the spinner.
+  async function upload(file: File): Promise<UploadedFile> {
+    const up = await uploadFile(file, 'tannoor')
+    return { url: up.url, name: up.name, key: up.key, size: up.bytes }
   }
   async function handleBoq(e: React.ChangeEvent<HTMLInputElement>) {
-    const f = e.target.files?.[0]; if (!f) return
-    setUploadingBoq(true); const up = await upload(f); setUploadingBoq(false); e.target.value = ''
-    if (up) setBoqFile(up)
+    const f = e.target.files?.[0]; e.target.value = ''; if (!f) return
+    setUploadingBoq(true)
+    try { setBoqFile(await upload(f)) }
+    catch (err) { toast.error(err instanceof Error ? err.message : `فشل رفع ${f.name}`) }
+    finally { setUploadingBoq(false) }
   }
   async function handleSpec(e: React.ChangeEvent<HTMLInputElement>) {
-    const files = Array.from(e.target.files || []); if (!files.length) return
+    const files = Array.from(e.target.files || []); e.target.value = ''; if (!files.length) return
     setUploadingSpec(true)
-    for (const f of files) { const up = await upload(f); if (up) setSpecs(prev => [...prev, up]) }
-    setUploadingSpec(false); e.target.value = ''
+    try {
+      // Per-file try so one bad file doesn't abort the batch or hang the spinner.
+      for (const f of files) {
+        try { const up = await upload(f); setSpecs(prev => [...prev, up]) }
+        catch (err) { toast.error(err instanceof Error ? err.message : `فشل رفع ${f.name}`) }
+      }
+    } finally { setUploadingSpec(false) }
   }
   async function handleDrawing(e: React.ChangeEvent<HTMLInputElement>) {
-    const files = Array.from(e.target.files || []); if (!files.length) return
+    const files = Array.from(e.target.files || []); e.target.value = ''; if (!files.length) return
     setUploadingDrawing(true)
-    for (const f of files) { const up = await upload(f); if (up) setDrawings(prev => [...prev, up]) }
-    setUploadingDrawing(false); e.target.value = ''
+    try {
+      for (const f of files) {
+        try { const up = await upload(f); setDrawings(prev => [...prev, up]) }
+        catch (err) { toast.error(err instanceof Error ? err.message : `فشل رفع ${f.name}`) }
+      }
+    } finally { setUploadingDrawing(false) }
   }
 
   async function handleSubmit(e: React.FormEvent) {

@@ -12,6 +12,7 @@ import {
   FileBadge, FileText, Plus, Trash2, Download, Loader2, Upload, AlertCircle, Calendar,
 } from 'lucide-react'
 import { useLanguage } from '@/contexts/LanguageContext'
+import { uploadFile } from '@/lib/upload-client'
 import type { ImportantDocument } from '@/types'
 
 interface Props {
@@ -71,20 +72,20 @@ export function ImportantDocsClient({ initialDocs, canManage }: Props) {
 
   async function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0]
+    e.target.value = '' // reset the input up front so re-picking the same file fires
     if (!f) return
+    // Direct-to-S3 (via uploadFile) so a big scan bypasses the nginx size limit;
+    // try/finally guarantees the spinner ALWAYS clears, even on error/timeout —
+    // the old raw fetch left it spinning forever when a 413 HTML body broke json().
     setUploading(true)
-    const fd = new FormData()
-    fd.append('file', f)
-    fd.append('kind', 'documents')
-    const res = await fetch('/api/upload', { method: 'POST', body: fd })
-    const j = await res.json()
-    setUploading(false)
-    e.target.value = ''
-    if (!j.url) {
-      toast.error(j.error || 'Upload failed')
-      return
+    try {
+      const up = await uploadFile(f, 'documents')
+      setFile({ url: up.url, name: up.name, key: up.key })
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'فشل الرفع')
+    } finally {
+      setUploading(false)
     }
-    setFile({ url: j.url, name: f.name, key: j.key })
   }
 
   async function handleCreate(e: React.FormEvent) {

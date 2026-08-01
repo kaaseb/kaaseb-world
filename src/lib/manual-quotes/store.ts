@@ -26,6 +26,8 @@ export interface ManualQuote {
   id: string
   number: number
   language: QuoteLang
+  project_name: string
+  subject: string
   client_name: string
   company: string
   email: string
@@ -78,6 +80,7 @@ export async function createManualQuote(input: {
     id: rid(),
     number: s.nextNumber,
     language: 'ar',
+    project_name: '', subject: '',
     client_name: '', company: '', email: '', phone: '',
     currency: 'SAR',
     vat_rate: 0.15,
@@ -124,6 +127,8 @@ export async function updateManualQuote(id: string, patch: Partial<ManualQuote>)
   const next: ManualQuote = {
     ...cur,
     language: patch.language === 'en' ? 'en' : patch.language === 'ar' ? 'ar' : cur.language,
+    project_name: patch.project_name !== undefined ? String(patch.project_name).slice(0, 200) : (cur.project_name ?? ''),
+    subject: patch.subject !== undefined ? String(patch.subject).slice(0, 300) : (cur.subject ?? ''),
     client_name: patch.client_name !== undefined ? String(patch.client_name).slice(0, 200) : cur.client_name,
     company: patch.company !== undefined ? String(patch.company).slice(0, 200) : cur.company,
     email: patch.email !== undefined ? String(patch.email).slice(0, 200) : cur.email,

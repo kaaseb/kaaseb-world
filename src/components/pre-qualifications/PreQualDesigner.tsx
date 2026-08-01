@@ -11,6 +11,7 @@ import {
   ArrowLeft, ArrowRight, FileText, Plus, X, Loader2, ChevronUp, ChevronDown, Download, Upload, Trash2,
 } from 'lucide-react'
 import { useLanguage } from '@/contexts/LanguageContext'
+import { uploadFile } from '@/lib/upload-client'
 import type { ImportantDocument } from '@/types'
 
 interface Props {
@@ -50,16 +51,18 @@ export function PreQualDesigner({ availableDocs }: Props) {
   }, [])
 
   async function uploadTpl(which: 'cover' | 'back', file: File) {
+    // Direct-to-S3 + try/finally: the spinner always clears, even if fetch itself
+    // rejects (network drop / CORS) — the old raw path left it stuck on that case.
     setUploadingTpl(which)
-    const fd = new FormData()
-    fd.append('file', file)
-    fd.append('kind', 'prequal_template')
-    const res = await fetch('/api/upload', { method: 'POST', body: fd })
-    const j = await res.json().catch(() => ({}))
-    setUploadingTpl(null)
-    if (!j.url) { toast.error(j.error || 'Upload failed'); return }
-    if (which === 'cover') setOverrideCover(j.url)
-    else setOverrideBack(j.url)
+    try {
+      const up = await uploadFile(file, 'prequal_template')
+      if (which === 'cover') setOverrideCover(up.url)
+      else setOverrideBack(up.url)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'فشل الرفع')
+    } finally {
+      setUploadingTpl(null)
+    }
   }
 
   const unpicked = availableDocs.filter(d => !picked.includes(d.id))
