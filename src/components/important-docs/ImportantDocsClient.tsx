@@ -93,24 +93,26 @@ export function ImportantDocsClient({ initialDocs, canManage }: Props) {
     if (!file) { toast.error(t('doc_file')); return }
     if (!nameEn.trim() && !nameAr.trim()) { toast.error(t('doc_name_en')); return }
     setSaving(true)
-    const res = await fetch('/api/important-documents', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        name_en: nameEn, name_ar: nameAr,
-        file_url: file.url, file_name: file.name, file_key: file.key,
-        expiry_date: expiry || null, notes,
-      }),
-    })
-    const j = await res.json()
-    setSaving(false)
-    if (!res.ok) {
-      toast.error(j.error || 'Failed')
-      return
+    try {
+      const res = await fetch('/api/important-documents', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name_en: nameEn, name_ar: nameAr,
+          file_url: file.url, file_name: file.name, file_key: file.key,
+          expiry_date: expiry || null, notes,
+        }),
+      })
+      const j = await res.json().catch(() => ({}))
+      if (!res.ok) { toast.error(j.error || 'Failed'); return }
+      setDocs(prev => [j.document, ...prev])
+      setOpenDialog(false)
+      reset()
+    } catch {
+      toast.error('فشل الحفظ — تأكد من الاتصال.')
+    } finally {
+      setSaving(false)
     }
-    setDocs(prev => [j.document, ...prev])
-    setOpenDialog(false)
-    reset()
   }
 
   async function handleDelete(d: ImportantDocument) {

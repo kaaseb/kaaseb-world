@@ -23,6 +23,9 @@ export interface UploadedFileResult {
 
 const PRESIGN_TIMEOUT_MS = 25_000       // asking for a signed URL is a tiny request
 const TRANSFER_TIMEOUT_MS = 5 * 60_000  // the actual bytes — generous, but never infinite
+// Above this, the classic (nginx) path will almost certainly 413, so a failed
+// DIRECT upload shouldn't waste minutes re-sending through it — fail fast instead.
+const CLASSIC_MAX_BYTES = 10 * 1024 * 1024
 
 function isAbort(e: unknown): boolean {
   return e instanceof DOMException ? e.name === 'AbortError' : (e as { name?: string })?.name === 'AbortError'
@@ -86,8 +89,8 @@ export async function uploadFile(
       throw new Error(j.error || 'نوع الملف غير مسموح')
     }
     if (res.ok) {
-      const j = await res.json()
-      if (j?.uploadUrl && j?.url) signed = j
+      const j = await res.json().catch(() => ({} as { uploadUrl?: string; url?: string; key?: string }))
+      if (j?.uploadUrl && j?.url) signed = j as { uploadUrl: string; key: string; url: string }
     }
   } catch (e) {
     // A policy refusal must not fall through to the classic path (it would just
@@ -132,6 +135,16 @@ export async function uploadFile(
       // network) is worth retrying through our own server.
       if (reached) throw e
     }
+  }
+
+  // We HAD a signed URL but couldn't reach S3 directly. The classic path streams
+  // the whole file through nginx and will almost certainly 413 a large one after
+  // minutes of waiting — fail fast with a clear message instead of a doomed retry.
+  if (signed && file.size > CLASSIC_MAX_BYTES) {
+    throw new Error(
+      `تعذّر الرفع المباشر لأمازون والملف كبير (${Math.round(file.size / 1024 / 1024)}MB). ` +
+      `تأكد من صلاحيات S3/CORS للمخزن ثم أعد المحاولة.`,
+    )
   }
 
   return classicUpload(file, kind, folder)

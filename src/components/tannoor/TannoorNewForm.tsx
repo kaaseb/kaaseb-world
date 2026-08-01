@@ -145,22 +145,28 @@ export function TannoorNewForm() {
     if (!nameEn.trim() && !nameAr.trim()) { toast.error(t('cp_form_name_en')); return }
     if (!boqFile) { toast.error(t('furn_form_boq')); return }
     setSubmitting(true)
-    const res = await fetch('/api/tannoor/projects', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        project_name_en: nameEn, project_name_ar: nameAr,
-        company_en: companyEn, company_ar: companyAr,
-        engineer_name_en: engEn, engineer_name_ar: engAr, engineer_phone: engPhone,
-        payment_terms: paymentTerms, delivery_terms: deliveryTerms,
-        offer_duration: offerDuration, special_conditions: specialConditions,
-        boq_url: boqFile.url, boq_filename: boqFile.name,
-        spec_files: specs, drawing_files: drawings,
-      }),
-    })
-    const j = await res.json()
-    if (!res.ok) { setSubmitting(false); toast.error(j.error || 'Failed'); return }
-    toast.success(t('furn_form_submit'))
-    router.push(`/tannoor/${j.project.id}`)
+    try {
+      const res = await fetch('/api/tannoor/projects', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          project_name_en: nameEn, project_name_ar: nameAr,
+          company_en: companyEn, company_ar: companyAr,
+          engineer_name_en: engEn, engineer_name_ar: engAr, engineer_phone: engPhone,
+          payment_terms: paymentTerms, delivery_terms: deliveryTerms,
+          offer_duration: offerDuration, special_conditions: specialConditions,
+          boq_url: boqFile.url, boq_filename: boqFile.name,
+          spec_files: specs, drawing_files: drawings,
+        }),
+      })
+      const j = await res.json().catch(() => ({}))
+      if (!res.ok || !j.project?.id) { toast.error(j.error || 'Failed'); return }
+      toast.success(t('furn_form_submit'))
+      router.push(`/tannoor/${j.project.id}`)
+    } catch {
+      toast.error('فشل الإنشاء — تأكد من الاتصال.')
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   const ChevronEnd = isRtl ? ArrowLeft : ArrowRight

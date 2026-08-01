@@ -92,48 +92,46 @@ export function PreQualDesigner({ availableDocs }: Props) {
       return
     }
     setCreating(true)
-    // Step 1: create the pre-qual row
-    const createRes = await fetch('/api/pre-qualifications', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        company_en: companyEn, company_ar: companyAr,
-        project_name_en: projectEn, project_name_ar: projectAr,
-        document_ids: picked,
-        stamp_mode: 'none',
-      }),
-    })
-    const created = await createRes.json()
-    if (!createRes.ok) {
-      setCreating(false)
-      toast.error(created.error || 'Failed')
-      return
-    }
-
-    // Step 1.5: if the user uploaded a custom cover/back for THIS packet, store
-    // the override before rendering (else the default templates are used).
-    if (overrideCover || overrideBack) {
-      await fetch('/api/prequal/override', {
+    try {
+      // Step 1: create the pre-qual row
+      const createRes = await fetch('/api/pre-qualifications', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pqId: created.item.id, cover_url: overrideCover || null, back_url: overrideBack || null }),
-      }).catch(() => {})
-    }
+        body: JSON.stringify({
+          company_en: companyEn, company_ar: companyAr,
+          project_name_en: projectEn, project_name_ar: projectAr,
+          document_ids: picked,
+          stamp_mode: 'none',
+        }),
+      })
+      const created = await createRes.json().catch(() => ({}))
+      if (!createRes.ok || !created.item?.id) { toast.error(created.error || 'Failed'); return }
 
-    // Step 2: render the merged PDF
-    setRendering(true)
-    const renderRes = await fetch(`/api/pre-qualifications/${created.item.id}/render`, {
-      method: 'POST',
-    })
-    const rendered = await renderRes.json()
-    setCreating(false)
-    setRendering(false)
-    if (!renderRes.ok) {
-      toast.error(rendered.error || 'Rendering failed')
-      return
+      // Step 1.5: if the user uploaded a custom cover/back for THIS packet, store
+      // the override before rendering (else the default templates are used).
+      if (overrideCover || overrideBack) {
+        await fetch('/api/prequal/override', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pqId: created.item.id, cover_url: overrideCover || null, back_url: overrideBack || null }),
+        }).catch(() => {})
+      }
+
+      // Step 2: render the merged PDF
+      setRendering(true)
+      const renderRes = await fetch(`/api/pre-qualifications/${created.item.id}/render`, {
+        method: 'POST',
+      })
+      const rendered = await renderRes.json().catch(() => ({}))
+      if (!renderRes.ok) { toast.error(rendered.error || 'Rendering failed'); return }
+      setRenderedUrl(rendered.item.output_pdf_url)
+      toast.success(t('pq_generate'))
+    } catch {
+      toast.error('فشل الإنشاء — تأكد من الاتصال.')
+    } finally {
+      setCreating(false)
+      setRendering(false)
     }
-    setRenderedUrl(rendered.item.output_pdf_url)
-    toast.success(t('pq_generate'))
   }
 
   const ChevronStart = isRtl ? ArrowRight : ArrowLeft
