@@ -23,5 +23,9 @@ export async function GET() {
   if (!(await inboxUnlocked())) return NextResponse.json({ error: 'مقفل', locked: true }, { status: 423 })
 
   const { items, lastRun } = await getInboxState()
-  return NextResponse.json({ items, lastRun })
+  // The full HTML body can be large — it's only needed by the reader, which
+  // fetches a single email via GET /api/inbox/[id]. Strip it from the polled list
+  // so the list response (and the 5s poll) stays light.
+  const lean = items.map(({ bodyHtml, ...rest }) => { void bodyHtml; return rest })
+  return NextResponse.json({ items: lean, lastRun })
 }

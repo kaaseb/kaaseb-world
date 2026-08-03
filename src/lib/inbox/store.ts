@@ -71,6 +71,11 @@ export interface InboxEmail {
   // is recomputed on every sync (header chain, then same-subject+sender).
   inReplyTo: string | null
   threadId: string
+  // ── Reading / reply state ────────────────────────────────────────────────
+  read: boolean            // opened in the reader (distinct from status new/…)
+  bodyHtml: string | null  // sanitized full HTML body (hydrated; for the reader)
+  links: string[]          // http(s) URLs found in the message (hydrated)
+  repliedAt: string | null // last time we emailed this thread back, ISO
 }
 
 // The lightweight envelope a LIST sync produces — no bytes pulled, no AI.
@@ -125,6 +130,12 @@ function normalize(e: InboxEmail): InboxEmail {
   // Threading fields (added later) — an old record is its own single-email thread.
   if (out.inReplyTo === undefined) out.inReplyTo = null
   if (!out.threadId) out.threadId = out.id
+  // Reading/reply fields (added later). An old hydrated record was already
+  // interacted with → treat it as read so it doesn't resurface as "unread".
+  if (typeof out.read !== 'boolean') out.read = !!out.hydrated
+  if (out.bodyHtml === undefined) out.bodyHtml = null
+  if (!Array.isArray(out.links)) out.links = []
+  if (out.repliedAt === undefined) out.repliedAt = null
   return out
 }
 
@@ -283,11 +294,35 @@ export async function upsertListed(listed: ListedEmail[]): Promise<number> {
       folder: l.folder,
       inReplyTo: l.inReplyTo,
       threadId: l.id, // provisional; recomputeThreads fixes it below
+      read: false,
+      bodyHtml: null,
+      links: [],
+      repliedAt: null,
     }
     s.items.unshift(rec)
     byId.set(l.id, rec)
     added++
   }
+
+  // Reverse sync: a message that was in the fetched window but is NO LONGER on
+  // the server was deleted in the mailbox → drop it here too. Guards: never touch
+  // 'converted' (linked to a project), never touch records outside the fetched
+  // UID window or from a different folder / a reset mailbox (uidValidity), and
+  // only reconcile when the LIST actually returned something.
+  if (listed.length > 0) {
+    const folder = listed[0].folder
+    const uidValidity = listed[0].uidValidity
+    const fetchedUids = new Set(listed.map((l) => l.uid))
+    let minUid = Infinity
+    for (const l of listed) if (l.uid < minUid) minUid = l.uid
+    s.items = s.items.filter((e) => {
+      if (e.status === 'converted') return true
+      if (e.folder !== folder || e.uidValidity !== uidValidity) return true
+      if (e.uid == null || e.uid < minUid) return true // older than the synced window
+      return fetchedUids.has(e.uid)                     // in window → keep only if still on the server
+    })
+  }
+
   recomputeThreads(s.items)
   await writeState(s)
   return added
@@ -320,7 +355,7 @@ export async function updateThread(
 // listed record and mark it hydrated.
 export async function applyHydration(
   id: string,
-  patch: { bodyText: string; attachments: EmailAttachment[]; preview: EmailPreview | null },
+  patch: { bodyText: string; bodyHtml: string | null; links: string[]; attachments: EmailAttachment[]; preview: EmailPreview | null },
 ): Promise<InboxEmail | null> {
   const s = await readState()
   const idx = s.items.findIndex((e) => e.id === id)
@@ -328,6 +363,8 @@ export async function applyHydration(
   s.items[idx] = {
     ...s.items[idx],
     bodyText: patch.bodyText,
+    bodyHtml: patch.bodyHtml,
+    links: patch.links,
     attachments: patch.attachments,
     preview: patch.preview,
     attachmentCount: patch.attachments.length,
@@ -335,6 +372,32 @@ export async function applyHydration(
   }
   await writeState(s)
   return s.items[idx]
+}
+
+/** Mark every message in a thread as read (opened in the reader). */
+export async function markThreadRead(threadId: string): Promise<void> {
+  const s = await readState()
+  let changed = false
+  for (const e of s.items) if (e.threadId === threadId && !e.read) { e.read = true; changed = true }
+  if (changed) await writeState(s)
+}
+
+/** Save the team's edits to a message's extracted preview (verify-and-fix). */
+export async function updateEmailPreview(id: string, preview: EmailPreview): Promise<InboxEmail | null> {
+  const s = await readState()
+  const idx = s.items.findIndex((e) => e.id === id)
+  if (idx < 0) return null
+  s.items[idx] = { ...s.items[idx], preview }
+  await writeState(s)
+  return s.items[idx]
+}
+
+/** Stamp a whole thread as replied-to (for the "تم الرد" badge). */
+export async function setThreadReplied(threadId: string, iso: string): Promise<void> {
+  const s = await readState()
+  let changed = false
+  for (const e of s.items) if (e.threadId === threadId) { e.repliedAt = iso; changed = true }
+  if (changed) await writeState(s)
 }
 
 export async function updateEmail(

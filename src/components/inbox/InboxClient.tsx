@@ -13,7 +13,7 @@ import {
   Inbox, RefreshCw, Loader2, Trash2, Paperclip, Mail, CalendarDays,
   Briefcase, Archive, AlertCircle, ExternalLink, FileSpreadsheet, PencilRuler,
   FileText, File as FileIcon, Sparkles, Search, X, KeyRound, ShieldCheck,
-  MessagesSquare, ListChecks,
+  MessagesSquare, ListChecks, BookOpen, Reply, LinkIcon,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { toast } from 'sonner'
@@ -22,6 +22,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { cn } from '@/lib/utils'
 import { useLanguage } from '@/contexts/LanguageContext'
 import type { InboxEmail, PullRun, EmailStatus } from '@/lib/inbox/store'
+import { InboxReader } from './InboxReader'
 
 interface Props {
   initialItems: InboxEmail[]
@@ -77,6 +78,9 @@ export function InboxClient({ initialItems, initialLastRun, canCreateProject, is
   const [tab, setTab] = useState<EmailStatus>('new')
   const [starting, setStarting] = useState(false)
   const [busyId, setBusyId] = useState<string | null>(null)
+  // The reading/reply drawer: which head message, and whether to open the reply
+  // composer straight away (after a convert, for the "review then send" ack).
+  const [reader, setReader] = useState<{ headId: string; threadId: string; autoReply: boolean } | null>(null)
 
   // Super-admin: change the shared PIN
   const [showPin, setShowPin] = useState(false)
@@ -182,7 +186,22 @@ export function InboxClient({ initialItems, initialLastRun, canCreateProject, is
     }
   }
 
-  // Convert the WHOLE thread → one project. The server pools every message.
+  // Open the reading/reply drawer, optimistically marking the whole thread read.
+  // Stable identities (useCallback) so the reader's load-once effect doesn't re-run.
+  const openReader = useCallback((headId: string, threadId: string, autoReply = false) => {
+    setItems((list) => list.map((e) => (e.threadId === threadId ? { ...e, read: true } : e)))
+    setReader({ headId, threadId, autoReply })
+  }, [])
+  const onReaderPatched = useCallback((email: InboxEmail) => {
+    setItems((list) => list.map((e) => (e.id === email.id ? { ...e, ...email } : e)))
+  }, [])
+  const onReaderReplied = useCallback((threadId: string, repliedAt: string) => {
+    setItems((list) => list.map((e) => (e.threadId === threadId ? { ...e, repliedAt } : e)))
+  }, [])
+
+  // Convert the WHOLE thread → one project. The server pools every message. On
+  // success we open the reader with the reply composer so the team reviews and
+  // sends the "we're preparing your quotation" acknowledgment before moving on.
   async function convert(headId: string, threadId: string) {
     setBusyId(threadId)
     try {
@@ -193,9 +212,9 @@ export function InboxClient({ initialItems, initialLastRun, canCreateProject, is
         return
       }
       const pid = j.project?.id ?? null
-      setItems((list) => list.map((e) => (e.threadId === threadId ? { ...e, status: 'converted', projectId: pid } : e)))
+      setItems((list) => list.map((e) => (e.threadId === threadId ? { ...e, status: 'converted', projectId: pid, read: true } : e)))
       toast.success(t('inbox_converted'))
-      if (pid) router.push(`/projects/${pid}`)
+      openReader(headId, threadId, true)
     } catch {
       toast.error('Failed')
     } finally {
@@ -223,7 +242,9 @@ export function InboxClient({ initialItems, initialLastRun, canCreateProject, is
   }
 
   async function remove(headId: string, threadId: string) {
-    if (!confirm(t('inbox_delete_confirm'))) return
+    if (!confirm(lang === 'ar'
+      ? 'حذف المحادثة؟ ستُنقل رسائلها إلى سلة المحذوفات في بريد Titan أيضاً.'
+      : 'Delete this conversation? Its messages will also be moved to Trash in Titan.')) return
     const prev = items
     setItems((list) => list.filter((e) => e.threadId !== threadId))
     try {
@@ -441,12 +462,25 @@ export function InboxClient({ initialItems, initialLastRun, canCreateProject, is
               const busy = busyId === thread.threadId
               const isConverted = head.status === 'converted' && !!head.projectId
               const msgCount = thread.messages.length
+              const unread = head.status === 'new' && thread.messages.some((m) => !m.read)
+              const replied = thread.messages.some((m) => !!m.repliedAt)
+              const threadLinks = thread.messages.reduce((n, m) => n + (m.links?.length || 0), 0)
               return (
               <Card key={thread.threadId}>
                 <CardContent className="p-4 flex flex-col gap-3">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
-                      <h3 className="font-semibold text-gray-900 leading-snug">{head.preview?.projectName || head.subject}</h3>
+                      <button onClick={() => openReader(head.id, thread.threadId, false)} className="text-start w-full">
+                        <h3 className={cn('leading-snug flex items-center gap-2 hover:underline', unread ? 'font-bold text-gray-900' : 'font-medium text-gray-800')}>
+                          {unread && <span className="w-2 h-2 rounded-full bg-blue-500 flex-shrink-0" title={t('inbox_new')} />}
+                          <span className="truncate">{head.preview?.projectName || head.subject}</span>
+                          {replied && (
+                            <span className="inline-flex items-center gap-1 text-[10px] text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-full px-1.5 py-0.5 flex-shrink-0">
+                              <Reply className="w-2.5 h-2.5" />{lang === 'ar' ? 'تم الرد' : 'Replied'}
+                            </span>
+                          )}
+                        </h3>
+                      </button>
                       {head.preview?.projectName && head.preview.projectName !== head.subject && (
                         <p className="text-xs text-muted-foreground truncate mt-0.5">{head.subject}</p>
                       )}
@@ -454,6 +488,7 @@ export function InboxClient({ initialItems, initialLastRun, canCreateProject, is
                         <span className="flex items-center gap-1"><Mail className="w-3.5 h-3.5" />{t('inbox_from')}: {head.fromName || head.fromEmail}</span>
                         {thread.latestDate && <span className="flex items-center gap-1"><CalendarDays className="w-3.5 h-3.5" />{t('inbox_received')}: {fmt(thread.latestDate, lang)}</span>}
                         {thread.totalAttachments > 0 && <span className="flex items-center gap-1"><Paperclip className="w-3.5 h-3.5" />{thread.totalAttachments} {t('inbox_attachments')}</span>}
+                        {threadLinks > 0 && <span className="flex items-center gap-1"><LinkIcon className="w-3.5 h-3.5" />{threadLinks} {lang === 'ar' ? 'روابط' : 'links'}</span>}
                         {msgCount > 1 && <span className="flex items-center gap-1 text-blue-600 font-medium"><MessagesSquare className="w-3.5 h-3.5" />{msgCount} {t('inbox_thread_count')}</span>}
                       </div>
                     </div>
@@ -548,6 +583,12 @@ export function InboxClient({ initialItems, initialLastRun, canCreateProject, is
                   )}
 
                   <div className="flex flex-wrap items-center gap-2 pt-1">
+                    <Button size="sm" variant="outline" onClick={() => openReader(head.id, thread.threadId, false)} className="gap-1.5">
+                      <BookOpen className="w-3.5 h-3.5" /> {lang === 'ar' ? 'قراءة' : 'Read'}
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={() => openReader(head.id, thread.threadId, true)} className="gap-1.5 text-emerald-700">
+                      <Reply className="w-3.5 h-3.5" /> {lang === 'ar' ? 'رد' : 'Reply'}
+                    </Button>
                     {!head.hydrated ? (
                       <Button size="sm" onClick={() => hydrate(head.id, thread.threadId)} disabled={busy} className="gap-1.5">
                         {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
@@ -583,6 +624,24 @@ export function InboxClient({ initialItems, initialLastRun, canCreateProject, is
           )}
         </>
       )}
+
+      {reader && (() => {
+        const rEmail = items.find((e) => e.id === reader.headId)
+        return (
+          <InboxReader
+            headId={reader.headId}
+            fromEmail={rEmail?.fromEmail || ''}
+            subject={rEmail?.subject || ''}
+            lang={lang === 'ar' ? 'ar' : 'en'}
+            isRtl={isRtl}
+            canReply
+            autoReply={reader.autoReply}
+            onClose={() => setReader(null)}
+            onPatched={onReaderPatched}
+            onReplied={(repliedAt) => onReaderReplied(reader.threadId, repliedAt)}
+          />
+        )
+      })()}
     </div>
   )
 }

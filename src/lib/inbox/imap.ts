@@ -23,6 +23,7 @@ import {
   type ListedEmail, type EmailAttachment, type InboxEmail, type PullTrigger,
 } from './store'
 import { summarizeEmail } from './summarize'
+import { sanitizeEmailHtml, extractLinks } from './html'
 
 // How many of the newest messages a LIST sync mirrors. Envelopes are tiny, so
 // this is 20× the old whole-message cap and still costs almost nothing.
@@ -34,7 +35,9 @@ const MAX_ATTACHMENT_BYTES = 60 * 1024 * 1024 // 60 MB — a huge single drawing
 // crafted multi-GB message must be rejected without ever being buffered. 120 MB
 // comfortably holds a real 200-drawing project.
 const MAX_MESSAGE_BYTES = 120 * 1024 * 1024
-const BODY_PREVIEW_CHARS = 4000
+// Enough to read a whole plain-text email in the reader; convert/summarize slice
+// this down further for their own cost limits.
+const BODY_PREVIEW_CHARS = 16000
 
 const log = (msg: string) => console.log(`[صندوق] ${msg}`)
 
@@ -257,7 +260,11 @@ export async function hydrateEmail(id: string): Promise<HydrateResult> {
       }
     }
 
-    const bodyText = (parsed.text || '').trim().slice(0, BODY_PREVIEW_CHARS)
+    const fullText = (parsed.text || '').trim()
+    const bodyText = fullText.slice(0, BODY_PREVIEW_CHARS)
+    const rawHtml = typeof parsed.html === 'string' ? parsed.html : (parsed.textAsHtml || '')
+    const bodyHtml = sanitizeEmailHtml(rawHtml) || null
+    const links = extractLinks(rawHtml, fullText)
     const preview = await summarizeEmail({
       subject: stored.subject,
       fromName: stored.fromName,
@@ -266,7 +273,7 @@ export async function hydrateEmail(id: string): Promise<HydrateResult> {
       attachments: atts.map((a) => ({ name: a.name, category: a.category })),
     })
 
-    const email = await applyHydration(stored.id, { bodyText, attachments: atts, preview })
+    const email = await applyHydration(stored.id, { bodyText, bodyHtml, links, attachments: atts, preview })
     if (!email) return { ok: false, error: 'تعذّر حفظ الرسالة.' }
     log(`hydrated ${stored.id} — ${atts.length} attachments`)
     return { ok: true, email }
@@ -274,6 +281,78 @@ export async function hydrateEmail(id: string): Promise<HydrateResult> {
     const error = e instanceof Error ? e.message : 'فشل إحضار الرسالة.'
     log(`hydrate FAILED — ${error}`)
     return { ok: false, error }
+  } finally {
+    if (client) {
+      try { await client.logout() } catch { /* already gone */ }
+    }
+  }
+}
+
+// ── Reverse delete: move messages to Trash on the server ─────────────────────
+
+// Find the mailbox that plays the Trash role (\Trash special-use, else a name
+// match), falling back to the conventional "Trash".
+async function findTrashMailbox(client: ImapFlow): Promise<string> {
+  try {
+    const boxes = await client.list()
+    for (const b of boxes) if ((b.specialUse || '').toLowerCase() === '\\trash') return b.path
+    for (const b of boxes) if (/(^|[/.])trash$/i.test(b.path) || /محذوف/.test(b.path)) return b.path
+  } catch { /* fall through */ }
+  return 'Trash'
+}
+
+// Move the given messages to Trash (best-effort). Called when the owner deletes a
+// thread on the website, so the same messages leave the Titan inbox — and, since
+// they're gone from the synced window, won't be re-added by the next LIST sync.
+export async function trashEmails(
+  emails: Array<{ folder: string; uid: number | null; uidValidity: number | null; id: string }>,
+): Promise<{ moved: number; error: string | null }> {
+  const targets = emails.filter((e) => e.uid != null)
+  if (targets.length === 0) return { moved: 0, error: null }
+
+  let client: ImapFlow | null = null
+  try {
+    const conn = await connectTitan()
+    client = conn.client
+    const trash = await findTrashMailbox(client)
+
+    const byFolder = new Map<string, typeof targets>()
+    for (const e of targets) {
+      const f = e.folder || conn.folder
+      const arr = byFolder.get(f)
+      if (arr) arr.push(e); else byFolder.set(f, [e])
+    }
+
+    let moved = 0
+    for (const [folder, list] of byFolder) {
+      const lock = await client.getMailboxLock(folder)
+      try {
+        const box = client.mailbox && typeof client.mailbox !== 'boolean' ? client.mailbox : null
+        const currentValidity = box ? Number(box.uidValidity) : null
+        // Only act on UIDs that still belong to this mailbox generation.
+        const uids = list
+          .filter((e) => e.uidValidity == null || currentValidity == null || e.uidValidity === currentValidity)
+          .map((e) => e.uid as number)
+        if (uids.length === 0) continue
+        try {
+          if (trash && trash.toLowerCase() !== folder.toLowerCase()) {
+            await client.messageMove(uids, trash, { uid: true })
+          } else {
+            await client.messageDelete(uids, { uid: true })
+          }
+          moved += uids.length
+        } catch {
+          // No Trash / move refused → hard delete as the fallback.
+          try { await client.messageDelete(uids, { uid: true }); moved += uids.length } catch { /* give up on this folder */ }
+        }
+      } finally {
+        lock.release()
+      }
+    }
+    log(`trashed ${moved} message(s)`)
+    return { moved, error: null }
+  } catch (e) {
+    return { moved: 0, error: e instanceof Error ? e.message : 'فشل النقل لسلة المحذوفات' }
   } finally {
     if (client) {
       try { await client.logout() } catch { /* already gone */ }
