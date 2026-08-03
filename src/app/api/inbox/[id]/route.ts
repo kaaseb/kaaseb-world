@@ -16,6 +16,7 @@ import {
   markThreadRead, updateEmailPreview, type EmailPreview,
 } from '@/lib/inbox/store'
 import { trashEmails } from '@/lib/inbox/imap'
+import { getEmailBody } from '@/lib/inbox/body-store'
 import { inboxUnlocked } from '@/lib/inbox/lock'
 
 export const runtime = 'nodejs'
@@ -52,7 +53,9 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
   const { id } = await params
   const email = await getEmail(id)
   if (!email) return NextResponse.json({ error: 'Not found' }, { status: 404 })
-  return NextResponse.json({ email })
+  // The full HTML body lives in its own object — fetch it only here, for the reader.
+  const bodyHtml = email.hydrated ? await getEmailBody(id) : null
+  return NextResponse.json({ email, bodyHtml })
 }
 
 function cleanPreview(raw: unknown): EmailPreview | null {

@@ -46,6 +46,7 @@ export function InboxReader({
   const t = (a: string, e: string) => (ar ? a : e)
 
   const [email, setEmail] = useState<InboxEmail | null>(null)
+  const [bodyHtml, setBodyHtml] = useState<string | null>(null) // fetched separately (cold object)
   const [loading, setLoading] = useState(true)
   const [hydrating, setHydrating] = useState(false)
 
@@ -78,7 +79,7 @@ export function InboxReader({
       try {
         const res = await fetch(`/api/inbox/${encodeURIComponent(headId)}`)
         const j = await res.json().catch(() => ({}))
-        if (alive && res.ok && j.email) applyEmail(j.email as InboxEmail)
+        if (alive && res.ok && j.email) { applyEmail(j.email as InboxEmail); setBodyHtml(j.bodyHtml || null) }
       } catch { /* ignore */ }
       finally { if (alive) setLoading(false) }
       // Fire-and-forget: mark read.
@@ -117,7 +118,11 @@ export function InboxReader({
       const res = await fetch(`/api/inbox/${encodeURIComponent(headId)}/hydrate`, { method: 'POST' })
       const j = await res.json().catch(() => ({}))
       if (!res.ok) { toast.error(j.error || 'Failed', { duration: 8000 }); return }
-      if (j.email) { applyEmail(j.email as InboxEmail); onPatched(j.email as InboxEmail) }
+      if (j.email) onPatched(j.email as InboxEmail)
+      // Re-fetch to pull the now-available body + links from their objects.
+      const g = await fetch(`/api/inbox/${encodeURIComponent(headId)}`)
+      const gj = await g.json().catch(() => ({}))
+      if (g.ok && gj.email) { applyEmail(gj.email as InboxEmail); setBodyHtml(gj.bodyHtml || null) }
     } catch { toast.error('Failed') } finally { setHydrating(false) }
   }
 
@@ -193,11 +198,11 @@ export function InboxReader({
                 <>
                   <div>
                     <p className="text-xs font-semibold text-muted-foreground mb-1.5 flex items-center gap-1.5"><FileText className="w-3.5 h-3.5" />{t('نص الرسالة', 'Message body')}</p>
-                    {email?.bodyHtml ? (
+                    {bodyHtml ? (
                       <iframe
                         title="email-body"
                         sandbox=""
-                        srcDoc={email.bodyHtml}
+                        srcDoc={bodyHtml}
                         className="w-full h-[320px] rounded-lg border bg-white"
                       />
                     ) : (

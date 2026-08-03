@@ -72,8 +72,9 @@ export interface InboxEmail {
   inReplyTo: string | null
   threadId: string
   // ── Reading / reply state ────────────────────────────────────────────────
+  // NOTE: the full HTML body is intentionally NOT here — it lives in its own S3
+  // object (lib/inbox/body-store) so this blob stays tiny on the hot path.
   read: boolean            // opened in the reader (distinct from status new/…)
-  bodyHtml: string | null  // sanitized full HTML body (hydrated; for the reader)
   links: string[]          // http(s) URLs found in the message (hydrated)
   repliedAt: string | null // last time we emailed this thread back, ISO
 }
@@ -133,9 +134,11 @@ function normalize(e: InboxEmail): InboxEmail {
   // Reading/reply fields (added later). An old hydrated record was already
   // interacted with → treat it as read so it doesn't resurface as "unread".
   if (typeof out.read !== 'boolean') out.read = !!out.hydrated
-  if (out.bodyHtml === undefined) out.bodyHtml = null
   if (!Array.isArray(out.links)) out.links = []
   if (out.repliedAt === undefined) out.repliedAt = null
+  // bodyHtml used to be stored here; drop it from any old record so it never
+  // bloats the hot blob again.
+  delete (out as { bodyHtml?: unknown }).bodyHtml
   return out
 }
 
@@ -295,7 +298,6 @@ export async function upsertListed(listed: ListedEmail[]): Promise<number> {
       inReplyTo: l.inReplyTo,
       threadId: l.id, // provisional; recomputeThreads fixes it below
       read: false,
-      bodyHtml: null,
       links: [],
       repliedAt: null,
     }
@@ -355,7 +357,7 @@ export async function updateThread(
 // listed record and mark it hydrated.
 export async function applyHydration(
   id: string,
-  patch: { bodyText: string; bodyHtml: string | null; links: string[]; attachments: EmailAttachment[]; preview: EmailPreview | null },
+  patch: { bodyText: string; links: string[]; attachments: EmailAttachment[]; preview: EmailPreview | null },
 ): Promise<InboxEmail | null> {
   const s = await readState()
   const idx = s.items.findIndex((e) => e.id === id)
@@ -363,7 +365,6 @@ export async function applyHydration(
   s.items[idx] = {
     ...s.items[idx],
     bodyText: patch.bodyText,
-    bodyHtml: patch.bodyHtml,
     links: patch.links,
     attachments: patch.attachments,
     preview: patch.preview,

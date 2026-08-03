@@ -24,6 +24,7 @@ import {
 } from './store'
 import { summarizeEmail } from './summarize'
 import { sanitizeEmailHtml, extractLinks } from './html'
+import { setEmailBody } from './body-store'
 
 // How many of the newest messages a LIST sync mirrors. Envelopes are tiny, so
 // this is 20× the old whole-message cap and still costs almost nothing.
@@ -35,9 +36,10 @@ const MAX_ATTACHMENT_BYTES = 60 * 1024 * 1024 // 60 MB — a huge single drawing
 // crafted multi-GB message must be rejected without ever being buffered. 120 MB
 // comfortably holds a real 200-drawing project.
 const MAX_MESSAGE_BYTES = 120 * 1024 * 1024
-// Enough to read a whole plain-text email in the reader; convert/summarize slice
-// this down further for their own cost limits.
-const BODY_PREVIEW_CHARS = 16000
+// Plain-text kept on the record for convert/summarize (they slice it further).
+// The reader shows the full body from the separate body-store, so this stays
+// small to keep inbox.json light.
+const BODY_PREVIEW_CHARS = 8000
 
 const log = (msg: string) => console.log(`[صندوق] ${msg}`)
 
@@ -263,7 +265,7 @@ export async function hydrateEmail(id: string): Promise<HydrateResult> {
     const fullText = (parsed.text || '').trim()
     const bodyText = fullText.slice(0, BODY_PREVIEW_CHARS)
     const rawHtml = typeof parsed.html === 'string' ? parsed.html : (parsed.textAsHtml || '')
-    const bodyHtml = sanitizeEmailHtml(rawHtml) || null
+    const bodyHtml = sanitizeEmailHtml(rawHtml)
     const links = extractLinks(rawHtml, fullText)
     const preview = await summarizeEmail({
       subject: stored.subject,
@@ -273,7 +275,9 @@ export async function hydrateEmail(id: string): Promise<HydrateResult> {
       attachments: atts.map((a) => ({ name: a.name, category: a.category })),
     })
 
-    const email = await applyHydration(stored.id, { bodyText, bodyHtml, links, attachments: atts, preview })
+    // The heavy HTML body goes to its own cold object; the record stays light.
+    try { await setEmailBody(stored.id, bodyHtml) } catch { /* body is a bonus */ }
+    const email = await applyHydration(stored.id, { bodyText, links, attachments: atts, preview })
     if (!email) return { ok: false, error: 'تعذّر حفظ الرسالة.' }
     log(`hydrated ${stored.id} — ${atts.length} attachments`)
     return { ok: true, email }
