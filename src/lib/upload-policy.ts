@@ -14,7 +14,7 @@ export const KIND_POLICY: Record<string, KindPolicy> = {
   avatars:        { mimePrefixes: ['image/'] },
   posts:          { mimePrefixes: ['image/', 'video/'] },
   stories:        { mimePrefixes: ['image/', 'video/'] },
-  chat:           { mimePrefixes: ['image/', 'video/', 'application/pdf'] },
+  chat:           { mimePrefixes: ['image/', 'video/', 'audio/', 'application/pdf'] },
   rewards:        { mimePrefixes: ['image/'] },
   goals:          { mimePrefixes: ['image/'] },
   doodles:        { mimePrefixes: ['image/'] },

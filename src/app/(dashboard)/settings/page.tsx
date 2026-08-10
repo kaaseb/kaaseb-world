@@ -22,6 +22,7 @@ import { OutreachSettingsCard } from '@/components/settings/OutreachSettingsCard
 import { BroadcastCard } from '@/components/settings/BroadcastCard'
 import { QuoteMessageCard } from '@/components/settings/QuoteMessageCard'
 import { AckTemplateCard } from '@/components/settings/AckTemplateCard'
+import { ProjectChatCard } from '@/components/settings/ProjectChatCard'
 
 export default function SettingsPage() {
   const [profile, setProfile] = useState<Profile | null>(null)
@@ -515,6 +516,9 @@ export default function SettingsPage() {
 
         {/* Super-admin only: the bilingual inbox acknowledgment reply */}
         {profile?.role === 'super_admin' && <AckTemplateCard />}
+
+        {/* Super-admin only: project-chat feature toggle */}
+        {profile?.role === 'super_admin' && <ProjectChatCard />}
 
         {/* Super-admin only: Community permissions */}
         {profile?.role === 'super_admin' && (

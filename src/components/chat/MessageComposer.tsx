@@ -2,7 +2,7 @@
 
 import { useState, useRef } from 'react'
 import { toast } from 'sonner'
-import { Send, ImageIcon, Paperclip, Loader2, X, FileText } from 'lucide-react'
+import { Send, ImageIcon, Paperclip, Loader2, X, FileText, Mic, StopCircle } from 'lucide-react'
 import { useLanguage } from '@/contexts/LanguageContext'
 
 interface Props {
@@ -18,6 +18,36 @@ export function MessageComposer({ onSend }: Props) {
   const [sending, setSending] = useState(false)
   const imageRef = useRef<HTMLInputElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
+
+  // Voice notes — recorded in-browser, uploaded as an audio file. The filename
+  // is prefixed "voicenote-" so the bubble renders an inline player.
+  const [recording, setRecording] = useState(false)
+  const recorderRef = useRef<MediaRecorder | null>(null)
+  const chunksRef = useRef<Blob[]>([])
+
+  async function toggleRecord() {
+    if (recording) { recorderRef.current?.stop(); return }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const rec = new MediaRecorder(stream)
+      chunksRef.current = []
+      rec.ondataavailable = (e) => { if (e.data && e.data.size) chunksRef.current.push(e.data) }
+      rec.onstop = async () => {
+        stream.getTracks().forEach((tr) => tr.stop())
+        const blob = new Blob(chunksRef.current, { type: 'audio/webm' })
+        if (blob.size > 0) {
+          const file = new File([blob], `voicenote-${Math.random().toString(36).slice(2, 10)}.webm`, { type: 'audio/webm' })
+          await upload(file, 'file')
+        }
+        setRecording(false)
+      }
+      recorderRef.current = rec
+      rec.start()
+      setRecording(true)
+    } catch {
+      toast.error('تعذّر الوصول للميكروفون — تأكد من الإذن.')
+    }
+  }
 
   async function upload(file: File, type: 'image' | 'file') {
     setUploading(true)
@@ -81,6 +111,15 @@ export function MessageComposer({ onSend }: Props) {
           aria-label={t('chat_attach_file')}
         >
           <Paperclip className="w-4 h-4" />
+        </button>
+        <button
+          onClick={toggleRecord}
+          disabled={uploading}
+          className={`p-2 rounded-full transition-colors ${recording ? 'text-white bg-red-500 animate-pulse' : 'text-gray-500 hover:text-red-600 hover:bg-red-50'}`}
+          aria-label="voice note"
+          title="تسجيل صوتي"
+        >
+          {recording ? <StopCircle className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
         </button>
         <textarea
           value={content}

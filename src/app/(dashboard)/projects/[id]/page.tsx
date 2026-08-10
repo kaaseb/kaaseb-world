@@ -5,7 +5,9 @@ import { hasPermission } from '@/lib/permissions'
 import { getProfileOrFallback, getEffectivePermissions } from '@/lib/profile'
 import { ClientProjectForm } from '@/components/client-projects/ClientProjectForm'
 import { getProjectEmail } from '@/lib/projects/email'
-import type { ClientProject, ProfileLite } from '@/types'
+import { getProjectChatEnabled } from '@/lib/project-chats/settings'
+import { ProjectDetailTabs } from '@/components/project-chat/ProjectDetailTabs'
+import type { ClientProject, ProfileLite, Profile } from '@/types'
 
 export const dynamic = 'force-dynamic'
 
@@ -34,15 +36,18 @@ export default async function ClientProjectDetailPage({
   if (!project) notFound()
 
   const initialEmail = await getProjectEmail(id)
+  const chatEnabled = await getProjectChatEnabled()
 
   return (
-    <ClientProjectForm
-      mode="edit"
-      initial={project as ClientProject}
-      initialEmail={initialEmail}
-      profiles={(allProfiles || []) as ProfileLite[]}
-      canEdit={hasPermission(profile, permissions, 'client_projects.edit')}
-      canDelete={hasPermission(profile, permissions, 'client_projects.delete')}
-    />
+    <ProjectDetailTabs projectId={id} currentUser={profile as Profile} chatEnabled={chatEnabled}>
+      <ClientProjectForm
+        mode="edit"
+        initial={project as ClientProject}
+        initialEmail={initialEmail}
+        profiles={(allProfiles || []) as ProfileLite[]}
+        canEdit={hasPermission(profile, permissions, 'client_projects.edit')}
+        canDelete={hasPermission(profile, permissions, 'client_projects.delete')}
+      />
+    </ProjectDetailTabs>
   )
 }

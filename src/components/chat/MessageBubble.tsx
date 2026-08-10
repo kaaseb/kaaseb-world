@@ -14,6 +14,11 @@ interface Props {
   onDelete?: () => void
 }
 
+// A "file" whose URL is an audio clip (esp. an in-app voice note) plays inline.
+function isAudioUrl(url: string): boolean {
+  return /\.(mp3|m4a|ogg|wav|opus)$/i.test(url) || /voicenote-[\w-]*\.webm/i.test(url)
+}
+
 export function MessageBubble({ message, isMine, authorName, authorAvatar, showAuthor, showAvatar, onDelete }: Props) {
   const time = new Date(message.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
   const [menuOpen, setMenuOpen] = useState(false)
@@ -75,7 +80,10 @@ export function MessageBubble({ message, isMine, authorName, authorAvatar, showA
           {message.media_url && message.media_type === 'video' && (
             <video src={message.media_url} controls className="max-w-[260px] max-h-[320px] rounded-lg mb-1.5" />
           )}
-          {message.media_url && message.media_type === 'file' && (
+          {message.media_url && message.media_type === 'file' && isAudioUrl(message.media_url) && (
+            <audio controls src={message.media_url} className="mb-1.5 max-w-[240px] h-9" />
+          )}
+          {message.media_url && message.media_type === 'file' && !isAudioUrl(message.media_url) && (
             <a
               href={message.media_url}
               target="_blank"
