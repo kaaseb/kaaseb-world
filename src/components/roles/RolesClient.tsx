@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { toast } from 'sonner'
 import { Plus, BadgeCheck, Edit, Trash2, Loader2 } from 'lucide-react'
 import type { Profile, CustomRole } from '@/types'
-import { PERMISSIONS, type PermissionKey } from '@/lib/permissions'
+import { PERMISSIONS, PERMISSION_MODULES, MODULE_COVERED_KEYS, type PermissionModule } from '@/lib/permissions'
 import { useLanguage } from '@/contexts/LanguageContext'
 
 interface Props {
@@ -20,7 +20,8 @@ interface Props {
 }
 
 export function RolesClient({ initRoles }: Props) {
-  const { t, isRtl } = useLanguage()
+  const { t, isRtl, lang } = useLanguage()
+  const ar = lang === 'ar'
   const supabase = createClient()
   const [roles, setRoles] = useState(initRoles)
   const [dialogOpen, setDialogOpen] = useState(false)
@@ -30,14 +31,26 @@ export function RolesClient({ initRoles }: Props) {
   const [selectedPerms, setSelectedPerms] = useState<Set<string>>(new Set())
   const [saving, setSaving] = useState(false)
 
-  const groups = useMemo(() => {
-    const map = new Map<string, typeof PERMISSIONS[number][]>()
-    for (const p of PERMISSIONS) {
-      if (!map.has(p.group)) map.set(p.group, [])
-      map.get(p.group)!.push(p)
-    }
-    return Array.from(map.entries())
-  }, [])
+  // Permission keys not owned by any module's read/write — shown as plain
+  // advanced toggles so nothing is lost.
+  const advancedPerms = useMemo(
+    () => PERMISSIONS.filter((p) => !MODULE_COVERED_KEYS.has(p.key) && p.group !== 'Hidden'),
+    [],
+  )
+
+  // ── Read / Write per module (operates on the flat selectedPerms set) ────────
+  const isRead = (m: PermissionModule) => selectedPerms.has(m.read)
+  const isWrite = (m: PermissionModule) => m.write.length > 0 && m.write.every((k) => selectedPerms.has(k))
+  function setModule(m: PermissionModule, read: boolean, write: boolean) {
+    const s = new Set(selectedPerms)
+    if (read || write) s.add(m.read); else s.delete(m.read)
+    for (const k of m.write) { if (write) s.add(k); else s.delete(k) }
+    setSelectedPerms(s)
+  }
+  // Turning read OFF also drops write (can't edit what you can't see); turning
+  // write ON implies read.
+  const toggleRead = (m: PermissionModule) => (isRead(m) ? setModule(m, false, false) : setModule(m, true, false))
+  const toggleWrite = (m: PermissionModule) => (isWrite(m) ? setModule(m, true, false) : setModule(m, true, true))
 
   function openCreate() {
     setEditRole(null)
@@ -149,25 +162,46 @@ export function RolesClient({ initRoles }: Props) {
               <Textarea value={description} onChange={e => setDescription(e.target.value)} rows={2} />
             </div>
             <div className="space-y-3">
-              <Label>{t('role_permissions')}</Label>
-              {groups.map(([group, perms]) => (
-                <div key={group} className="border border-gray-100 rounded-lg p-3">
-                  <p className="text-xs font-semibold text-gray-700 uppercase mb-2">{group}</p>
+              <Label>{ar ? 'الصلاحيات' : 'Permissions'}</Label>
+              <p className="text-xs text-muted-foreground -mt-1.5">
+                {ar ? '«قراءة» = عرض فقط · «تعديل» = عرض + إنشاء/تعديل/حذف' : 'Read = view only · Write = view + create/edit/delete'}
+              </p>
+              <div className="border rounded-lg divide-y">
+                {PERMISSION_MODULES.map((m) => {
+                  const read = isRead(m), write = isWrite(m)
+                  return (
+                    <div key={m.key} className="flex items-center justify-between gap-3 px-3 py-2">
+                      <span className="text-sm font-medium text-gray-800">{ar ? m.ar : m.en}</span>
+                      <div className="flex items-center gap-1.5 flex-shrink-0">
+                        <button type="button" onClick={() => toggleRead(m)}
+                          className={`px-3 py-1 rounded-full text-xs font-medium border transition-colors ${read ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-400 border-gray-200 hover:bg-gray-50'}`}>
+                          {ar ? 'قراءة' : 'Read'}
+                        </button>
+                        {m.write.length > 0 && (
+                          <button type="button" onClick={() => toggleWrite(m)}
+                            className={`px-3 py-1 rounded-full text-xs font-medium border transition-colors ${write ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white text-gray-400 border-gray-200 hover:bg-gray-50'}`}>
+                            {ar ? 'تعديل' : 'Write'}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+
+              {advancedPerms.length > 0 && (
+                <div className="border border-gray-100 rounded-lg p-3">
+                  <p className="text-xs font-semibold text-gray-700 mb-2">{ar ? 'صلاحيات متقدّمة' : 'Advanced'}</p>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
-                    {perms.map(p => (
+                    {advancedPerms.map((p) => (
                       <label key={p.key} className="flex items-center gap-2 text-sm cursor-pointer hover:bg-gray-50 rounded px-2 py-1.5">
-                        <input
-                          type="checkbox"
-                          checked={selectedPerms.has(p.key)}
-                          onChange={() => toggle(p.key)}
-                          className="accent-gray-900"
-                        />
+                        <input type="checkbox" checked={selectedPerms.has(p.key)} onChange={() => toggle(p.key)} className="accent-gray-900" />
                         <span className="text-gray-700">{p.label}</span>
                       </label>
                     ))}
                   </div>
                 </div>
-              ))}
+              )}
             </div>
             <Button type="submit" disabled={saving} className="w-full">
               {saving ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />{t('saving')}...</> : t('save')}

@@ -69,6 +69,54 @@ export const PERMISSIONS = [
 
 export type PermissionKey = (typeof PERMISSIONS)[number]['key']
 
+// ── Read / Write module model ────────────────────────────────────────────────
+// The Roles UI presents each section as a simple READ vs READ+WRITE choice
+// instead of a flat list. This is pure UI grouping over the SAME permission keys
+// above — runtime checks (hasPermission) and existing custom roles are unchanged:
+//   • read  = the page.* access key (can view the section)
+//   • write = the section's create/edit/delete/manage/export keys (bundled)
+// A read-only role gets `read` only; a full role gets `read` + every `write` key,
+// which the server routes already enforce. Modules with an empty `write` are
+// access-only today (no partial edit permission exists for them yet).
+export interface PermissionModule {
+  key: string
+  ar: string
+  en: string
+  read: PermissionKey
+  write: PermissionKey[]
+}
+
+export const PERMISSION_MODULES: PermissionModule[] = [
+  { key: 'client_projects', ar: 'المشاريع', en: 'Client Projects', read: 'page.client_projects', write: ['client_projects.create', 'client_projects.edit', 'client_projects.delete'] },
+  { key: 'furn', ar: 'الفرن (العروض السعرية)', en: 'Furn (Quotations)', read: 'page.furn', write: ['furn.projects.create', 'furn.projects.delete', 'furn.pricing.edit', 'furn.quotation.export', 'furn.settings.edit'] },
+  { key: 'tannoor', ar: 'التنّور', en: 'Tannoor', read: 'page.tannoor', write: ['tannoor.projects.create', 'tannoor.projects.delete', 'tannoor.quotation.export'] },
+  { key: 'tannoor_products', ar: 'منتجات التنّور', en: 'Tannoor Products', read: 'page.tannoor_products', write: ['tannoor.products.edit'] },
+  { key: 'important_docs', ar: 'المستندات المهمة', en: 'Important Documents', read: 'page.important_docs', write: ['docs.important.manage'] },
+  { key: 'pre_qualifications', ar: 'التأهيل المسبق', en: 'Pre-qualifications', read: 'page.pre_qualifications', write: ['docs.prequal.manage'] },
+  { key: 'daily_tasks', ar: 'المهام اليومية', en: 'Daily Tasks', read: 'page.daily_tasks', write: ['feature.create_tasks'] },
+  { key: 'notifications', ar: 'الإشعارات', en: 'Notifications', read: 'page.notifications', write: ['feature.broadcast'] },
+  { key: 'settings', ar: 'الإعدادات', en: 'Settings', read: 'page.settings', write: ['feature.site_settings'] },
+  // Access-only sections (no separate edit permission today).
+  { key: 'inbox', ar: 'صندوق الوارد', en: 'Email Inbox', read: 'page.inbox', write: [] },
+  { key: 'opportunities', ar: 'الفرص', en: 'Opportunities', read: 'page.opportunities', write: [] },
+  { key: 'companies', ar: 'الشركات المستهدفة', en: 'Target Companies', read: 'page.companies', write: [] },
+  { key: 'visualize', ar: 'النفق السحري', en: 'Magic Tunnel', read: 'page.visualize', write: [] },
+  { key: 'dashboard', ar: 'لوحة التحكم', en: 'Dashboard', read: 'page.dashboard', write: [] },
+  { key: 'calendar', ar: 'التقويم', en: 'Calendar', read: 'page.calendar', write: [] },
+  { key: 'goals', ar: 'خارطة الأهداف', en: 'Goals Roadmap', read: 'page.goals', write: [] },
+  { key: 'departments', ar: 'الأقسام', en: 'Departments', read: 'page.departments', write: [] },
+  { key: 'analytics', ar: 'التحليلات', en: 'Analytics', read: 'page.analytics', write: [] },
+  { key: 'users', ar: 'المستخدمون', en: 'Users', read: 'page.users', write: [] },
+  { key: 'roles', ar: 'الأدوار', en: 'Roles', read: 'page.roles', write: [] },
+  { key: 'audit', ar: 'سجل التدقيق', en: 'Audit Log', read: 'page.audit', write: [] },
+]
+
+// Permission keys NOT owned by any module read/write above — shown as plain
+// advanced toggles so nothing is lost (e.g. points/rewards features).
+export const MODULE_COVERED_KEYS: Set<string> = new Set(
+  PERMISSION_MODULES.flatMap((m) => [m.read, ...m.write]),
+)
+
 // Anything a super_admin can do. In practice: bypass every check.
 export function isSuperAdmin(profile: Pick<Profile, 'role'> | null | undefined): boolean {
   return profile?.role === 'super_admin'
