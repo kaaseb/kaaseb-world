@@ -4,6 +4,7 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { verifyOrigin } from '@/lib/csrf'
+import { denyUnlessPermitted } from '@/lib/api-guard'
 
 export async function GET(request: Request) {
   const supabase = await createClient()
@@ -45,6 +46,9 @@ const BUCKET_CAP = 250
 export async function POST(request: Request) {
   const csrfError = verifyOrigin(request)
   if (csrfError) return csrfError
+
+  const deny = await denyUnlessPermitted('furn.projects.create')
+  if (deny) return deny
 
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()

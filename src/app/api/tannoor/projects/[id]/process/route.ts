@@ -12,6 +12,7 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { verifyOrigin } from '@/lib/csrf'
+import { denyUnlessPermitted } from '@/lib/api-guard'
 import { analyzeTannoorBoq } from '@/lib/tannoor/boq'
 import { setProjectItemSources } from '@/lib/tannoor/item-sources'
 import { guardItem, guardDepartmentAnchor } from '@/lib/boq/department-guard'
@@ -25,6 +26,9 @@ export const maxDuration = 300
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const csrfError = verifyOrigin(request)
   if (csrfError) return csrfError
+
+  const deny = await denyUnlessPermitted('tannoor.projects.create')
+  if (deny) return deny
 
   const { id } = await params
   const supabase = await createClient()

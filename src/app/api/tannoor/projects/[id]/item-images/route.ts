@@ -11,6 +11,7 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { verifyOrigin } from '@/lib/csrf'
+import { denyUnlessPermitted } from '@/lib/api-guard'
 import { isAppOwnedUrl } from '@/lib/s3'
 import { getProfileOrFallback, getEffectivePermissions } from '@/lib/profile'
 import { hasPermission } from '@/lib/permissions'
@@ -27,6 +28,9 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const csrfError = verifyOrigin(request)
   if (csrfError) return csrfError
+
+  const deny = await denyUnlessPermitted('tannoor.projects.create')
+  if (deny) return deny
 
   const { id } = await params
   const supabase = await createClient()

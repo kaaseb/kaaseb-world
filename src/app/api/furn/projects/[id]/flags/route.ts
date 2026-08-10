@@ -7,6 +7,7 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { verifyOrigin } from '@/lib/csrf'
+import { denyUnlessPermitted } from '@/lib/api-guard'
 import { getProfileOrFallback, getEffectivePermissions } from '@/lib/profile'
 import { hasPermission } from '@/lib/permissions'
 import { getProjectItemFlags, updateItemFlagStatus, type FlagStatus } from '@/lib/furn/item-flags'
@@ -26,6 +27,9 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const csrfError = verifyOrigin(request)
   if (csrfError) return csrfError
+
+  const deny = await denyUnlessPermitted('furn.pricing.edit')
+  if (deny) return deny
 
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()

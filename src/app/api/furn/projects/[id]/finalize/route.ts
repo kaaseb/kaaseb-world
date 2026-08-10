@@ -22,6 +22,7 @@ import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { verifyOrigin } from '@/lib/csrf'
+import { denyUnlessPermitted } from '@/lib/api-guard'
 import { renderQuotationPdf } from '@/lib/quotation-pdf'
 import { uploadBufferToS3 } from '@/lib/s3'
 import { resolveShipping } from '@/lib/furn/delivery-store'
@@ -38,6 +39,9 @@ const LANGUAGES: Array<'ar' | 'en'> = ['ar', 'en']
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const csrfError = verifyOrigin(request)
   if (csrfError) return csrfError
+
+  const deny = await denyUnlessPermitted('furn.quotation.export')
+  if (deny) return deny
 
   const { id } = await params
   const supabase = await createClient()

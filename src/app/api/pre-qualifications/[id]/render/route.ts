@@ -8,6 +8,7 @@ import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { verifyOrigin } from '@/lib/csrf'
+import { denyUnlessPermitted } from '@/lib/api-guard'
 import { buildPreQualPdf } from '@/lib/pre-qualification-pdf'
 import { getPreQualForProject } from '@/lib/prequal/store'
 import { uploadToS3, deleteFromS3 } from '@/lib/s3'
@@ -18,6 +19,9 @@ export const maxDuration = 180
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const csrfError = verifyOrigin(request)
   if (csrfError) return csrfError
+
+  const deny = await denyUnlessPermitted('docs.prequal.manage')
+  if (deny) return deny
 
   const { id } = await params
   const supabase = await createClient()

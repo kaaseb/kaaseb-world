@@ -5,6 +5,7 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { verifyOrigin } from '@/lib/csrf'
+import { denyUnlessPermitted } from '@/lib/api-guard'
 import { getProfileOrFallback } from '@/lib/profile'
 import { getQuoteMessage, setQuoteMessage } from '@/lib/furn/quote-message'
 
@@ -21,6 +22,8 @@ export async function GET() {
 export async function PUT(request: Request) {
   const csrfError = verifyOrigin(request)
   if (csrfError) return csrfError
+  const deny = await denyUnlessPermitted('furn.settings.edit')
+  if (deny) return deny
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })

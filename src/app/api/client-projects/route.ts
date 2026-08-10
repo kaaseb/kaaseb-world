@@ -8,6 +8,7 @@ import { serverAudit } from '@/lib/audit-server'
 import { setProjectEmail } from '@/lib/projects/email'
 import { getProjectChatEnabled } from '@/lib/project-chats/settings'
 import { ensureProjectConversation } from '@/lib/project-chats/ensure'
+import { denyUnlessPermitted } from '@/lib/api-guard'
 
 export async function GET(request: Request) {
   const supabase = await createClient()
@@ -51,6 +52,9 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   const csrfError = verifyOrigin(request)
   if (csrfError) return csrfError
+
+  const deny = await denyUnlessPermitted('client_projects.create')
+  if (deny) return deny
 
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()

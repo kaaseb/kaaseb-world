@@ -5,6 +5,7 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { verifyOrigin } from '@/lib/csrf'
+import { denyUnlessPermitted } from '@/lib/api-guard'
 
 const ALLOWED_PATCH_KEYS = new Set([
   'project_name', 'company_name', 'engineer_name', 'commercial_register', 'tax_number',
@@ -34,6 +35,9 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const csrfError = verifyOrigin(request)
   if (csrfError) return csrfError
+
+  const deny = await denyUnlessPermitted('furn.projects.create')
+  if (deny) return deny
 
   const { id } = await params
   const supabase = await createClient()
@@ -66,6 +70,9 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
 export async function DELETE(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const csrfError = verifyOrigin(request)
   if (csrfError) return csrfError
+
+  const deny = await denyUnlessPermitted('furn.projects.delete')
+  if (deny) return deny
 
   const { id } = await params
   const supabase = await createClient()

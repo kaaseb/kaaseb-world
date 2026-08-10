@@ -4,6 +4,7 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { verifyOrigin } from '@/lib/csrf'
+import { denyUnlessPermitted } from '@/lib/api-guard'
 import { deleteFromS3 } from '@/lib/s3'
 import { serverAudit } from '@/lib/audit-server'
 
@@ -12,6 +13,9 @@ const ALLOWED = new Set(['name_en', 'name_ar', 'expiry_date', 'notes', 'file_url
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const csrfError = verifyOrigin(request)
   if (csrfError) return csrfError
+
+  const deny = await denyUnlessPermitted('docs.important.manage')
+  if (deny) return deny
 
   const { id } = await params
   const supabase = await createClient()
@@ -41,6 +45,9 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
 export async function DELETE(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const csrfError = verifyOrigin(request)
   if (csrfError) return csrfError
+
+  const deny = await denyUnlessPermitted('docs.important.manage')
+  if (deny) return deny
 
   const { id } = await params
   const supabase = await createClient()

@@ -3,6 +3,7 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { verifyOrigin } from '@/lib/csrf'
+import { denyUnlessPermitted } from '@/lib/api-guard'
 
 export async function DELETE(
   request: Request,
@@ -10,6 +11,9 @@ export async function DELETE(
 ) {
   const csrfError = verifyOrigin(request)
   if (csrfError) return csrfError
+
+  const deny = await denyUnlessPermitted('furn.pricing.edit')
+  if (deny) return deny
 
   const { id, itemId } = await params
   const supabase = await createClient()

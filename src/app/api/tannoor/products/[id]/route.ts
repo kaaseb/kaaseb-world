@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { verifyOrigin } from '@/lib/csrf'
+import { denyUnlessPermitted } from '@/lib/api-guard'
 import { serverAudit } from '@/lib/audit-server'
 
 // thickness_mm, finish, color_* are NOT columns on this table — they live in
@@ -18,6 +19,8 @@ const NUMERIC_NULLABLE = new Set(['size_w_mm', 'size_l_mm'])
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const csrfError = verifyOrigin(request)
   if (csrfError) return csrfError
+  const deny = await denyUnlessPermitted('tannoor.products.edit')
+  if (deny) return deny
   const { id } = await params
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -63,6 +66,8 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
 export async function DELETE(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const csrfError = verifyOrigin(request)
   if (csrfError) return csrfError
+  const deny = await denyUnlessPermitted('tannoor.products.edit')
+  if (deny) return deny
   const { id } = await params
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
