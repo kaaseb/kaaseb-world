@@ -18,6 +18,8 @@ import { inboxUnlocked } from '@/lib/inbox/lock'
 import { buildProjectDraft } from '@/lib/inbox/convert'
 import { hydrateEmail } from '@/lib/inbox/imap'
 import { setProjectEmail } from '@/lib/projects/email'
+import { getProjectChatEnabled } from '@/lib/project-chats/settings'
+import { ensureProjectConversation } from '@/lib/project-chats/ensure'
 
 export const runtime = 'nodejs'
 export const maxDuration = 300
@@ -121,6 +123,11 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   })
 
   await updateThread(email.threadId, { status: 'converted', projectId: data.id })
+
+  // Auto-open the project's chat (best-effort).
+  if (await getProjectChatEnabled()) {
+    try { await ensureProjectConversation(supabase, { id: data.id, name_ar: data.name_ar, name_en: data.name_en }, user.id) } catch { /* chat is a bonus */ }
+  }
 
   return NextResponse.json({ project: data })
 }

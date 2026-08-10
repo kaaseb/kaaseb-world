@@ -13,7 +13,7 @@ import { useLanguage } from '@/contexts/LanguageContext'
 import type { Profile } from '@/types'
 import { ProjectChat } from './ProjectChat'
 
-interface ProjectLite { id: string; name_ar: string | null; name_en: string | null }
+interface ProjectLite { id: string; name_ar: string | null; name_en: string | null; status?: string | null }
 
 export function ProjectChatLauncher({ currentUser }: { currentUser: Profile }) {
   const { lang, isRtl } = useLanguage()
@@ -27,6 +27,7 @@ export function ProjectChatLauncher({ currentUser }: { currentUser: Profile }) {
   const [loadingList, setLoadingList] = useState(false)
   const [search, setSearch] = useState('')
   const [selected, setSelected] = useState<ProjectLite | null>(null)
+  const [listTab, setListTab] = useState<'active' | 'completed'>('active')
 
   useEffect(() => {
     let alive = true
@@ -51,10 +52,13 @@ export function ProjectChatLauncher({ currentUser }: { currentUser: Profile }) {
   if (enabled !== true) return null
 
   const name = (p: ProjectLite) => (ar ? (p.name_ar || p.name_en) : (p.name_en || p.name_ar)) || '—'
+  const completed = projects.filter((p) => p.status === 'completed')
+  const active = projects.filter((p) => p.status !== 'completed')
+  const base = listTab === 'completed' ? completed : active
   const q = search.trim().toLowerCase()
   const filtered = q
-    ? projects.filter((p) => `${p.name_ar || ''} ${p.name_en || ''}`.toLowerCase().includes(q))
-    : projects
+    ? base.filter((p) => `${p.name_ar || ''} ${p.name_en || ''}`.toLowerCase().includes(q))
+    : base
 
   return (
     <>
@@ -104,6 +108,22 @@ export function ProjectChatLauncher({ currentUser }: { currentUser: Profile }) {
             <ProjectChat projectId={selected.id} currentUser={currentUser} />
           ) : (
             <div className="flex flex-col min-h-0 flex-1">
+              <div className="px-2.5 pt-2.5 flex-shrink-0">
+                <div className="inline-flex w-full rounded-lg bg-gray-100 p-0.5 text-xs">
+                  <button
+                    onClick={() => setListTab('active')}
+                    className={`flex-1 px-3 py-1.5 rounded-md font-medium transition-colors ${listTab === 'active' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-500'}`}
+                  >
+                    {ar ? 'نشطة' : 'Active'} ({active.length})
+                  </button>
+                  <button
+                    onClick={() => setListTab('completed')}
+                    className={`flex-1 px-3 py-1.5 rounded-md font-medium transition-colors ${listTab === 'completed' ? 'bg-white shadow-sm text-emerald-700' : 'text-gray-500'}`}
+                  >
+                    {ar ? 'مكتملة' : 'Completed'} ({completed.length})
+                  </button>
+                </div>
+              </div>
               <div className="p-2.5 border-b flex-shrink-0">
                 <div className="relative">
                   <Search className={`w-4 h-4 text-gray-400 absolute top-1/2 -translate-y-1/2 ${isRtl ? 'right-3' : 'left-3'}`} />

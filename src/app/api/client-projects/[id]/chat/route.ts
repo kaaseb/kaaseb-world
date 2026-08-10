@@ -9,8 +9,8 @@ import { createClient } from '@/lib/supabase/server'
 import { verifyOrigin } from '@/lib/csrf'
 import { getProfileOrFallback, getEffectivePermissions } from '@/lib/profile'
 import { hasPermission } from '@/lib/permissions'
-import { getProjectConversationId, setProjectConversationId } from '@/lib/project-chats/store'
 import { getProjectChatEnabled } from '@/lib/project-chats/settings'
+import { ensureProjectConversation } from '@/lib/project-chats/ensure'
 
 export const runtime = 'nodejs'
 
@@ -35,24 +35,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     .from('client_projects').select('id, name_ar, name_en').eq('id', id).maybeSingle()
   if (!project) return NextResponse.json({ error: 'Project not found' }, { status: 404 })
 
-  // Already linked → verify the conversation row still exists, else recreate.
-  const existing = await getProjectConversationId(id)
-  if (existing) {
-    const { data: conv } = await supabase
-      .from('chat_conversations').select('id').eq('id', existing).maybeSingle()
-    if (conv) return NextResponse.json({ conversationId: existing })
-  }
-
-  const name = (project.name_ar || project.name_en || 'مشروع').slice(0, 200)
-  const { data: created, error } = await supabase
-    .from('chat_conversations')
-    .insert({ type: 'group', name: `💼 ${name}`, description: 'دردشة المشروع', created_by: user.id })
-    .select('id')
-    .single()
-  if (error || !created) {
-    return NextResponse.json({ error: error?.message || 'تعذّر إنشاء الدردشة' }, { status: 500 })
-  }
-
-  await setProjectConversationId(id, created.id)
-  return NextResponse.json({ conversationId: created.id })
+  const conversationId = await ensureProjectConversation(supabase, project, user.id)
+  if (!conversationId) return NextResponse.json({ error: 'تعذّر إنشاء الدردشة' }, { status: 500 })
+  return NextResponse.json({ conversationId })
 }

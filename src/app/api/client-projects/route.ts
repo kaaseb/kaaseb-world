@@ -6,6 +6,8 @@ import { createClient } from '@/lib/supabase/server'
 import { verifyOrigin } from '@/lib/csrf'
 import { serverAudit } from '@/lib/audit-server'
 import { setProjectEmail } from '@/lib/projects/email'
+import { getProjectChatEnabled } from '@/lib/project-chats/settings'
+import { ensureProjectConversation } from '@/lib/project-chats/ensure'
 
 export async function GET(request: Request) {
   const supabase = await createClient()
@@ -100,5 +102,11 @@ export async function POST(request: Request) {
     user, supabase, action: 'add', objectType: 'client_project',
     objectName: data.name_en || data.name_ar, objectId: data.id,
   })
+
+  // Open the project chat automatically the moment a project starts (best-effort).
+  if (await getProjectChatEnabled()) {
+    try { await ensureProjectConversation(supabase, { id: data.id, name_ar: data.name_ar, name_en: data.name_en }, user.id) } catch { /* chat is a bonus */ }
+  }
+
   return NextResponse.json({ project: data })
 }
