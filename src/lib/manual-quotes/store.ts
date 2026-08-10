@@ -79,7 +79,7 @@ export async function createManualQuote(input: {
   const q: ManualQuote = {
     id: rid(),
     number: s.nextNumber,
-    language: 'ar',
+    language: 'en', // default to English quotations (owner's request)
     project_name: '', subject: '',
     client_name: '', company: '', email: '', phone: '',
     currency: 'SAR',
