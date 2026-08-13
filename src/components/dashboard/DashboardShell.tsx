@@ -4,6 +4,7 @@ import { useState, useEffect, lazy, Suspense } from 'react'
 import { Sidebar } from '@/components/sidebar/Sidebar'
 import { MobileTopBar } from '@/components/dashboard/MobileTopBar'
 import { LanguageProvider, useLanguage } from '@/contexts/LanguageContext'
+import { ProjectChatLauncher } from '@/components/project-chat/ProjectChatLauncher'
 import type { Profile } from '@/types'
 import type { Lang } from '@/lib/i18n/translations'
 import { useSearchParams, usePathname } from 'next/navigation'
@@ -123,6 +124,12 @@ function DashboardInner({ profile, permissions, children }: DashboardShellProps)
         <Suspense fallback={null}>
           <PresenceHeartbeat userId={profile.id} />
         </Suspense>
+      )}
+
+      {/* Floating project-chat launcher — inside the LanguageProvider so it gets
+          the right language, and only for users who can see projects. */}
+      {(profile.role === 'super_admin' || (permissions?.includes('page.client_projects') ?? false)) && (
+        <ProjectChatLauncher currentUser={profile} />
       )}
     </div>
   )

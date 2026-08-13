@@ -3,8 +3,6 @@ import { redirect } from 'next/navigation'
 import { DashboardShell } from '@/components/dashboard/DashboardShell'
 import { Suspense } from 'react'
 import { DEFAULT_PERMISSIONS } from '@/lib/permissions'
-import { ProjectChatLauncher } from '@/components/project-chat/ProjectChatLauncher'
-import type { Profile } from '@/types'
 
 // Minimal profile for when DB isn't set up yet
 const FALLBACK_PROFILE = {
@@ -76,14 +74,9 @@ export default async function DashboardLayout({
     } catch { /* custom_roles table may not exist yet */ }
   }
 
-  // The floating project-chat launcher — only for users who can see projects; it
-  // self-hides when the feature is toggled off (super-admin setting).
-  const canProjects = safeProfile.role === 'super_admin' || permissions.includes('page.client_projects')
-
   return (
     <Suspense>
       <DashboardShell profile={safeProfile} permissions={permissions}>{children}</DashboardShell>
-      {canProjects && <ProjectChatLauncher currentUser={safeProfile as Profile} />}
     </Suspense>
   )
 }

@@ -31,10 +31,13 @@ export function ProjectChatLauncher({ currentUser }: { currentUser: Profile }) {
 
   useEffect(() => {
     let alive = true
+    // Fail-OPEN: the feature is ON by default, so only an explicit {enabled:false}
+    // hides it. A transient error or a missing route (mid-rollout) must NOT hide
+    // the launcher.
     fetch('/api/project-chat/settings')
-      .then((r) => (r.ok ? r.json() : { enabled: false }))
-      .then((j) => { if (alive) setEnabled(!!j.enabled) })
-      .catch(() => { if (alive) setEnabled(false) })
+      .then((r) => (r.ok ? r.json() : { enabled: true }))
+      .then((j) => { if (alive) setEnabled(j?.enabled !== false) })
+      .catch(() => { if (alive) setEnabled(true) })
     return () => { alive = false }
   }, [])
 
