@@ -60,7 +60,7 @@ export default async function ManualQuotePrintPage({ params }: { params: Promise
     updated_at: quote.updatedAt,
   }
 
-  const itemsShim: Array<FurnItem & { imageUrl?: string | null }> = quote.items.map((it, idx) => ({
+  const itemsShim: Array<FurnItem & { imageUrl?: string | null; custom?: Record<string, string> }> = quote.items.map((it, idx) => ({
     id: it.id,
     project_id: quote.id,
     position: idx + 1,
@@ -74,6 +74,7 @@ export default async function ManualQuotePrintPage({ params }: { params: Promise
     created_at: quote.createdAt,
     updated_at: quote.updatedAt,
     imageUrl: it.imageUrl || null,
+    custom: it.custom || {},
   }))
 
   const quotationShim: FurnQuotation = {
@@ -97,6 +98,7 @@ export default async function ManualQuotePrintPage({ params }: { params: Promise
       quotation={quotationShim}
       settings={settings}
       currency={quote.currency}
+      extraColumns={quote.columns || []}
     />
   )
 }

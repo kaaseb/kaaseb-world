@@ -6,7 +6,7 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { ArrowLeft, ArrowRight, Plus, Trash2, Loader2, Save, Printer, ImagePlus } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Plus, Trash2, Loader2, Save, Printer, ImagePlus, ClipboardPaste, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -16,6 +16,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { useLanguage } from '@/contexts/LanguageContext'
 import { uploadFile } from '@/lib/upload-client'
 import type { ManualQuote, ManualQuoteItem } from '@/lib/manual-quotes/store'
+import { ExcelPasteDialog } from './ExcelPasteDialog'
 
 function rid() { return `${Math.random().toString(36).slice(2, 10)}` }
 
@@ -28,6 +29,9 @@ export function ManualQuoteEditor({ initial }: { initial: ManualQuote }) {
   const [q, setQ] = useState<ManualQuote>(initial)
   const [saving, setSaving] = useState(false)
   const [uploadingId, setUploadingId] = useState<string | null>(null)
+  const [pasteOpen, setPasteOpen] = useState(false)
+
+  const cols = q.columns || []
 
   function set<K extends keyof ManualQuote>(k: K, v: ManualQuote[K]) { setQ((s) => ({ ...s, [k]: v })) }
   function setItem(id: string, patch: Partial<ManualQuoteItem>) {
@@ -37,6 +41,28 @@ export function ManualQuoteEditor({ initial }: { initial: ManualQuote }) {
     setQ((s) => ({ ...s, items: [...s.items, { id: rid(), description: '', details: '', quantity: 1, unit: ar ? 'م²' : 'm2', unit_price: null, imageUrl: null }] }))
   }
   function removeItem(id: string) { setQ((s) => ({ ...s, items: s.items.filter((it) => it.id !== id) })) }
+
+  // Custom columns (render on the PDF too).
+  function addColumn() {
+    setQ((s) => { const n = (s.columns || []).length + 1; return { ...s, columns: [...(s.columns || []), { id: rid(), name: ar ? `عمود ${n}` : `Column ${n}` }] } })
+  }
+  function renameColumn(id: string, name: string) {
+    setQ((s) => ({ ...s, columns: (s.columns || []).map((c) => (c.id === id ? { ...c, name } : c)) }))
+  }
+  function removeColumn(id: string) {
+    setQ((s) => ({
+      ...s,
+      columns: (s.columns || []).filter((c) => c.id !== id),
+      items: s.items.map((it) => { if (!it.custom) return it; const cu = { ...it.custom }; delete cu[id]; return { ...it, custom: cu } }),
+    }))
+  }
+  function setItemCustom(id: string, colId: string, val: string) {
+    setQ((s) => ({ ...s, items: s.items.map((it) => (it.id === id ? { ...it, custom: { ...(it.custom || {}), [colId]: val } } : it)) }))
+  }
+  function importItems(newItems: ManualQuoteItem[]) {
+    setQ((s) => ({ ...s, items: [...s.items, ...newItems] }))
+    toast.success(ar ? `أُضيف ${newItems.length} بند ✓` : `${newItems.length} items added ✓`)
+  }
 
   async function uploadThumb(id: string, file: File) {
     setUploadingId(id)
@@ -103,11 +129,26 @@ export function ManualQuoteEditor({ initial }: { initial: ManualQuote }) {
       </Card>
 
       <Card className="mb-4">
-        <CardHeader className="flex flex-row items-center justify-between">
+        <CardHeader className="flex flex-row items-center justify-between gap-2 flex-wrap">
           <CardTitle className="text-base">{ar ? 'البنود' : 'Items'}</CardTitle>
-          <Button size="sm" variant="outline" onClick={addItem} className="gap-1"><Plus className="w-4 h-4" />{ar ? 'بند' : 'Item'}</Button>
+          <div className="flex items-center gap-2">
+            <Button size="sm" variant="outline" onClick={() => setPasteOpen(true)} className="gap-1"><ClipboardPaste className="w-4 h-4" />{ar ? 'لصق من إكسل' : 'Paste from Excel'}</Button>
+            <Button size="sm" variant="outline" onClick={addItem} className="gap-1"><Plus className="w-4 h-4" />{ar ? 'بند' : 'Item'}</Button>
+          </div>
         </CardHeader>
         <CardContent className="space-y-2">
+          {/* Custom columns (appear on the PDF). */}
+          <div className="flex flex-wrap items-center gap-2 pb-1">
+            <span className="text-xs text-muted-foreground">{ar ? 'أعمدة مخصّصة:' : 'Custom columns:'}</span>
+            {cols.map((c) => (
+              <span key={c.id} className="inline-flex items-center gap-1 rounded-md border bg-muted/30 px-1.5 py-0.5">
+                <input value={c.name} onChange={(e) => renameColumn(c.id, e.target.value)} className="bg-transparent outline-none text-xs w-24" />
+                <button type="button" onClick={() => removeColumn(c.id)} className="text-muted-foreground hover:text-red-600"><X className="w-3 h-3" /></button>
+              </span>
+            ))}
+            <Button size="sm" variant="ghost" onClick={addColumn} className="gap-1 h-7 text-xs"><Plus className="w-3 h-3" />{ar ? 'عمود' : 'Column'}</Button>
+          </div>
+
           {q.items.length === 0 && <p className="text-sm text-muted-foreground text-center py-4">{ar ? 'لا بنود بعد' : 'No items yet'}</p>}
           {q.items.map((it, idx) => (
             <div key={it.id} className="rounded-lg border p-2 flex flex-col sm:flex-row gap-2">
@@ -125,6 +166,13 @@ export function ManualQuoteEditor({ initial }: { initial: ManualQuote }) {
               <div className="flex-1 space-y-1">
                 <Input value={it.description} onChange={(e) => setItem(it.id, { description: e.target.value })} placeholder={ar ? 'الوصف' : 'Description'} className="h-8 text-sm font-medium" />
                 <Input value={it.details} onChange={(e) => setItem(it.id, { details: e.target.value })} placeholder={ar ? 'التفاصيل (سماكة/فنش/مقاس/لون)' : 'Details'} className="h-7 text-xs text-muted-foreground" />
+                {cols.length > 0 && (
+                  <div className="flex flex-wrap gap-1">
+                    {cols.map((c) => (
+                      <Input key={c.id} value={it.custom?.[c.id] || ''} onChange={(e) => setItemCustom(it.id, c.id, e.target.value)} placeholder={c.name} className="h-7 w-28 text-xs" />
+                    ))}
+                  </div>
+                )}
               </div>
               <div className="flex gap-1 items-start">
                 <Input type="number" min={0} value={it.quantity} onChange={(e) => setItem(it.id, { quantity: Number(e.target.value) })} className="h-8 w-16 text-sm" placeholder={ar ? 'كمية' : 'Qty'} />
@@ -155,6 +203,10 @@ export function ManualQuoteEditor({ initial }: { initial: ManualQuote }) {
           <Printer className="w-4 h-4" />{ar ? 'حفظ وطباعة/PDF' : 'Save & Print/PDF'}
         </Button>
       </div>
+
+      {pasteOpen && (
+        <ExcelPasteDialog columns={cols} ar={ar} onClose={() => setPasteOpen(false)} onImport={importItems} />
+      )}
     </div>
   )
 }

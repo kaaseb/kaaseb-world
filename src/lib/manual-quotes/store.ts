@@ -12,6 +12,12 @@ const START_NUMBER = 100 // the owner's ask: numbering starts at 100
 export type QuoteLang = 'ar' | 'en'
 export type QuoteCurrency = 'SAR' | 'USD'
 
+// A team-defined extra column (e.g. "المقاس", "الكود") that renders on the PDF.
+export interface ManualQuoteColumn {
+  id: string
+  name: string
+}
+
 export interface ManualQuoteItem {
   id: string
   description: string
@@ -20,6 +26,8 @@ export interface ManualQuoteItem {
   unit: string
   unit_price: number | null
   imageUrl: string | null // small per-line image (manual upload)
+  // Values for the quote's custom columns, keyed by column id.
+  custom?: Record<string, string>
 }
 
 export interface ManualQuote {
@@ -34,6 +42,8 @@ export interface ManualQuote {
   phone: string
   currency: QuoteCurrency
   vat_rate: number
+  // Extra named columns shown on the quote table (beyond the standard ones).
+  columns: ManualQuoteColumn[]
   items: ManualQuoteItem[]
   notes: string
   createdAt: string
@@ -52,7 +62,8 @@ const EMPTY: State = { quotes: [], nextNumber: START_NUMBER }
 async function read(): Promise<State> {
   const s = await readJson<State>(KEY, EMPTY)
   return {
-    quotes: Array.isArray(s?.quotes) ? s.quotes : [],
+    // Backfill `columns` on older quotes so consumers can always map over it.
+    quotes: Array.isArray(s?.quotes) ? s.quotes.map((q) => ({ ...q, columns: Array.isArray(q?.columns) ? q.columns : [] })) : [],
     nextNumber: Number.isFinite(s?.nextNumber) && s.nextNumber >= START_NUMBER ? s.nextNumber : START_NUMBER,
   }
 }
@@ -84,6 +95,7 @@ export async function createManualQuote(input: {
     client_name: '', company: '', email: '', phone: '',
     currency: 'SAR',
     vat_rate: 0.15,
+    columns: [],
     items: [],
     notes: '',
     createdAt: now,
@@ -107,11 +119,27 @@ export async function updateManualQuote(id: string, patch: Partial<ManualQuote>)
   if (idx < 0) return null
   const cur = s.quotes[idx]
 
+  // Custom columns first (item.custom is validated against these ids).
+  const columns: ManualQuoteColumn[] = Array.isArray(patch.columns)
+    ? patch.columns.slice(0, 8).map((raw) => {
+        const c = raw as Partial<ManualQuoteColumn>
+        return { id: typeof c.id === 'string' && c.id ? c.id.slice(0, 40) : rid(), name: String(c.name || '').slice(0, 40) }
+      }).filter((c) => c.name.trim())
+    : (cur.columns ?? [])
+  const colIds = new Set(columns.map((c) => c.id))
+
   const items: ManualQuoteItem[] = Array.isArray(patch.items)
     ? patch.items.slice(0, 500).map((raw) => {
         const it = raw as Partial<ManualQuoteItem>
         const qty = Number(it.quantity)
         const price = it.unit_price === null || it.unit_price === undefined ? null : Number(it.unit_price)
+        let custom: Record<string, string> | undefined
+        if (it.custom && typeof it.custom === 'object') {
+          custom = {}
+          for (const [k, v] of Object.entries(it.custom)) {
+            if (colIds.has(k)) custom[k] = String(v ?? '').slice(0, 300)
+          }
+        }
         return {
           id: typeof it.id === 'string' && it.id ? it.id : rid(),
           description: String(it.description || '').slice(0, 400),
@@ -120,6 +148,7 @@ export async function updateManualQuote(id: string, patch: Partial<ManualQuote>)
           unit: String(it.unit || '').slice(0, 20),
           unit_price: price !== null && Number.isFinite(price) ? Math.max(0, price) : null,
           imageUrl: typeof it.imageUrl === 'string' && it.imageUrl ? it.imageUrl.slice(0, 1000) : null,
+          ...(custom ? { custom } : {}),
         }
       })
     : cur.items
@@ -135,6 +164,7 @@ export async function updateManualQuote(id: string, patch: Partial<ManualQuote>)
     phone: patch.phone !== undefined ? String(patch.phone).slice(0, 60) : cur.phone,
     currency: patch.currency && CURRENCIES.includes(patch.currency) ? patch.currency : cur.currency,
     vat_rate: typeof patch.vat_rate === 'number' && patch.vat_rate >= 0 && patch.vat_rate <= 1 ? patch.vat_rate : cur.vat_rate,
+    columns,
     items,
     notes: patch.notes !== undefined ? String(patch.notes).slice(0, 4000) : cur.notes,
     updatedAt: new Date().toISOString(),

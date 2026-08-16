@@ -24,7 +24,7 @@ import type { FurnProject, FurnItem, FurnQuotation, FurnSettings } from '@/types
 // A print row is a Furn/Tannoor item plus an OPTIONAL per-line thumbnail. The
 // property is optional, so callers passing plain FurnItem[] (Furn) stay valid
 // and simply render no image column.
-type PrintItem = FurnItem & { imageUrl?: string | null }
+type PrintItem = FurnItem & { imageUrl?: string | null; custom?: Record<string, string> }
 
 interface Props {
   project: FurnProject
@@ -39,6 +39,10 @@ interface Props {
   // manual quotes pass 'USD' when quoting in dollars so the label + the spelled-
   // out total match the numbers.
   currency?: 'SAR' | 'USD'
+  // Team-defined extra columns (manual quotes only). Rendered after the
+  // description; each item's value comes from it.custom[column.id]. Empty for
+  // Furn/Tannoor → identical layout.
+  extraColumns?: Array<{ id: string; name: string }>
 }
 
 const STR = {
@@ -205,7 +209,7 @@ function pickTerm(
   return (langValue || legacy || fallback || '').trim() || null
 }
 
-export function QuotationPrint({ project, items, quotation, settings, deliveryNote, currency }: Props) {
+export function QuotationPrint({ project, items, quotation, settings, deliveryNote, currency, extraColumns = [] }: Props) {
   const lang = quotation.language === 'en' ? 'en' : 'ar'
   const isRtl = lang === 'ar'
   const S = STR[lang]
@@ -307,6 +311,7 @@ export function QuotationPrint({ project, items, quotation, settings, deliveryNo
               <th className="col-pos">{S.col_pos}</th>
               {showImages && <th className="col-img"></th>}
               <th className="col-desc">{S.col_desc}</th>
+              {extraColumns.map((c) => <th key={c.id} className="col-custom">{c.name}</th>)}
               <th className="col-qty">{S.col_qty}</th>
               <th className="col-unit">{S.col_unit}</th>
               <th className="col-price">{S.col_price}</th>
@@ -335,6 +340,7 @@ export function QuotationPrint({ project, items, quotation, settings, deliveryNo
                     <div className="desc-title">{it.description}</div>
                     {detailsText && <div className="desc-details">{detailsText}</div>}
                   </td>
+                  {extraColumns.map((c) => <td key={c.id} className="col-custom">{it.custom?.[c.id] || ''}</td>)}
                   <td className="col-qty">{Number(it.quantity).toLocaleString('en-US')}</td>
                   <td className="col-unit">{it.unit}</td>
                   <td className="col-price">{formatMoney(Number(it.unit_price || 0))}</td>
@@ -640,6 +646,7 @@ export function QuotationPrint({ project, items, quotation, settings, deliveryNo
           color: var(--q-mute);
           white-space: pre-wrap;
         }
+        .col-custom { text-align: start; font-size: 8.5pt; color: var(--q-ink); white-space: pre-wrap; }
         .col-qty { width: 44px; text-align: center; font-variant-numeric: tabular-nums; }
         .col-unit { width: 40px; text-align: center; }
         .col-price { width: 64px; text-align: end; font-variant-numeric: tabular-nums; }
