@@ -17,6 +17,7 @@ import { useLanguage } from '@/contexts/LanguageContext'
 import { uploadFile } from '@/lib/upload-client'
 import type { ManualQuote, ManualQuoteItem } from '@/lib/manual-quotes/store'
 import { ExcelPasteDialog } from './ExcelPasteDialog'
+import { QuoteTermsControl } from '@/components/quote-terms/QuoteTermsControl'
 
 function rid() { return `${Math.random().toString(36).slice(2, 10)}` }
 
@@ -194,6 +195,10 @@ export function ManualQuoteEditor({ initial }: { initial: ManualQuote }) {
           <div className="flex gap-8"><span className="text-muted-foreground">{ar ? 'الضريبة' : 'VAT'} {(q.vat_rate * 100).toFixed(0)}%</span><span className="tabular-nums w-28 text-end">{money(vat)}</span></div>
           <div className="flex gap-8 font-bold text-base"><span>{ar ? 'الإجمالي' : 'Total'}</span><span className="tabular-nums w-28 text-end">{money(total)} {q.currency}</span></div>
         </div>
+      </CardContent></Card>
+
+      <Card className="mb-4"><CardContent className="p-3">
+        <QuoteTermsControl scopeKey={`manual:${q.id}`} uiAr={ar} quoteLang={q.language} />
       </CardContent></Card>
 
       <div className="flex items-center gap-2">

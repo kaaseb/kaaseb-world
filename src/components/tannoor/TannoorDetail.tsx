@@ -13,6 +13,7 @@ import {
 } from 'lucide-react'
 import { useLanguage } from '@/contexts/LanguageContext'
 import { uploadFile } from '@/lib/upload-client'
+import { QuoteTermsControl } from '@/components/quote-terms/QuoteTermsControl'
 import type { TannoorProject, TannoorItem, TannoorQuotation, TannoorAvailability } from '@/types'
 
 type ItemWithProduct = TannoorItem & {
@@ -431,6 +432,13 @@ export function TannoorDetail({ project: initialProject, initialItems, initialQu
             </div>
           </CardContent>
         </Card>
+      )}
+
+      {/* Terms & Conditions for this quote */}
+      {items.length > 0 && canExport && (
+        <Card className="border-0 shadow-sm mb-4"><CardContent className="p-3">
+          <QuoteTermsControl scopeKey={`tannoor:${project.id}`} uiAr={isRtl} quoteLang="ar" />
+        </CardContent></Card>
       )}
 
       {/* Generate quote */}

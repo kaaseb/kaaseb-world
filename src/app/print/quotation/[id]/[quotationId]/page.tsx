@@ -3,6 +3,7 @@ import { notFound, redirect } from 'next/navigation'
 import { QuotationPrint } from '@/components/furn/QuotationPrint'
 import { resolveDeliveryNote, resolveShipping } from '@/lib/furn/delivery-store'
 import { getProjectItemFlags } from '@/lib/furn/item-flags'
+import { resolveQuoteTerms } from '@/lib/quote-terms/store'
 import type { FurnProject, FurnItem, FurnQuotation, FurnSettings } from '@/types'
 
 export const dynamic = 'force-dynamic'
@@ -53,6 +54,8 @@ export default async function QuotationPrintPage({
     })
   }
 
+  const tc = await resolveQuoteTerms(`furn:${id}`, lang)
+
   return (
     <QuotationPrint
       project={project as FurnProject}
@@ -60,6 +63,7 @@ export default async function QuotationPrintPage({
       quotation={quotation as FurnQuotation}
       settings={settings as FurnSettings}
       deliveryNote={deliveryNote}
+      terms={tc.show ? tc.lines : []}
     />
   )
 }

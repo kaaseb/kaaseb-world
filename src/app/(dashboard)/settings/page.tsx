@@ -23,6 +23,7 @@ import { BroadcastCard } from '@/components/settings/BroadcastCard'
 import { QuoteMessageCard } from '@/components/settings/QuoteMessageCard'
 import { AckTemplateCard } from '@/components/settings/AckTemplateCard'
 import { ProjectChatCard } from '@/components/settings/ProjectChatCard'
+import { TermsConditionsCard } from '@/components/settings/TermsConditionsCard'
 
 export default function SettingsPage() {
   const [profile, setProfile] = useState<Profile | null>(null)
@@ -513,6 +514,9 @@ export default function SettingsPage() {
 
         {/* Super-admin only: the bilingual quotation cover message */}
         {profile?.role === 'super_admin' && <QuoteMessageCard />}
+
+        {/* Super-admin only: the global quotation Terms & Conditions */}
+        {profile?.role === 'super_admin' && <TermsConditionsCard />}
 
         {/* Super-admin only: the bilingual inbox acknowledgment reply */}
         {profile?.role === 'super_admin' && <AckTemplateCard />}

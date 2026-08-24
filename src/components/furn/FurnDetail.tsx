@@ -24,6 +24,7 @@ import {
   Image as ImageIcon, Paperclip, ListChecks,
 } from 'lucide-react'
 import { useLanguage } from '@/contexts/LanguageContext'
+import { QuoteTermsControl } from '@/components/quote-terms/QuoteTermsControl'
 import type { FurnProject, FurnItem, FurnQuotation } from '@/types'
 
 interface Props {
@@ -728,6 +729,11 @@ export function FurnDetail({ project: initialProject, initialItems, initialQuota
       {/* Quotations tab */}
       {tab === 'quotations' && (
         <div className="space-y-4">
+          {canExport && (
+            <Card className="border-0 shadow-sm"><CardContent className="p-3">
+              <QuoteTermsControl scopeKey={`furn:${project.id}`} uiAr={isRtl} quoteLang="ar" />
+            </CardContent></Card>
+          )}
           {/* Send action — only shown until the first quotation lands.
               After that, the history list below is the primary UI; the
               user re-sends from the small "Re-issue" button at the top

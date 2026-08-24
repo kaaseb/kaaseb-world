@@ -43,6 +43,9 @@ interface Props {
   // description; each item's value comes from it.custom[column.id]. Empty for
   // Furn/Tannoor → identical layout.
   extraColumns?: Array<{ id: string; name: string }>
+  // Resolved Terms & Conditions bullet lines (already language-picked). Empty →
+  // no T&C section.
+  terms?: string[]
 }
 
 const STR = {
@@ -66,6 +69,7 @@ const STR = {
     subtotal: 'الإجمالي',
     vat: 'الضريبة',
     grand_total: 'المجموع الكلي شامل الضريبة',
+    terms_title: 'الشروط والأحكام',
     in_words: 'فقط',
     only_suffix: 'لا غير',
     payment_terms: 'شروط الدفع',
@@ -99,6 +103,7 @@ const STR = {
     subtotal: 'Subtotal',
     vat: 'VAT',
     grand_total: 'Grand Total (incl. VAT)',
+    terms_title: 'Terms & Conditions',
     in_words: 'In words:',
     only_suffix: 'only',
     payment_terms: 'Payment terms',
@@ -209,7 +214,7 @@ function pickTerm(
   return (langValue || legacy || fallback || '').trim() || null
 }
 
-export function QuotationPrint({ project, items, quotation, settings, deliveryNote, currency, extraColumns = [] }: Props) {
+export function QuotationPrint({ project, items, quotation, settings, deliveryNote, currency, extraColumns = [], terms = [] }: Props) {
   const lang = quotation.language === 'en' ? 'en' : 'ar'
   const isRtl = lang === 'ar'
   const S = STR[lang]
@@ -412,6 +417,16 @@ export function QuotationPrint({ project, items, quotation, settings, deliveryNo
                 <strong>{S.delivery_note}:</strong> <span>{deliveryNote}</span>
               </div>
             )}
+          </div>
+        )}
+
+        {/* Terms & Conditions — bilingual bullet list, shown only when enabled. */}
+        {terms.length > 0 && (
+          <div className="tc-block">
+            <p className="tc-title">{S.terms_title}</p>
+            <ol className="tc-list">
+              {terms.map((line, i) => <li key={i}>{line}</li>)}
+            </ol>
           </div>
         )}
 
@@ -733,6 +748,28 @@ export function QuotationPrint({ project, items, quotation, settings, deliveryNo
           border-top: 1px dashed var(--q-line);
           color: var(--q-mute);
         }
+
+        .tc-block {
+          border: 1px solid var(--q-line);
+          border-radius: 4px;
+          padding: 6px 10px;
+          margin-bottom: 8px;
+          font-size: 8pt;
+          background: var(--q-soft-hi);
+        }
+        .tc-title {
+          font-weight: 800;
+          color: var(--q-olive);
+          margin: 0 0 3px;
+          font-size: 8.5pt;
+        }
+        .tc-list {
+          margin: 0;
+          padding-inline-start: 16px;
+          color: var(--q-ink);
+          line-height: 1.5;
+        }
+        .tc-list li { margin: 1px 0; }
 
         .closing {
           text-align: center;

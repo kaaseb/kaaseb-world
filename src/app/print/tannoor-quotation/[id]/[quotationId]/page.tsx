@@ -7,6 +7,7 @@ import { createClient } from '@/lib/supabase/server'
 import { notFound, redirect } from 'next/navigation'
 import { QuotationPrint } from '@/components/furn/QuotationPrint'
 import { getProjectItemImages } from '@/lib/tannoor/item-images'
+import { resolveQuoteTerms } from '@/lib/quote-terms/store'
 import type {
   FurnProject, FurnItem, FurnQuotation, FurnSettings,
   TannoorProject, TannoorItem, TannoorQuotation,
@@ -122,6 +123,8 @@ export default async function TannoorPrintPage({
     generated_at: tQuote.generated_at,
   }
 
+  const tc = await resolveQuoteTerms(`tannoor:${id}`, tQuote.language === 'en' ? 'en' : 'ar')
+
   return (
     <QuotationPrint
       project={projectShim}
@@ -129,6 +132,7 @@ export default async function TannoorPrintPage({
       quotation={quotationShim}
       settings={settings as FurnSettings}
       currency={tQuote.currency === 'USD' ? 'USD' : 'SAR'}
+      terms={tc.show ? tc.lines : []}
     />
   )
 }

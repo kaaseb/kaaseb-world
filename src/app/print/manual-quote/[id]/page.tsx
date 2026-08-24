@@ -8,6 +8,7 @@ import { createClient } from '@/lib/supabase/server'
 import { notFound, redirect } from 'next/navigation'
 import { QuotationPrint } from '@/components/furn/QuotationPrint'
 import { getManualQuote } from '@/lib/manual-quotes/store'
+import { resolveQuoteTerms } from '@/lib/quote-terms/store'
 import type { FurnProject, FurnItem, FurnQuotation, FurnSettings } from '@/types'
 
 export const dynamic = 'force-dynamic'
@@ -30,6 +31,8 @@ export default async function ManualQuotePrintPage({ params }: { params: Promise
   const subtotal = quote.items.reduce((s, it) => s + (Number(it.quantity) || 0) * (Number(it.unit_price) || 0), 0)
   const vatAmount = subtotal * (quote.vat_rate || 0)
   const total = subtotal + vatAmount
+
+  const tc = await resolveQuoteTerms(`manual:${quote.id}`, quote.language)
 
   const projectShim: FurnProject = {
     id: quote.id,
@@ -99,6 +102,7 @@ export default async function ManualQuotePrintPage({ params }: { params: Promise
       settings={settings}
       currency={quote.currency}
       extraColumns={quote.columns || []}
+      terms={tc.show ? tc.lines : []}
     />
   )
 }
