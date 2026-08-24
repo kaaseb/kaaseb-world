@@ -14,6 +14,7 @@ interface ItemPatch {
   unit_price?: number | null
   quantity?: number
   currency?: 'SAR' | 'USD'
+  notes?: string | null
 }
 
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -41,6 +42,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     }
     if (typeof it.quantity === 'number' && Number.isFinite(it.quantity)) patch.quantity = Math.max(0, it.quantity)
     if (it.currency === 'SAR' || it.currency === 'USD') patch.currency = it.currency
+    if (typeof it.notes === 'string' || it.notes === null) patch.notes = it.notes ? String(it.notes).slice(0, 1000) : null
 
     const { error } = await supabase.from('tannoor_items').update(patch).eq('id', it.id).eq('project_id', id)
     if (error) errors.push(`${it.id}: ${error.message}`)

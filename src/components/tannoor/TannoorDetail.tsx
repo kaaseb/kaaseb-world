@@ -201,7 +201,7 @@ export function TannoorDetail({ project: initialProject, initialItems, initialQu
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        items: items.map(it => ({ id: it.id, unit_price: it.unit_price ?? null, quantity: it.quantity, currency })),
+        items: items.map(it => ({ id: it.id, unit_price: it.unit_price ?? null, quantity: it.quantity, currency, notes: it.notes ?? null })),
       }),
     })
     setSavingPrices(false)
@@ -357,6 +357,14 @@ export function TannoorDetail({ project: initialProject, initialItems, initialQu
                           {it.description}
                           {sources[it.id] && (
                             <div className="text-xs text-muted-foreground mt-0.5" title={isRtl ? 'المصدر (داخلي)' : 'Source (internal)'}>📄 {sources[it.id]}</div>
+                          )}
+                          {canExport && (
+                            <input
+                              value={it.notes || ''}
+                              onChange={e => patchItem(it.id, { notes: e.target.value })}
+                              placeholder={isRtl ? 'ملاحظات (تظهر في العرض)' : 'Notes (shown on quote)'}
+                              className="mt-1 w-full h-7 rounded border px-2 text-xs bg-white outline-none focus:border-primary"
+                            />
                           )}
                           {canExport && (
                             <div className="mt-1 flex items-center gap-1.5">

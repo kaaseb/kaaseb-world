@@ -26,6 +26,7 @@ export interface ManualQuoteItem {
   unit: string
   unit_price: number | null
   imageUrl: string | null // small per-line image (manual upload)
+  notes?: string // team note — prints in the quote's Notes column
   // Values for the quote's custom columns, keyed by column id.
   custom?: Record<string, string>
 }
@@ -148,6 +149,7 @@ export async function updateManualQuote(id: string, patch: Partial<ManualQuote>)
           unit: String(it.unit || '').slice(0, 20),
           unit_price: price !== null && Number.isFinite(price) ? Math.max(0, price) : null,
           imageUrl: typeof it.imageUrl === 'string' && it.imageUrl ? it.imageUrl.slice(0, 1000) : null,
+          notes: String(it.notes || '').slice(0, 1000),
           ...(custom ? { custom } : {}),
         }
       })

@@ -173,6 +173,7 @@ export function ManualQuoteEditor({ initial }: { initial: ManualQuote }) {
                     ))}
                   </div>
                 )}
+                <Input value={it.notes || ''} onChange={(e) => setItem(it.id, { notes: e.target.value })} placeholder={ar ? 'ملاحظات (تظهر في العرض)' : 'Notes (shown on quote)'} className="h-7 text-xs" />
               </div>
               <div className="flex gap-1 items-start">
                 <Input type="number" min={0} value={it.quantity} onChange={(e) => setItem(it.id, { quantity: Number(e.target.value) })} className="h-8 w-16 text-sm" placeholder={ar ? 'كمية' : 'Qty'} />

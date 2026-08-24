@@ -69,7 +69,7 @@ export default async function ManualQuotePrintPage({ params }: { params: Promise
     quantity: Number(it.quantity) || 0,
     unit: it.unit,
     unit_price: it.unit_price,
-    notes: null,
+    notes: it.notes || null,
     ai_confidence: null,
     created_at: quote.createdAt,
     updated_at: quote.updatedAt,
