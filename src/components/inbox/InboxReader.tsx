@@ -54,6 +54,13 @@ export function InboxReader({
   const [pv, setPv] = useState<EmailPreview>(emptyPreview)
   const [savingPv, setSavingPv] = useState(false)
 
+  // Translation of the body (AI)
+  const [target, setTarget] = useState<'ar' | 'en'>('ar')
+  const [translated, setTranslated] = useState<string | null>(null)
+  const [translatedFor, setTranslatedFor] = useState<'ar' | 'en' | null>(null)
+  const [showTranslated, setShowTranslated] = useState(false)
+  const [translating, setTranslating] = useState(false)
+
   // Reply composer
   const [replyOpen, setReplyOpen] = useState(autoReply)
   const [replyLang, setReplyLang] = useState<'ar' | 'en'>(ar ? 'ar' : 'en')
@@ -124,6 +131,23 @@ export function InboxReader({
       const gj = await g.json().catch(() => ({}))
       if (g.ok && gj.email) { applyEmail(gj.email as InboxEmail); setBodyHtml(gj.bodyHtml || null) }
     } catch { toast.error('Failed') } finally { setHydrating(false) }
+  }
+
+  // Toggle between the original body and an AI translation (fetched on demand,
+  // cached per target language).
+  async function toggleTranslate() {
+    if (showTranslated) { setShowTranslated(false); return }
+    if (translated && translatedFor === target) { setShowTranslated(true); return }
+    setTranslating(true)
+    try {
+      const res = await fetch(`/api/inbox/${encodeURIComponent(headId)}/translate`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target }),
+      })
+      const j = await res.json().catch(() => ({}))
+      if (!res.ok) { toast.error(j.error || 'فشل الترجمة', { duration: 10000 }); return }
+      setTranslated(j.text || ''); setTranslatedFor(target); setShowTranslated(true)
+    } catch { toast.error('فشل الترجمة') } finally { setTranslating(false) }
   }
 
   async function savePreview() {
@@ -197,8 +221,22 @@ export function InboxReader({
               ) : (
                 <>
                   <div>
-                    <p className="text-xs font-semibold text-muted-foreground mb-1.5 flex items-center gap-1.5"><FileText className="w-3.5 h-3.5" />{t('نص الرسالة', 'Message body')}</p>
-                    {bodyHtml ? (
+                    <div className="flex items-center justify-between gap-2 mb-1.5">
+                      <p className="text-xs font-semibold text-muted-foreground flex items-center gap-1.5"><FileText className="w-3.5 h-3.5" />{showTranslated ? t('الترجمة', 'Translation') : t('نص الرسالة', 'Message body')}</p>
+                      <div className="flex items-center gap-1">
+                        <select value={target} onChange={(e) => { setTarget(e.target.value as 'ar' | 'en'); setShowTranslated(false) }} className="text-[11px] rounded border px-1 py-0.5 bg-white outline-none">
+                          <option value="ar">عربي</option>
+                          <option value="en">EN</option>
+                        </select>
+                        <button onClick={toggleTranslate} disabled={translating} className="inline-flex items-center gap-1 text-[11px] rounded-md border px-2 py-0.5 hover:bg-muted disabled:opacity-60">
+                          {translating ? <Loader2 className="w-3 h-3 animate-spin" /> : <Languages className="w-3 h-3" />}
+                          {showTranslated ? t('الأصل', 'Original') : t('ترجمة', 'Translate')}
+                        </button>
+                      </div>
+                    </div>
+                    {showTranslated ? (
+                      <pre dir={target === 'ar' ? 'rtl' : 'ltr'} className="whitespace-pre-wrap text-sm text-gray-800 rounded-lg border bg-amber-50/40 p-3 max-h-[320px] overflow-auto font-sans">{translated}</pre>
+                    ) : bodyHtml ? (
                       <iframe
                         title="email-body"
                         sandbox=""
