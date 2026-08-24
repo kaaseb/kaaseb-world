@@ -228,9 +228,13 @@ export function QuotationPrint({ project, items, quotation, settings, deliveryNo
   useEffect(() => {
     document.documentElement.lang = lang
     document.documentElement.dir = isRtl ? 'rtl' : 'ltr'
+    // The browser's "Save as PDF" uses the document title as the filename →
+    // "Kaaseb_<offer number>" for every quotation (manual / Furn / Tannoor).
+    const prevTitle = document.title
+    document.title = `Kaaseb_${quotation.quotation_number}`
     const t = setTimeout(() => window.print(), 800)
-    return () => clearTimeout(t)
-  }, [lang, isRtl])
+    return () => { clearTimeout(t); document.title = prevTitle }
+  }, [lang, isRtl, quotation.quotation_number])
 
   const subtotal = Number(quotation.subtotal)
   const vatAmount = Number(quotation.vat_amount)

@@ -2,9 +2,9 @@
 
 // عروض يدوية — the list. Create a new one (auto-numbered from 100) or open one.
 
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
-import { FileSpreadsheet, Plus, Loader2, Trash2, ExternalLink } from 'lucide-react'
+import { FileSpreadsheet, Plus, Loader2, Trash2, ExternalLink, Search, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -22,6 +22,15 @@ export function ManualQuotesClient({ initialQuotes }: { initialQuotes: ManualQuo
   const router = useRouter()
   const [quotes, setQuotes] = useState<ManualQuote[]>(initialQuotes)
   const [creating, setCreating] = useState(false)
+  const [search, setSearch] = useState('')
+
+  const filtered = useMemo(() => {
+    const s = search.trim().toLowerCase()
+    if (!s) return quotes
+    return quotes.filter((q) =>
+      String(q.number).includes(s)
+      || `${q.company || ''} ${q.client_name || ''} ${q.project_name || ''} ${q.subject || ''}`.toLowerCase().includes(s))
+  }, [quotes, search])
 
   async function create() {
     setCreating(true)
@@ -63,15 +72,38 @@ export function ManualQuotesClient({ initialQuotes }: { initialQuotes: ManualQuo
         </Button>
       </div>
 
+      {quotes.length > 0 && (
+        <div className="relative mb-3">
+          <Search className={`w-4 h-4 text-muted-foreground absolute top-1/2 -translate-y-1/2 ${isRtl ? 'right-3' : 'left-3'}`} />
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder={ar ? 'بحث بالرقم / العميل / الشركة / المشروع…' : 'Search by number / client / company / project…'}
+            className={`w-full h-10 rounded-lg border bg-white text-sm outline-none focus:border-teal-400 ${isRtl ? 'pr-9 pl-8' : 'pl-9 pr-8'}`}
+          />
+          {search && (
+            <button onClick={() => setSearch('')} className={`absolute top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground ${isRtl ? 'left-2.5' : 'right-2.5'}`}>
+              <X className="w-4 h-4" />
+            </button>
+          )}
+        </div>
+      )}
+
       {quotes.length === 0 ? (
         <Card className="border-dashed">
           <CardContent className="py-16 text-center text-sm text-muted-foreground">
             {ar ? 'لا عروض بعد — أنشئ أول عرض.' : 'No quotes yet — create your first.'}
           </CardContent>
         </Card>
+      ) : filtered.length === 0 ? (
+        <Card className="border-dashed">
+          <CardContent className="py-12 text-center text-sm text-muted-foreground">
+            {ar ? 'لا نتائج للبحث.' : 'No results.'}
+          </CardContent>
+        </Card>
       ) : (
         <div className="space-y-2">
-          {quotes.map((q) => (
+          {filtered.map((q) => (
             <Card key={q.id} className="hover:bg-muted/30 transition-colors">
               <CardContent className="p-3 flex items-center gap-3">
                 <button onClick={() => router.push(`/manual-quotes/${q.id}`)} className="flex-1 min-w-0 text-start flex items-center gap-3">
