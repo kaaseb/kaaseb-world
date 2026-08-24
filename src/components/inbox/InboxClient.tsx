@@ -13,7 +13,7 @@ import {
   Inbox, RefreshCw, Loader2, Trash2, Paperclip, Mail, CalendarDays,
   Briefcase, Archive, AlertCircle, ExternalLink, FileSpreadsheet, PencilRuler,
   FileText, File as FileIcon, Sparkles, Search, X, KeyRound, ShieldCheck,
-  MessagesSquare, ListChecks, BookOpen, Reply, LinkIcon,
+  MessagesSquare, ListChecks, BookOpen, Reply, LinkIcon, ChevronDown, ChevronUp,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { toast } from 'sonner'
@@ -93,6 +93,8 @@ export function InboxClient({ initialItems, initialLastRun, canCreateProject, is
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
   const [visible, setVisible] = useState(PAGE)
+  // Group the list by sender — all of one person's conversations in one place.
+  const [collapsedSenders, setCollapsedSenders] = useState<Set<string>>(new Set())
 
   const isPulling = lastRun?.status === 'running'
 
@@ -298,8 +300,25 @@ export function InboxClient({ initialItems, initialLastRun, canCreateProject, is
     return list
   }, [filtered])
 
-  const shownThreads = threads.slice(0, visible)
   const hasFilters = !!(search || dateFrom || dateTo)
+
+  // Sender groups — every conversation from the same email address together.
+  const senderGroups = useMemo(() => {
+    const map = new Map<string, { email: string; name: string; threads: ThreadView[]; latestDate: string; unread: number }>()
+    for (const th of threads) {
+      const key = (th.head.fromEmail || th.head.fromName || '—').toLowerCase()
+      let g = map.get(key)
+      if (!g) { g = { email: th.head.fromEmail || '', name: th.head.fromName || th.head.fromEmail || '—', threads: [], latestDate: '', unread: 0 }; map.set(key, g) }
+      g.threads.push(th)
+      if ((th.latestDate || '') > g.latestDate) g.latestDate = th.latestDate || ''
+      if (th.head.status === 'new' && th.messages.some((m) => !m.read)) g.unread += 1
+    }
+    return Array.from(map.values()).sort((a, b) => b.latestDate.localeCompare(a.latestDate))
+  }, [threads])
+  const shownGroups = senderGroups.slice(0, visible)
+  function toggleSender(email: string) {
+    setCollapsedSenders((s) => { const n = new Set(s); if (n.has(email)) n.delete(email); else n.add(email); return n })
+  }
 
   const tabs: Array<{ key: EmailStatus; label: string; icon: LucideIcon; count: number }> = [
     { key: 'new', label: t('inbox_tab_new'), icon: Mail, count: counts.new },
@@ -439,7 +458,7 @@ export function InboxClient({ initialItems, initialLastRun, canCreateProject, is
 
       {/* Count line */}
       <p className="text-xs text-muted-foreground mb-3">
-        {t('inbox_showing')} {shownThreads.length} {t('inbox_of')} {threads.length}
+        {t('inbox_showing')} {shownGroups.length} {t('inbox_of')} {senderGroups.length} {lang === 'ar' ? 'مُرسِل' : 'senders'} · {threads.length} {lang === 'ar' ? 'محادثة' : 'conv.'}
         {tab === 'new' && <span className="ms-2 opacity-80">· {t('inbox_list_hint')}</span>}
       </p>
 
@@ -454,7 +473,28 @@ export function InboxClient({ initialItems, initialLastRun, canCreateProject, is
       ) : (
         <>
           <div className="space-y-3">
-            {shownThreads.map((thread) => {
+            {shownGroups.map((g) => {
+              const gkey = (g.email || g.name).toLowerCase()
+              const collapsed = collapsedSenders.has(gkey)
+              return (
+              <div key={gkey} className="rounded-xl border bg-white overflow-hidden">
+                <button onClick={() => toggleSender(gkey)} className="w-full flex items-center justify-between gap-3 px-3 py-2.5 hover:bg-gray-50 text-start">
+                  <span className="flex items-center gap-2 min-w-0">
+                    <span className={cn('w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-bold flex-shrink-0', g.unread > 0 ? 'bg-blue-600' : 'bg-gray-400')}>{(g.name[0] || '?').toUpperCase()}</span>
+                    <span className="min-w-0">
+                      <span className="block text-sm font-semibold text-gray-900 truncate">{g.name}</span>
+                      {g.email && <span className="block text-[11px] text-muted-foreground truncate" dir="ltr">{g.email}</span>}
+                    </span>
+                  </span>
+                  <span className="flex items-center gap-2 flex-shrink-0 text-muted-foreground">
+                    {g.unread > 0 && <span className="min-w-5 h-5 px-1.5 rounded-full bg-blue-100 text-blue-700 text-xs font-bold flex items-center justify-center">{g.unread}</span>}
+                    <span className="text-xs whitespace-nowrap">{g.threads.length} {lang === 'ar' ? 'محادثة' : 'conv'}</span>
+                    {collapsed ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}
+                  </span>
+                </button>
+                {!collapsed && (
+                  <div className="p-2 space-y-2 bg-gray-50/40">
+                    {g.threads.map((thread) => {
               const head = thread.head
               const c = threadFileCounts(thread.messages)
               const allAtts = thread.messages.flatMap((m) => m.attachments)
@@ -613,12 +653,16 @@ export function InboxClient({ initialItems, initialLastRun, canCreateProject, is
                 </CardContent>
               </Card>
             )})}
+                  </div>
+                )}
+              </div>
+            )})}
           </div>
 
-          {threads.length > visible && (
+          {senderGroups.length > visible && (
             <div className="mt-4 text-center">
               <Button variant="outline" onClick={() => setVisible((v) => v + PAGE)} className="gap-2">
-                {t('inbox_load_more')} ({threads.length - visible})
+                {t('inbox_load_more')} ({senderGroups.length - visible})
               </Button>
             </div>
           )}
