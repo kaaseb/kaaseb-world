@@ -234,10 +234,12 @@ export function QuotationPrint({ project, items, quotation, settings, deliveryNo
     document.documentElement.lang = lang
     document.documentElement.dir = isRtl ? 'rtl' : 'ltr'
     // The browser's "Save as PDF" uses the document title as the filename →
-    // "Kaaseb_<offer number>" for every quotation (manual / Furn / Tannoor).
+    // "Kaaseb_<offer number>". Set it AGAIN immediately before print() so nothing
+    // (Next metadata / a late title update) can override it in the meantime.
     const prevTitle = document.title
-    document.title = `Kaaseb_${quotation.quotation_number}`
-    const t = setTimeout(() => window.print(), 800)
+    const fileName = `Kaaseb_${quotation.quotation_number}`
+    document.title = fileName
+    const t = setTimeout(() => { document.title = fileName; window.print() }, 800)
     return () => { clearTimeout(t); document.title = prevTitle }
   }, [lang, isRtl, quotation.quotation_number])
 

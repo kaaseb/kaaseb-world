@@ -157,9 +157,10 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
         quotationId: q.id,
         cookieHeader,
       })
-      // Stable, recognisable key in the bucket browser:
-      //   furn/quotations/<project-id>/<n>-<lang>.pdf
-      const key = `furn/quotations/${id}/${q.quotation_number}-${q.language}.pdf`
+      // Named so the DOWNLOADED file is "Kaaseb_<n>-<lang>.pdf" (the browser uses
+      // the S3 key basename for a direct download):
+      //   furn/quotations/<project-id>/Kaaseb_<n>-<lang>.pdf
+      const key = `furn/quotations/${id}/Kaaseb_${q.quotation_number}-${q.language}.pdf`
       const up = await uploadBufferToS3({
         buffer: pdf,
         key,
