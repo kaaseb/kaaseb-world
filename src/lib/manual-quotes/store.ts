@@ -138,7 +138,7 @@ export async function updateManualQuote(id: string, patch: Partial<ManualQuote>)
 
   // Custom columns first (item.custom is validated against these ids).
   const columns: ManualQuoteColumn[] = Array.isArray(patch.columns)
-    ? patch.columns.slice(0, 8).map((raw) => {
+    ? patch.columns.slice(0, 30).map((raw) => {
         const c = raw as Partial<ManualQuoteColumn>
         return { id: typeof c.id === 'string' && c.id ? c.id.slice(0, 40) : rid(), name: String(c.name || '').slice(0, 40) }
       }).filter((c) => c.name.trim())

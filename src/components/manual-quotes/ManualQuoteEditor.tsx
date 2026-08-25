@@ -4,9 +4,9 @@
 // optional thumbnail uploaded straight to S3) + live totals. Saves the whole
 // quote to S3 via PATCH.
 
-import { useState } from 'react'
+import { Fragment, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { ArrowLeft, ArrowRight, Plus, Trash2, Loader2, Save, Printer, ImagePlus, ClipboardPaste, X } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Plus, Trash2, Loader2, Save, Printer, ImagePlus, ClipboardPaste, X, FileSpreadsheet } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -15,7 +15,7 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { useLanguage } from '@/contexts/LanguageContext'
 import { uploadFile } from '@/lib/upload-client'
-import type { ManualQuote, ManualQuoteItem } from '@/lib/manual-quotes/store'
+import type { ManualQuote, ManualQuoteItem, ManualQuoteColumn } from '@/lib/manual-quotes/store'
 import { ExcelPasteDialog } from './ExcelPasteDialog'
 import { QuoteTermsControl } from '@/components/quote-terms/QuoteTermsControl'
 
@@ -31,6 +31,7 @@ export function ManualQuoteEditor({ initial }: { initial: ManualQuote }) {
   const [saving, setSaving] = useState(false)
   const [uploadingId, setUploadingId] = useState<string | null>(null)
   const [pasteOpen, setPasteOpen] = useState(false)
+  const [boqLoading, setBoqLoading] = useState(false)
 
   const cols = q.columns || []
 
@@ -46,6 +47,16 @@ export function ManualQuoteEditor({ initial }: { initial: ManualQuote }) {
   // Custom columns (render on the PDF too).
   function addColumn() {
     setQ((s) => { const n = (s.columns || []).length + 1; return { ...s, columns: [...(s.columns || []), { id: rid(), name: ar ? `عمود ${n}` : `Column ${n}` }] } })
+  }
+  // Insert a new empty column at a specific position (between existing columns).
+  function insertColumnAt(index: number) {
+    setQ((s) => {
+      const list = [...(s.columns || [])]
+      if (list.length >= 30) { toast.error(ar ? 'الحد 30 عموداً' : 'Max 30 columns'); return s }
+      const n = list.length + 1
+      list.splice(index, 0, { id: rid(), name: ar ? `عمود ${n}` : `Column ${n}` })
+      return { ...s, columns: list }
+    })
   }
   function renameColumn(id: string, name: string) {
     setQ((s) => ({ ...s, columns: (s.columns || []).map((c) => (c.id === id ? { ...c, name } : c)) }))
@@ -63,6 +74,44 @@ export function ManualQuoteEditor({ initial }: { initial: ManualQuote }) {
   function importItems(newItems: ManualQuoteItem[]) {
     setQ((s) => ({ ...s, items: [...s.items, ...newItems] }))
     toast.success(ar ? `أُضيف ${newItems.length} بند ✓` : `${newItems.length} items added ✓`)
+  }
+
+  // Import a BOQ file (xlsx/xls/csv): mirror EVERY column exactly as a custom
+  // column and every row as an item, values verbatim. Replaces the current
+  // columns + items (the BOQ defines the whole table). The team then prices +
+  // curates (rename/delete/insert columns, fill Price/Qty).
+  async function onBoqFile(file: File) {
+    setBoqLoading(true)
+    try {
+      const XLSX = await import('xlsx')
+      const buf = await file.arrayBuffer()
+      const wb = XLSX.read(buf, { type: 'array' })
+      const sheet = wb.Sheets[wb.SheetNames[0]]
+      if (!sheet) { toast.error(ar ? 'الملف فارغ' : 'Empty file'); return }
+      const grid = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, blankrows: false, defval: '' })
+      if (grid.length < 1) { toast.error(ar ? 'لا صفوف في الملف' : 'No rows in file'); return }
+      // First non-empty row = headers.
+      const headerRow = (grid[0] || []).map((h) => String(h ?? '').trim())
+      const width = headerRow.length
+      if (width === 0) { toast.error(ar ? 'لا أعمدة في الملف' : 'No columns in file'); return }
+      if (width > 30) { toast.error(ar ? 'الملف يتجاوز 30 عموداً — احذف أعمدة زائدة ثم أعد الرفع' : 'File exceeds 30 columns'); return }
+      const bodyRows = grid.slice(1).filter((r) => (r || []).some((c) => String(c ?? '').trim() !== ''))
+      if (bodyRows.length === 0) { toast.error(ar ? 'لا صفوف بيانات بعد العناوين' : 'No data rows after the header'); return }
+      if ((q.columns?.length || 0) > 0 || q.items.length > 0) {
+        if (!window.confirm(ar ? 'سيُستبدل الجدول الحالي (الأعمدة والبنود) بمحتوى ملف الـ BOQ. متابعة؟' : 'This replaces the current table (columns + items) with the BOQ file. Continue?')) return
+      }
+      const columns: ManualQuoteColumn[] = headerRow.map((name, i) => ({ id: rid(), name: name || (ar ? `عمود ${i + 1}` : `Column ${i + 1}`) }))
+      const items: ManualQuoteItem[] = bodyRows.map((r) => ({
+        id: rid(), description: '', details: '', quantity: 0, unit: '', unit_price: null, imageUrl: null, notes: '',
+        custom: Object.fromEntries(columns.map((c, i) => [c.id, String(r[i] ?? '').trim()])),
+      }))
+      setQ((s) => ({ ...s, columns, items }))
+      toast.success(ar ? `تم سحب ${columns.length} عمود و ${items.length} صف ✓` : `Pulled ${columns.length} columns × ${items.length} rows ✓`)
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : (ar ? 'تعذّر قراءة الملف' : 'Could not read the file'))
+    } finally {
+      setBoqLoading(false)
+    }
   }
 
   async function uploadThumb(id: string, file: File) {
@@ -134,7 +183,11 @@ export function ManualQuoteEditor({ initial }: { initial: ManualQuote }) {
       <Card className="mb-4">
         <CardHeader className="flex flex-row items-center justify-between gap-2 flex-wrap">
           <CardTitle className="text-base">{ar ? 'البنود' : 'Items'}</CardTitle>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
+            <label className={`inline-flex items-center gap-1 h-8 px-3 rounded-md border text-sm hover:bg-muted/50 ${boqLoading ? 'opacity-60 pointer-events-none' : 'cursor-pointer'}`} title={ar ? 'يسحب كل أعمدة الـ BOQ كما هي' : 'Pulls every BOQ column as-is'}>
+              {boqLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileSpreadsheet className="w-4 h-4" />}{ar ? 'رفع BOQ (سحب الأعمدة)' : 'Upload BOQ'}
+              <input type="file" accept=".xlsx,.xls,.csv" className="hidden" disabled={boqLoading} onChange={(e) => { const f = e.target.files?.[0]; if (f) onBoqFile(f); e.target.value = '' }} />
+            </label>
             <Button size="sm" variant="outline" onClick={() => setPasteOpen(true)} className="gap-1"><ClipboardPaste className="w-4 h-4" />{ar ? 'لصق من إكسل' : 'Paste from Excel'}</Button>
             <Button size="sm" variant="outline" onClick={addItem} className="gap-1"><Plus className="w-4 h-4" />{ar ? 'بند' : 'Item'}</Button>
           </div>
@@ -143,11 +196,15 @@ export function ManualQuoteEditor({ initial }: { initial: ManualQuote }) {
           {/* Custom columns (appear on the PDF). */}
           <div className="flex flex-wrap items-center gap-2 pb-1">
             <span className="text-xs text-muted-foreground">{ar ? 'أعمدة مخصّصة:' : 'Custom columns:'}</span>
-            {cols.map((c) => (
-              <span key={c.id} className="inline-flex items-center gap-1 rounded-md border bg-muted/30 px-1.5 py-0.5">
-                <input value={c.name} onChange={(e) => renameColumn(c.id, e.target.value)} className="bg-transparent outline-none text-xs w-24" />
-                <button type="button" onClick={() => removeColumn(c.id)} className="text-muted-foreground hover:text-red-600"><X className="w-3 h-3" /></button>
-              </span>
+            {cols.map((c, i) => (
+              <Fragment key={c.id}>
+                <button type="button" onClick={() => insertColumnAt(i)} title={ar ? 'إدراج عمود هنا' : 'Insert column here'}
+                  className="text-teal-600/70 hover:text-teal-700 leading-none text-sm font-bold px-0.5" aria-label={ar ? 'إدراج عمود' : 'Insert column'}>+</button>
+                <span className="inline-flex items-center gap-1 rounded-md border bg-muted/30 px-1.5 py-0.5">
+                  <input value={c.name} onChange={(e) => renameColumn(c.id, e.target.value)} className="bg-transparent outline-none text-xs w-24" />
+                  <button type="button" onClick={() => removeColumn(c.id)} className="text-muted-foreground hover:text-red-600"><X className="w-3 h-3" /></button>
+                </span>
+              </Fragment>
             ))}
             <Button size="sm" variant="ghost" onClick={addColumn} className="gap-1 h-7 text-xs"><Plus className="w-3 h-3" />{ar ? 'عمود' : 'Column'}</Button>
           </div>
