@@ -77,7 +77,9 @@ export function ManualQuoteEditor({ initial }: { initial: ManualQuote }) {
     }
   }
 
-  const subtotal = q.items.reduce((s, it) => s + (Number(it.quantity) || 0) * (Number(it.unit_price) || 0), 0)
+  const itemsSum = q.items.reduce((s, it) => s + (Number(it.quantity) || 0) * (Number(it.unit_price) || 0), 0)
+  const shipping = q.delivery === 'excluded' ? Math.max(0, Number(q.shipping) || 0) : 0
+  const subtotal = itemsSum + shipping
   const vat = subtotal * (q.vat_rate || 0)
   const total = subtotal + vat
   const money = (n: number) => n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -190,6 +192,29 @@ export function ManualQuoteEditor({ initial }: { initial: ManualQuote }) {
 
       <Card className="mb-4"><CardContent className="p-4 space-y-2">
         <div className="space-y-1"><Label>{ar ? 'ملاحظات' : 'Notes'}</Label><Textarea rows={2} value={q.notes} onChange={(e) => set('notes', e.target.value)} /></div>
+        <div className="space-y-1 pt-1">
+          <Label>{ar ? 'التوصيل' : 'Delivery'}</Label>
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="inline-flex rounded-lg border p-0.5 text-xs">
+              {([['none', ar ? 'بدون ذكر' : 'None'], ['included', ar ? 'شامل التوصيل' : 'Included'], ['excluded', ar ? 'غير شامل' : 'Not included']] as const).map(([val, lbl]) => (
+                <button key={val} type="button" onClick={() => set('delivery', val)}
+                  className={`px-3 py-1 rounded-md ${q.delivery === val ? 'bg-teal-600 text-white' : 'text-muted-foreground'}`}>{lbl}</button>
+              ))}
+            </div>
+            {q.delivery === 'excluded' && (
+              <div className="flex items-center gap-1.5">
+                <Input type="number" min={0} step="0.01" value={q.shipping || ''} onChange={(e) => set('shipping', Math.max(0, Number(e.target.value) || 0))}
+                  className="w-36" placeholder={ar ? 'قيمة التوصيل' : 'Delivery amount'} />
+                <span className="text-xs text-muted-foreground">{q.currency}</span>
+              </div>
+            )}
+          </div>
+          <p className="text-[11px] text-muted-foreground">
+            {q.delivery === 'included' ? (ar ? 'تُطبع عبارة «الأسعار شاملة التوصيل».' : 'Prints “Prices include delivery”.')
+              : q.delivery === 'excluded' ? (ar ? 'يُضاف سطر «التوصيل» بالقيمة أعلاه ويدخل ضمن الإجمالي.' : 'Adds a “Delivery” line with the amount above.')
+              : (ar ? 'لا يُذكر التوصيل في العرض.' : 'Delivery not mentioned.')}
+          </p>
+        </div>
         <div className="flex flex-col items-end gap-1 text-sm pt-2 border-t">
           <div className="flex gap-8"><span className="text-muted-foreground">{ar ? 'المجموع' : 'Subtotal'}</span><span className="tabular-nums w-28 text-end">{money(subtotal)}</span></div>
           <div className="flex gap-8"><span className="text-muted-foreground">{ar ? 'الضريبة' : 'VAT'} {(q.vat_rate * 100).toFixed(0)}%</span><span className="tabular-nums w-28 text-end">{money(vat)}</span></div>

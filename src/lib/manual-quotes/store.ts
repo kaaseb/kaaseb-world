@@ -11,6 +11,11 @@ const START_NUMBER = 100 // the owner's ask: numbering starts at 100
 
 export type QuoteLang = 'ar' | 'en'
 export type QuoteCurrency = 'SAR' | 'USD'
+// Delivery handling on the quote:
+//   none     → say nothing about delivery
+//   included → print a "price includes delivery" note (no extra charge)
+//   excluded → add a priced delivery line (shipping amount, VAT applies)
+export type QuoteDelivery = 'none' | 'included' | 'excluded'
 
 // A team-defined extra column (e.g. "المقاس", "الكود") that renders on the PDF.
 export interface ManualQuoteColumn {
@@ -43,6 +48,10 @@ export interface ManualQuote {
   phone: string
   currency: QuoteCurrency
   vat_rate: number
+  // Delivery/shipping handling (see QuoteDelivery). `shipping` is only used when
+  // delivery === 'excluded' — the priced delivery line amount.
+  delivery: QuoteDelivery
+  shipping: number
   // Extra named columns shown on the quote table (beyond the standard ones).
   columns: ManualQuoteColumn[]
   items: ManualQuoteItem[]
@@ -64,7 +73,12 @@ async function read(): Promise<State> {
   const s = await readJson<State>(KEY, EMPTY)
   return {
     // Backfill `columns` on older quotes so consumers can always map over it.
-    quotes: Array.isArray(s?.quotes) ? s.quotes.map((q) => ({ ...q, columns: Array.isArray(q?.columns) ? q.columns : [] })) : [],
+    quotes: Array.isArray(s?.quotes) ? s.quotes.map((q) => ({
+      ...q,
+      columns: Array.isArray(q?.columns) ? q.columns : [],
+      delivery: q?.delivery === 'included' || q?.delivery === 'excluded' ? q.delivery : 'none',
+      shipping: Number.isFinite(q?.shipping) ? Number(q.shipping) : 0,
+    })) : [],
     nextNumber: Number.isFinite(s?.nextNumber) && s.nextNumber >= START_NUMBER ? s.nextNumber : START_NUMBER,
   }
 }
@@ -96,6 +110,8 @@ export async function createManualQuote(input: {
     client_name: '', company: '', email: '', phone: '',
     currency: 'SAR',
     vat_rate: 0.15,
+    delivery: 'none',
+    shipping: 0,
     columns: [],
     items: [],
     notes: '',
@@ -166,6 +182,8 @@ export async function updateManualQuote(id: string, patch: Partial<ManualQuote>)
     phone: patch.phone !== undefined ? String(patch.phone).slice(0, 60) : cur.phone,
     currency: patch.currency && CURRENCIES.includes(patch.currency) ? patch.currency : cur.currency,
     vat_rate: typeof patch.vat_rate === 'number' && patch.vat_rate >= 0 && patch.vat_rate <= 1 ? patch.vat_rate : cur.vat_rate,
+    delivery: patch.delivery === 'included' || patch.delivery === 'excluded' || patch.delivery === 'none' ? patch.delivery : (cur.delivery ?? 'none'),
+    shipping: typeof patch.shipping === 'number' && patch.shipping >= 0 ? patch.shipping : (cur.shipping ?? 0),
     columns,
     items,
     notes: patch.notes !== undefined ? String(patch.notes).slice(0, 4000) : cur.notes,

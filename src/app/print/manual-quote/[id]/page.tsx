@@ -28,7 +28,16 @@ export default async function ManualQuotePrintPage({ params }: { params: Promise
   const { data: settingsRow } = await supabase.from('furn_settings').select('*').eq('id', 1).maybeSingle()
   const settings = (settingsRow || {}) as FurnSettings
 
-  const subtotal = quote.items.reduce((s, it) => s + (Number(it.quantity) || 0) * (Number(it.unit_price) || 0), 0)
+  const lang = quote.language
+  const itemsSum = quote.items.reduce((s, it) => s + (Number(it.quantity) || 0) * (Number(it.unit_price) || 0), 0)
+  // Delivery: "included" → a note only; "excluded" → a priced line folded into the
+  // subtotal (so VAT applies and it flows into the grand total). Mirrors Furn.
+  const shipping = quote.delivery === 'excluded' ? Math.max(0, Number(quote.shipping) || 0) : 0
+  const deliveryNote =
+    quote.delivery === 'included'
+      ? lang === 'ar' ? 'الأسعار شاملة التوصيل.' : 'Prices include delivery.'
+      : null
+  const subtotal = itemsSum + shipping
   const vatAmount = subtotal * (quote.vat_rate || 0)
   const total = subtotal + vatAmount
 
@@ -80,6 +89,27 @@ export default async function ManualQuotePrintPage({ params }: { params: Promise
     custom: it.custom || {},
   }))
 
+  // "Not included" → append a priced delivery line so it shows in the table and
+  // matches the shipping folded into the subtotal above.
+  if (shipping > 0) {
+    itemsShim.push({
+      id: 'shipping',
+      project_id: quote.id,
+      position: itemsShim.length + 1,
+      description: lang === 'ar' ? 'التوصيل' : 'Delivery',
+      details: null,
+      quantity: 1,
+      unit: lang === 'ar' ? 'مقطوعية' : 'lot',
+      unit_price: shipping,
+      notes: null,
+      ai_confidence: null,
+      created_at: quote.createdAt,
+      updated_at: quote.updatedAt,
+      imageUrl: null,
+      custom: {},
+    })
+  }
+
   const quotationShim: FurnQuotation = {
     id: quote.id,
     project_id: quote.id,
@@ -102,6 +132,7 @@ export default async function ManualQuotePrintPage({ params }: { params: Promise
       settings={settings}
       currency={quote.currency}
       extraColumns={quote.columns || []}
+      deliveryNote={deliveryNote}
       terms={tc.show ? tc.lines : []}
     />
   )
