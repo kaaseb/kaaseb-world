@@ -12,6 +12,7 @@ import { verifyOrigin } from '@/lib/csrf'
 import { getProfileOrFallback, getEffectivePermissions } from '@/lib/profile'
 import { hasPermission } from '@/lib/permissions'
 import { verifyDocsPin, currentUnlockToken, DOCS_COOKIE, DOCS_COOKIE_MAXAGE } from '@/lib/docs/lock'
+import { throttleStatus, recordFailure, clearFailures } from '@/lib/security/throttle'
 
 export const runtime = 'nodejs'
 
@@ -29,13 +30,22 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
 
+  // Freeze a user who keeps guessing wrong — a short shared PIN would otherwise
+  // be brute-forceable by any insider who can reach the page.
+  const gate = await throttleStatus('docs', user.id)
+  if (gate.blocked) {
+    return NextResponse.json({ error: `محاولات كثيرة — انتظر ${gate.retryAfterSec} ثانية ثم أعد المحاولة.` }, { status: 429 })
+  }
+
   let body: { pin?: unknown }
   try { body = await request.json() } catch { return NextResponse.json({ error: 'Bad JSON' }, { status: 400 }) }
   const pin = typeof body.pin === 'string' ? body.pin : ''
 
   if (!(await verifyDocsPin(pin))) {
+    await recordFailure('docs', user.id)
     return NextResponse.json({ error: 'رقم سري خاطئ' }, { status: 401 })
   }
+  await clearFailures('docs', user.id)
 
   const token = await currentUnlockToken()
   const res = NextResponse.json({ ok: true })

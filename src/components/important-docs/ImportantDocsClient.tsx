@@ -420,8 +420,9 @@ export function ImportantDocsClient({ initialDocs, canManage, isSuperAdmin = fal
             </div>
             <div className="grid md:grid-cols-2 gap-3">
               <div className="space-y-1.5">
-                <Label>{t('doc_expiry')}</Label>
+                <Label>{t('doc_expiry')} <span className="text-muted-foreground font-normal">({tx('اختياري', 'optional')})</span></Label>
                 <Input type="date" value={expiry} onChange={e => setExpiry(e.target.value)} />
+                <p className="text-[11px] text-muted-foreground">{tx('عند تحديده يصلك تنبيه قبل الانتهاء بـ30 و7 أيام ويوم الانتهاء.', 'If set, you get alerts 30 and 7 days before, and on the expiry day.')}</p>
               </div>
             </div>
             <div className="space-y-1.5">

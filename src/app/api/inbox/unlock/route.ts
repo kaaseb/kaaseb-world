@@ -10,6 +10,7 @@ import { verifyOrigin } from '@/lib/csrf'
 import { getProfileOrFallback, getEffectivePermissions } from '@/lib/profile'
 import { hasPermission } from '@/lib/permissions'
 import { verifyPin, currentUnlockToken, INBOX_COOKIE, INBOX_COOKIE_MAXAGE } from '@/lib/inbox/lock'
+import { throttleStatus, recordFailure, clearFailures } from '@/lib/security/throttle'
 
 export const runtime = 'nodejs'
 
@@ -27,13 +28,20 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
 
+  const gate = await throttleStatus('inbox', user.id)
+  if (gate.blocked) {
+    return NextResponse.json({ error: `محاولات كثيرة — انتظر ${gate.retryAfterSec} ثانية ثم أعد المحاولة.` }, { status: 429 })
+  }
+
   let body: { pin?: unknown }
   try { body = await request.json() } catch { return NextResponse.json({ error: 'Bad JSON' }, { status: 400 }) }
   const pin = typeof body.pin === 'string' ? body.pin : ''
 
   if (!(await verifyPin(pin))) {
+    await recordFailure('inbox', user.id)
     return NextResponse.json({ error: 'رقم سري خاطئ' }, { status: 401 })
   }
+  await clearFailures('inbox', user.id)
 
   const token = await currentUnlockToken()
   const res = NextResponse.json({ ok: true })

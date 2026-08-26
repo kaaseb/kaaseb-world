@@ -55,6 +55,10 @@ function DashboardInner({ profile, permissions, children }: DashboardShellProps)
       sessionStorage.setItem('dues_checked', '1')
       fetch('/api/notifications/dues-check', { method: 'POST' }).catch(() => {})
     }
+    if (profile?.role === 'super_admin' && !sessionStorage.getItem('docs_expiry_checked')) {
+      sessionStorage.setItem('docs_expiry_checked', '1')
+      fetch('/api/notifications/docs-expiry-check', { method: 'POST' }).catch(() => {})
+    }
   }, [profile?.id, profile?.lock_enabled, profile?.role, searchParams])
 
   // Schedule presence after the page is interactive. requestIdleCallback
