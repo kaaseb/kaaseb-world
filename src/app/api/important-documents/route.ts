@@ -6,11 +6,19 @@ import { createClient } from '@/lib/supabase/server'
 import { verifyOrigin } from '@/lib/csrf'
 import { denyUnlessPermitted } from '@/lib/api-guard'
 import { serverAudit } from '@/lib/audit-server'
+import { docsUnlocked } from '@/lib/docs/lock'
 
 export async function GET() {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  // Same gate as the page: the permission AND the optional PIN. Without this the
+  // API leaks every document (and its S3 url) to any logged-in user, bypassing
+  // both the permission system and the lock. Mirrors /api/inbox.
+  const deny = await denyUnlessPermitted('page.important_docs')
+  if (deny) return deny
+  if (!(await docsUnlocked())) return NextResponse.json({ error: 'مقفل — أدخل الرقم السري.' }, { status: 403 })
 
   const { data, error } = await supabase
     .from('important_documents')

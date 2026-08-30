@@ -1,8 +1,11 @@
 import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
+import { verifyOrigin } from '@/lib/csrf'
 import bcrypt from 'bcryptjs'
 
 export async function POST(request: Request) {
+  const csrfError = verifyOrigin(request)
+  if (csrfError) return csrfError
   try {
     const { password } = await request.json()
 

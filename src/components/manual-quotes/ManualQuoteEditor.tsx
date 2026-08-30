@@ -46,7 +46,12 @@ export function ManualQuoteEditor({ initial }: { initial: ManualQuote }) {
 
   // Custom columns (render on the PDF too).
   function addColumn() {
-    setQ((s) => { const n = (s.columns || []).length + 1; return { ...s, columns: [...(s.columns || []), { id: rid(), name: ar ? `عمود ${n}` : `Column ${n}` }] } })
+    setQ((s) => {
+      const list = s.columns || []
+      if (list.length >= 30) { toast.error(ar ? 'الحد 30 عموداً' : 'Max 30 columns'); return s }
+      const n = list.length + 1
+      return { ...s, columns: [...list, { id: rid(), name: ar ? `عمود ${n}` : `Column ${n}` }] }
+    })
   }
   // Insert a new empty column at a specific position (between existing columns).
   function insertColumnAt(index: number) {
@@ -92,15 +97,19 @@ export function ManualQuoteEditor({ initial }: { initial: ManualQuote }) {
       if (grid.length < 1) { toast.error(ar ? 'لا صفوف في الملف' : 'No rows in file'); return }
       // First non-empty row = headers.
       const headerRow = (grid[0] || []).map((h) => String(h ?? '').trim())
-      const width = headerRow.length
-      if (width === 0) { toast.error(ar ? 'لا أعمدة في الملف' : 'No columns in file'); return }
-      if (width > 30) { toast.error(ar ? 'الملف يتجاوز 30 عموداً — احذف أعمدة زائدة ثم أعد الرفع' : 'File exceeds 30 columns'); return }
       const bodyRows = grid.slice(1).filter((r) => (r || []).some((c) => String(c ?? '').trim() !== ''))
       if (bodyRows.length === 0) { toast.error(ar ? 'لا صفوف بيانات بعد العناوين' : 'No data rows after the header'); return }
+      // Table width = the WIDEST row, not just the header — some BOQs carry
+      // values in trailing columns the header left blank; keying off the header
+      // alone would silently drop those cells. Extra columns get a fallback name.
+      let width = headerRow.length
+      for (const r of bodyRows) width = Math.max(width, (r || []).length)
+      if (width === 0) { toast.error(ar ? 'لا أعمدة في الملف' : 'No columns in file'); return }
+      if (width > 30) { toast.error(ar ? 'الملف يتجاوز 30 عموداً — احذف أعمدة زائدة ثم أعد الرفع' : 'File exceeds 30 columns'); return }
       if ((q.columns?.length || 0) > 0 || q.items.length > 0) {
         if (!window.confirm(ar ? 'سيُستبدل الجدول الحالي (الأعمدة والبنود) بمحتوى ملف الـ BOQ. متابعة؟' : 'This replaces the current table (columns + items) with the BOQ file. Continue?')) return
       }
-      const columns: ManualQuoteColumn[] = headerRow.map((name, i) => ({ id: rid(), name: name || (ar ? `عمود ${i + 1}` : `Column ${i + 1}`) }))
+      const columns: ManualQuoteColumn[] = Array.from({ length: width }, (_, i) => ({ id: rid(), name: (headerRow[i] || '').trim() || (ar ? `عمود ${i + 1}` : `Column ${i + 1}`) }))
       const items: ManualQuoteItem[] = bodyRows.map((r) => ({
         id: rid(), description: '', details: '', quantity: 0, unit: '', unit_price: null, imageUrl: null, notes: '',
         custom: Object.fromEntries(columns.map((c, i) => [c.id, String(r[i] ?? '').trim()])),

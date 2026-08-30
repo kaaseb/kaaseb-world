@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import Anthropic from '@anthropic-ai/sdk'
+import { createClient } from '@/lib/supabase/server'
+import { verifyOrigin } from '@/lib/csrf'
 
 interface DeedEntry {
   name: string
@@ -20,6 +22,14 @@ interface DuaEntry {
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
 
 export async function POST(req: NextRequest) {
+  // Don't rely on the middleware alone (it fails open on timeout): re-check auth
+  // and CSRF here so this paid Anthropic endpoint can't be hit anonymously.
+  const csrfError = verifyOrigin(req)
+  if (csrfError) return csrfError
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
   if (!process.env.ANTHROPIC_API_KEY) {
     return NextResponse.json({ error: 'ANTHROPIC_API_KEY غير مضبوط' }, { status: 500 })
   }

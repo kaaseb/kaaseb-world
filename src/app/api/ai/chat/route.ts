@@ -1,11 +1,14 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
+import { verifyOrigin } from '@/lib/csrf'
 import { TOOL_DECLARATIONS, TOOL_EXECUTORS } from '@/lib/ai/tools'
 import { getProvider, AiNotConfiguredError, type ChatTool, type ChatTurn } from '@/lib/ai'
 
 const MAX_TOOL_HOPS = 6
 
 export async function POST(req: Request) {
+  const csrfError = verifyOrigin(req)
+  if (csrfError) return csrfError
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })

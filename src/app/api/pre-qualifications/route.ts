@@ -13,6 +13,11 @@ export async function GET() {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
+  // Gate the read on the page permission (the POST already gates writes) so a
+  // user without pre-qualifications access can't list every record.
+  const deny = await denyUnlessPermitted('page.pre_qualifications')
+  if (deny) return deny
+
   const { data, error } = await supabase
     .from('pre_qualifications')
     .select('*')

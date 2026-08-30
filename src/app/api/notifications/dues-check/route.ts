@@ -39,42 +39,39 @@ export async function POST(request: Request) {
     if (!dues || dues.length === 0) return NextResponse.json({ ok: true })
 
     const today = new Date()
+    const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate()).toISOString()
     const toInsert: object[] = []
 
     for (const due of dues) {
       const days = differenceInDays(new Date(due.next_payment_date), today)
-      let label: string | null = null
-      let tag: string | null = null
-
-      if (days === 14) { label = 'خلال أسبوعين'; tag = '14d' }
-      else if (days === 7) { label = 'خلال أسبوع'; tag = '7d' }
+      let label: string
+      if (days === 14) label = 'خلال أسبوعين'
+      else if (days === 7) label = 'خلال أسبوع'
       else continue
 
-      // Dedup: check if already sent today for this due + tag
-      const todayStr = today.toISOString().slice(0, 10)
-      const objectId = `dues-${due.id}-${tag}-${todayStr}`
+      // The `notifications` table has NO `object_id` column (see
+      // src/lib/opportunities/notify.ts), so dedup on (title, created today) —
+      // the same key the docs-expiry sweep uses. `title` encodes the due +
+      // window so re-triggering the sweep on the same day never double-sends.
+      const title = `تنبيه: التزام "${due.platform}" يستحق ${label}`
+      const message = `الالتزام "${due.platform}" يستحق ${label}. المبلغ: ر.س ${due.amount.toLocaleString()}`
 
       const { count } = await admin
         .from('notifications')
         .select('id', { count: 'exact', head: true })
-        .eq('object_id', objectId)
+        .eq('title', title)
+        .gte('created_at', todayStart)
 
       if ((count ?? 0) > 0) continue
 
       for (const sa of superAdmins) {
-        toInsert.push({
-          sender_id: user.id,
-          recipient_id: sa.id,
-          is_broadcast: false,
-          title: `تنبيه: التزام قادم — ${due.platform}`,
-          message: `الالتزام "${due.platform}" يستحق ${label}. المبلغ: ر.س ${due.amount.toLocaleString()}`,
-          object_id: objectId,
-        })
+        toInsert.push({ sender_id: user.id, recipient_id: sa.id, is_broadcast: false, title, message })
       }
     }
 
     if (toInsert.length > 0) {
-      await admin.from('notifications').insert(toInsert)
+      const { error } = await admin.from('notifications').insert(toInsert)
+      if (error) return NextResponse.json({ error: error.message }, { status: 500 })
     }
 
     return NextResponse.json({ ok: true, sent: toInsert.length })

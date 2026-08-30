@@ -7,6 +7,7 @@ import { createClient } from '@/lib/supabase/server'
 import { notFound, redirect } from 'next/navigation'
 import { QuotationPrint } from '@/components/furn/QuotationPrint'
 import { getProjectItemImages } from '@/lib/tannoor/item-images'
+import { getFxSettings, usdPrice } from '@/lib/settings/fx'
 import { resolveQuoteTerms } from '@/lib/quote-terms/store'
 import type {
   FurnProject, FurnItem, FurnQuotation, FurnSettings,
@@ -39,6 +40,10 @@ export default async function TannoorPrintPage({
 
   // Optional per-line thumbnails live in S3 (no DB column), keyed by item id.
   const itemImages = await getProjectItemImages(id)
+  // Same FX rule the /quote route uses for an unpriced line, so the printed line
+  // prices reconcile with the stored subtotal/total (in rate modes the catalog
+  // price_usd is ignored in favour of price_sar ÷ rate).
+  const fx = await getFxSettings()
 
   const tProject = project as TannoorProject
   const tQuote = quotation as TannoorQuotation
@@ -102,7 +107,7 @@ export default async function TannoorPrintPage({
     // Edited line price (single-currency project); fall back to the catalog
     // price in the quote's currency if a line was never manually priced.
     unit_price: it.unit_price ?? (tQuote.currency === 'USD'
-      ? (it.tannoor_products?.price_usd ?? 0)
+      ? (usdPrice(fx, it.tannoor_products?.price_sar ?? 0, it.tannoor_products?.price_usd ?? 0) ?? 0)
       : (it.tannoor_products?.price_sar ?? 0)),
     notes: it.notes,
     ai_confidence: it.ai_confidence,

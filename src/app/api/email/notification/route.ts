@@ -1,22 +1,29 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
+import { verifyOrigin } from '@/lib/csrf'
+import { getProfileOrFallback } from '@/lib/profile'
 import { sendEmail } from '@/lib/email/send'
 import { tplNotification } from '@/lib/email/templates'
 
 // POST /api/email/notification
 // Body: { userId: string, title: string, body?: string }
-// Fired alongside an in-app notification insert so the user gets pinged
-// even when not looking at the app.
-//
-// Restricted to authenticated users. We don't enforce that the caller
-// equals the originator of the notification — it's used by server-side
-// notification senders (the existing notifications/send route, dues-check,
-// etc.) which already gate themselves.
+// Sends an email with an arbitrary title/body to any user via company SMTP —
+// a spam/phishing primitive if left open. Restricted to super-admins (the only
+// role that fans out cross-user notifications) + CSRF. Callers that send to the
+// user themselves are unaffected because super-admins can target anyone.
 export async function POST(request: Request) {
+  const csrfError = verifyOrigin(request)
+  if (csrfError) return csrfError
+
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  const profile = await getProfileOrFallback(supabase, user)
+  if (profile.role !== 'super_admin') {
+    return NextResponse.json({ error: 'هذا الإجراء للسوبر أدمن فقط.' }, { status: 403 })
+  }
 
   const { userId, title, body } = await request.json().catch(() => ({}))
   if (!userId || !title) {

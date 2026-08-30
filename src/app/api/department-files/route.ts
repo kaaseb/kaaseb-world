@@ -1,8 +1,10 @@
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { NextResponse } from 'next/server'
+import { verifyOrigin } from '@/lib/csrf'
 
 const BUCKET = 'department-files'
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const ALLOWED_TYPES = [
   'application/pdf',
   'application/zip',
@@ -15,6 +17,8 @@ const ALLOWED_TYPES = [
 const ALLOWED_EXTS = ['pdf', 'zip', 'xlsx', 'csv']
 
 export async function POST(request: Request) {
+  const csrfError = verifyOrigin(request)
+  if (csrfError) return csrfError
   try {
     const supabase = await createClient()
     const { data: { user } } = await supabase.auth.getUser()
@@ -29,7 +33,10 @@ export async function POST(request: Request) {
     const file = formData.get('file') as File
     const departmentId = formData.get('department_id') as string
 
+    // department_id must be a plain UUID — it becomes an S3 key segment, so a raw
+    // client string could inject `../` / prefixes into the object key.
     if (!file || !departmentId) return NextResponse.json({ error: 'Missing fields' }, { status: 400 })
+    if (!UUID_RE.test(departmentId)) return NextResponse.json({ error: 'Bad department id' }, { status: 400 })
 
     const ext = file.name.split('.').pop()?.toLowerCase() ?? ''
     if (!ALLOWED_EXTS.includes(ext)) {
@@ -84,6 +91,8 @@ export async function POST(request: Request) {
 }
 
 export async function DELETE(request: Request) {
+  const csrfError = verifyOrigin(request)
+  if (csrfError) return csrfError
   try {
     const supabase = await createClient()
     const { data: { user } } = await supabase.auth.getUser()

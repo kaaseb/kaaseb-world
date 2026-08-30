@@ -4,7 +4,7 @@
 // the client, adds priced line items (each with an optional thumbnail), and the
 // number runs from 100 upward. Rendered/printed from /print/manual-quote/<id>.
 
-import { readJson, writeJson } from '@/lib/s3'
+import { readJson, writeJson, mutateJson } from '@/lib/s3'
 
 const KEY = 'app-data/manual-quotes.json'
 const START_NUMBER = 100 // the owner's ask: numbering starts at 100
@@ -100,30 +100,36 @@ export async function createManualQuote(input: {
   createdBy: string | null
   createdByName: string | null
 }): Promise<ManualQuote> {
-  const s = await read()
   const now = new Date().toISOString()
-  const q: ManualQuote = {
-    id: rid(),
-    number: s.nextNumber,
-    language: 'en', // default to English quotations (owner's request)
-    project_name: '', subject: '',
-    client_name: '', company: '', email: '', phone: '',
-    currency: 'SAR',
-    vat_rate: 0.15,
-    delivery: 'none',
-    shipping: 0,
-    columns: [],
-    items: [],
-    notes: '',
-    createdAt: now,
-    updatedAt: now,
-    createdBy: input.createdBy,
-    createdByName: input.createdByName,
-  }
-  s.quotes.push(q)
-  s.nextNumber = s.nextNumber + 1
-  await writeJson(KEY, s)
-  return q
+  let created: ManualQuote | null = null
+  // Atomic allocate-and-append so two people creating a quote at once can't be
+  // handed the SAME number (last-write-wins would drop one and duplicate the #).
+  await mutateJson<State>(KEY, EMPTY, (raw) => {
+    const quotes = Array.isArray(raw?.quotes) ? raw.quotes : []
+    const nextNumber = Number.isFinite(raw?.nextNumber) && raw.nextNumber >= START_NUMBER ? raw.nextNumber : START_NUMBER
+    const q: ManualQuote = {
+      id: rid(),
+      number: nextNumber,
+      language: 'en', // default to English quotations (owner's request)
+      project_name: '', subject: '',
+      client_name: '', company: '', email: '', phone: '',
+      currency: 'SAR',
+      vat_rate: 0.15,
+      delivery: 'none',
+      shipping: 0,
+      columns: [],
+      items: [],
+      notes: '',
+      createdAt: now,
+      updatedAt: now,
+      createdBy: input.createdBy,
+      createdByName: input.createdByName,
+    }
+    created = q
+    return { quotes: [...quotes, q], nextNumber: nextNumber + 1 }
+  })
+  if (!created) throw new Error('createManualQuote: write did not run')
+  return created
 }
 
 const CURRENCIES: QuoteCurrency[] = ['SAR', 'USD']
@@ -138,10 +144,14 @@ export async function updateManualQuote(id: string, patch: Partial<ManualQuote>)
 
   // Custom columns first (item.custom is validated against these ids).
   const columns: ManualQuoteColumn[] = Array.isArray(patch.columns)
-    ? patch.columns.slice(0, 30).map((raw) => {
+    ? patch.columns.slice(0, 30).map((raw, i) => {
         const c = raw as Partial<ManualQuoteColumn>
-        return { id: typeof c.id === 'string' && c.id ? c.id.slice(0, 40) : rid(), name: String(c.name || '').slice(0, 40) }
-      }).filter((c) => c.name.trim())
+        // A blank name gets a fallback rather than dropping the column — deleting
+        // is the X button's job (it removes the column from the array). Dropping
+        // a blank-named column here would silently wipe all its per-item data.
+        const nm = String(c.name || '').trim()
+        return { id: typeof c.id === 'string' && c.id ? c.id.slice(0, 40) : rid(), name: (nm || `عمود ${i + 1}`).slice(0, 40) }
+      })
     : (cur.columns ?? [])
   const colIds = new Set(columns.map((c) => c.id))
 
