@@ -25,11 +25,19 @@ async function getBrowser(): Promise<Browser> {
   // Lazy-import so this module doesn't pull Puppeteer into bundles that
   // never call it (e.g. anything that imports `@/lib/s3` for upload only).
   const puppeteer = (await import('puppeteer')).default
+  // Allow ops to point at a system-installed Chromium (e.g. the distro's
+  // `chromium` package) when the bundled build can't launch — that's the fix
+  // for the "libnspr4.so: cannot open shared object file" class of errors on a
+  // server missing Chrome's shared libraries. Unset → puppeteer's own Chromium.
+  const executablePath = process.env.PUPPETEER_EXECUTABLE_PATH || undefined
   _browser = puppeteer.launch({
     headless: true,
+    executablePath,
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage', // avoid /dev/shm exhaustion on small containers
+      '--disable-gpu',
       '--font-render-hinting=none', // crisper Arabic glyphs
     ],
   })

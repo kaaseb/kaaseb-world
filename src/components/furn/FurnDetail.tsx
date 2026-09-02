@@ -358,6 +358,16 @@ export function FurnDetail({ project: initialProject, initialItems, initialQuota
   const vat = subtotal * 0.15
   const total = subtotal + vat
   const allPriced = activeItems.length > 0 && activeItems.every(it => it.unit_price !== null && it.unit_price !== undefined)
+  // Why the "Send" button is blocked — shown to the user instead of a silently
+  // disabled button, so they know exactly which fields to fill before creating.
+  const unpricedActive = activeItems.filter(it => it.unit_price === null || it.unit_price === undefined)
+  const missingReason = activeItems.length === 0
+    ? (isRtl ? 'لا توجد بنود لتسعيرها — أضِف بندًا أو ارفع BOQ أولًا.' : 'No items to quote — add an item or upload a BOQ first.')
+    : unpricedActive.length > 0
+      ? (isRtl
+          ? `${unpricedActive.length} بند بدون سعر — عبّي كل الأسعار قبل إنشاء العرض: ${unpricedActive.slice(0, 4).map(it => it.description || '—').join('، ')}${unpricedActive.length > 4 ? '…' : ''}`
+          : `${unpricedActive.length} item(s) have no price yet — fill every price first.`)
+      : ''
 
   const fileCount =
     (project.boq_url ? 1 : 0) +
@@ -709,6 +719,12 @@ export function FurnDetail({ project: initialProject, initialItems, initialQuota
             </div>
           )}
 
+          {canExport && missingReason && (
+            <div className="flex items-start gap-1.5 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-md px-2.5 py-2 mb-3">
+              <AlertTriangle className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
+              <span>{missingReason}</span>
+            </div>
+          )}
           <div className="flex flex-wrap gap-3">
             {canEditPrices && (
               <Button onClick={savePrices} disabled={savingPrices} variant="outline">
@@ -721,6 +737,7 @@ export function FurnDetail({ project: initialProject, initialItems, initialQuota
               <Button
                 onClick={() => { sendQuotation() }}
                 disabled={finalizing || !allPriced}
+                title={missingReason || undefined}
                 className="bg-orange-600 hover:bg-orange-700 text-white"
               >
                 {finalizing
@@ -759,6 +776,7 @@ export function FurnDetail({ project: initialProject, initialItems, initialQuota
                 <Button
                   onClick={() => sendQuotation()}
                   disabled={finalizing || !allPriced}
+                  title={missingReason || undefined}
                   size="lg"
                   className="bg-orange-600 hover:bg-orange-700 text-white"
                 >
@@ -767,6 +785,12 @@ export function FurnDetail({ project: initialProject, initialItems, initialQuota
                     : <><Send className={`w-4 h-4 ${isRtl ? 'ml-2' : 'mr-2'}`} />{t('furn_send_quotation')}</>}
                 </Button>
               </CardContent>
+              {missingReason && (
+                <div className="px-4 pb-3 -mt-1 flex items-start gap-1.5 text-xs text-amber-800">
+                  <AlertTriangle className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
+                  <span>{missingReason}</span>
+                </div>
+              )}
             </Card>
           )}
 
