@@ -323,7 +323,13 @@ export function FurnDetail({ project: initialProject, initialItems, initialQuota
       toast.error(j.error || 'Failed')
       return
     }
-    setQuotations(prev => [...j.quotations, ...prev])
+    // Merge by id so re-issuing REPLACES the AR/EN rows instead of stacking a
+    // duplicate pair on top of the old ones each time.
+    setQuotations(prev => {
+      const incoming: FurnQuotation[] = j.quotations || []
+      const incomingIds = new Set(incoming.map(q => q.id))
+      return [...incoming, ...prev.filter(q => !incomingIds.has(q.id))]
+    })
     setProject(prev => ({ ...prev, stage: 'quoted', status: 'completed' }))
     setTab('quotations')
 

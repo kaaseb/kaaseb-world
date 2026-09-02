@@ -95,17 +95,26 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   // subsequent re-issue reuses it so the customer sees a consistent
   // identifier no matter how many times we re-render.
   const admin = createAdminClient()
-  const { data: existing } = await supabase
-    .from('furn_quotations')
-    .select('quotation_number')
-    .eq('project_id', id)
-    .order('quotation_number', { ascending: false })
-    .limit(1)
-    .maybeSingle()
 
+  // Reconcile the quotation rows EXPLICITLY (find → delete extras → update/insert)
+  // rather than upsert-ON-CONFLICT. The old upsert needed a
+  // (project_id, quotation_number, language) unique index that may not exist on
+  // this database (its migration was never run) — when absent the upsert errors
+  // and NO quotation can be created. This path needs no special index, and it
+  // also collapses any legacy duplicate rows a previous code path left behind so
+  // "Re-issue" always lands on a clean AR + EN pair.
+  const { data: existingRows } = await admin
+    .from('furn_quotations')
+    .select('id, quotation_number, language')
+    .eq('project_id', id)
+    .order('quotation_number', { ascending: true })
+  const existing = existingRows || []
+
+  // One canonical number for the whole offer: reuse the smallest already issued
+  // (stable across re-issues), else allocate a fresh one.
   let quotationNumber: number
-  if (existing?.quotation_number) {
-    quotationNumber = existing.quotation_number
+  if (existing.length > 0) {
+    quotationNumber = Math.min(...existing.map((r) => r.quotation_number))
   } else {
     const { data: settingsRow } = await admin
       .from('furn_settings').select('next_quotation_number').eq('id', 1).single()
@@ -118,26 +127,43 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       .eq('id', 1)
   }
 
-  // Upsert both rows: matching (project_id, quotation_number, language)
-  // triples are updated with fresh totals and pdf_url=null (the renderer
-  // backfills the URL below). New rows are inserted. This is what makes
-  // "Re-issue" idempotent — clicking Send twice doesn't duplicate.
-  const rows = LANGUAGES.map(lang => ({
-    project_id: id,
-    quotation_number: quotationNumber,
-    language: lang,
-    vat_rate: VAT_RATE,
-    subtotal,
-    vat_amount: vatAmount,
-    total,
-    pdf_url: null,
-    generated_by: user.id,
-  }))
-  const { data: created, error: qErr } = await supabase
-    .from('furn_quotations')
-    .upsert(rows, { onConflict: 'project_id,quotation_number,language' })
-    .select('*')
-  if (qErr || !created) return NextResponse.json({ error: qErr?.message || 'Upsert failed' }, { status: 500 })
+  // Keep exactly one row per language (the earliest); delete every other row for
+  // this project so duplicates never accumulate.
+  const keepId: Record<'ar' | 'en', string | undefined> = {
+    ar: existing.find((r) => r.language === 'ar')?.id,
+    en: existing.find((r) => r.language === 'en')?.id,
+  }
+  const staleIds = existing.filter((r) => r.id !== keepId.ar && r.id !== keepId.en).map((r) => r.id)
+  if (staleIds.length > 0) {
+    await admin.from('furn_quotations').delete().in('id', staleIds)
+  }
+
+  // Update the kept row per language, or insert a fresh one — no ON CONFLICT.
+  const nowIso = new Date().toISOString()
+  type QRow = { id: string; language: 'ar' | 'en'; quotation_number: number; pdf_url: string | null }
+  const created: QRow[] = []
+  for (const lang of LANGUAGES) {
+    const base = {
+      project_id: id,
+      quotation_number: quotationNumber,
+      language: lang,
+      vat_rate: VAT_RATE,
+      subtotal,
+      vat_amount: vatAmount,
+      total,
+      pdf_url: null as string | null,
+      generated_by: user.id,
+      generated_at: nowIso,
+    }
+    const existingId = keepId[lang]
+    const q = existingId
+      ? await admin.from('furn_quotations').update(base).eq('id', existingId).select('*').single()
+      : await admin.from('furn_quotations').insert(base).select('*').single()
+    if (q.error || !q.data) {
+      return NextResponse.json({ error: q.error?.message || 'Failed to save quotation' }, { status: 500 })
+    }
+    created.push(q.data as QRow)
+  }
 
   // The print page is server-rendered and needs a real origin. Use the
   // request's origin header (works for localhost AND prod) so we don't
