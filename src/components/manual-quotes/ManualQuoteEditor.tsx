@@ -286,15 +286,13 @@ export function ManualQuoteEditor({ initial }: { initial: ManualQuote }) {
               : (ar ? 'لا يُذكر التوصيل في العرض.' : 'Delivery not mentioned.')}
           </p>
         </div>
+        {/* Terms & Conditions question sits directly under the delivery choice (owner's spec). */}
+        <QuoteTermsControl ref={termsRef} scopeKey={`manual:${q.id}`} uiAr={ar} quoteLang={q.language} />
         <div className="flex flex-col items-end gap-1 text-sm pt-2 border-t">
           <div className="flex gap-8"><span className="text-muted-foreground">{ar ? 'المجموع' : 'Subtotal'}</span><span className="tabular-nums w-28 text-end">{money(subtotal)}</span></div>
           <div className="flex gap-8"><span className="text-muted-foreground">{ar ? 'الضريبة' : 'VAT'} {(q.vat_rate * 100).toFixed(0)}%</span><span className="tabular-nums w-28 text-end">{money(vat)}</span></div>
           <div className="flex gap-8 font-bold text-base"><span>{ar ? 'الإجمالي' : 'Total'}</span><span className="tabular-nums w-28 text-end">{money(total)} {q.currency}</span></div>
         </div>
-      </CardContent></Card>
-
-      <Card className="mb-4"><CardContent className="p-3">
-        <QuoteTermsControl ref={termsRef} scopeKey={`manual:${q.id}`} uiAr={ar} quoteLang={q.language} />
       </CardContent></Card>
 
       <div className="flex items-center gap-2">
