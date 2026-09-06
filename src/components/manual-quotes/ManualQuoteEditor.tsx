@@ -4,7 +4,7 @@
 // optional thumbnail uploaded straight to S3) + live totals. Saves the whole
 // quote to S3 via PATCH.
 
-import { Fragment, useState } from 'react'
+import { Fragment, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { ArrowLeft, ArrowRight, Plus, Trash2, Loader2, Save, Printer, ImagePlus, ClipboardPaste, X, FileSpreadsheet } from 'lucide-react'
 import { toast } from 'sonner'
@@ -17,7 +17,8 @@ import { useLanguage } from '@/contexts/LanguageContext'
 import { uploadFile } from '@/lib/upload-client'
 import type { ManualQuote, ManualQuoteItem, ManualQuoteColumn } from '@/lib/manual-quotes/store'
 import { ExcelPasteDialog } from './ExcelPasteDialog'
-import { QuoteTermsControl } from '@/components/quote-terms/QuoteTermsControl'
+import { QuoteTermsControl, type QuoteTermsHandle } from '@/components/quote-terms/QuoteTermsControl'
+import { computeTotals } from '@/lib/quotation/totals'
 
 function rid() { return `${Math.random().toString(36).slice(2, 10)}` }
 
@@ -32,6 +33,9 @@ export function ManualQuoteEditor({ initial }: { initial: ManualQuote }) {
   const [uploadingId, setUploadingId] = useState<string | null>(null)
   const [pasteOpen, setPasteOpen] = useState(false)
   const [boqLoading, setBoqLoading] = useState(false)
+  // Terms & Conditions control — flushed before save/print so an unsaved edit
+  // can never miss the PDF.
+  const termsRef = useRef<QuoteTermsHandle>(null)
 
   const cols = q.columns || []
 
@@ -135,16 +139,17 @@ export function ManualQuoteEditor({ initial }: { initial: ManualQuote }) {
     }
   }
 
-  const itemsSum = q.items.reduce((s, it) => s + (Number(it.quantity) || 0) * (Number(it.unit_price) || 0), 0)
   const shipping = q.delivery === 'excluded' ? Math.max(0, Number(q.shipping) || 0) : 0
-  const subtotal = itemsSum + shipping
-  const vat = subtotal * (q.vat_rate || 0)
-  const total = subtotal + vat
+  // ONE totals function for every surface — the screen, the stored quote and
+  // the PDF can no longer disagree by a cent.
+  const { subtotal, vat, total } = computeTotals(q.items, shipping, q.vat_rate || 0)
   const money = (n: number) => n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
   async function save(thenPrint = false) {
     setSaving(true)
     try {
+      // Terms first: the print page reads the SAVED override.
+      await termsRef.current?.flush()
       const res = await fetch(`/api/manual-quotes/${q.id}`, {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(q),
@@ -289,7 +294,7 @@ export function ManualQuoteEditor({ initial }: { initial: ManualQuote }) {
       </CardContent></Card>
 
       <Card className="mb-4"><CardContent className="p-3">
-        <QuoteTermsControl scopeKey={`manual:${q.id}`} uiAr={ar} quoteLang={q.language} />
+        <QuoteTermsControl ref={termsRef} scopeKey={`manual:${q.id}`} uiAr={ar} quoteLang={q.language} />
       </CardContent></Card>
 
       <div className="flex items-center gap-2">

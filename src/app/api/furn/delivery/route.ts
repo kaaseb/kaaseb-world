@@ -56,7 +56,10 @@ export async function POST(request: Request) {
   const csrfError = verifyOrigin(request)
   if (csrfError) return csrfError
 
-  const deny = await denyUnlessPermitted('furn.pricing.edit')
+  // The delivery store is shared by Furn AND Tannoor (keyed by project id, which
+  // is a UUID in both) — either side's write permission may set a choice.
+  let deny = await denyUnlessPermitted('furn.pricing.edit')
+  if (deny) deny = await denyUnlessPermitted('tannoor.quotation.export')
   if (deny) return deny
 
   const supabase = await createClient()

@@ -11,7 +11,7 @@
 // scrolling, and the act of sending the quotation is a single deliberate
 // click (no more two-button "Download AR / Download EN" dance).
 
-import { useEffect, useState, Fragment } from 'react'
+import { useEffect, useRef, useState, Fragment } from 'react'
 import Link from 'next/link'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -24,7 +24,20 @@ import {
   Image as ImageIcon, Paperclip, ListChecks,
 } from 'lucide-react'
 import { useLanguage } from '@/contexts/LanguageContext'
-import { QuoteTermsControl } from '@/components/quote-terms/QuoteTermsControl'
+import { QuoteTermsControl, type QuoteTermsHandle } from '@/components/quote-terms/QuoteTermsControl'
+import { computeTotals } from '@/lib/quotation/totals'
+
+// A SUGGESTED price for one item — shown next to the price box with its basis,
+// applied only when the team clicks. Never written by itself.
+interface PriceSuggestion {
+  price: number
+  currency: 'SAR'
+  basis: 'catalog' | 'history'
+  label: string
+  confidence: number
+  product_id?: string
+  sample?: number
+}
 import type { FurnProject, FurnItem, FurnQuotation } from '@/types'
 
 interface Props {
@@ -47,6 +60,13 @@ export function FurnDetail({ project: initialProject, initialItems, initialQuota
   const [processing, setProcessing] = useState(false)
   const [savingPrices, setSavingPrices] = useState(false)
   const [finalizing, setFinalizing] = useState(false)
+  // Terms & Conditions control (mounted on both the pricing and quotations tabs,
+  // one at a time) — flushed right before generating so what's in the box is
+  // exactly what the PDF carries.
+  const termsRef = useRef<QuoteTermsHandle>(null)
+  // Suggested prices (catalogue match / our own history) — proposals only.
+  const [suggestions, setSuggestions] = useState<Record<string, PriceSuggestion>>({})
+  const [suggesting, setSuggesting] = useState(false)
   // Email the finished quotation PDF to the client.
   const [emailLang, setEmailLang] = useState<'ar' | 'en'>('ar')
   const [emailTo, setEmailTo] = useState('')
@@ -316,6 +336,9 @@ export function FurnDetail({ project: initialProject, initialItems, initialQuota
   async function sendQuotation() {
     setFinalizing(true)
     await savePrices()
+    // Terms before the PDF: the print page reads the SAVED override, so any edit
+    // still sitting in the box must land first.
+    await termsRef.current?.flush()
     const res = await fetch(`/api/furn/projects/${project.id}/finalize`, { method: 'POST' })
     const j = await res.json()
     setFinalizing(false)
@@ -350,13 +373,43 @@ export function FurnDetail({ project: initialProject, initialItems, initialQuota
   // gate MUST drop them too — otherwise the preview total disagrees with the PDF
   // and an unpriced REJECTED row would wrongly keep the Finalize button disabled.
   const activeItems = items.filter(it => itemFlags[it.id]?.status !== 'rejected')
-  const itemsSum = activeItems.reduce((s, it) => s + Number(it.quantity || 0) * Number(it.unit_price || 0), 0)
   // Mirror the PDF: "not included" delivery adds a shipping line into the total,
-  // so the on-screen totals match what the customer will see.
+  // so the on-screen totals match what the customer will see. ONE totals
+  // function for every surface (same one the finalize route and PDF use).
   const shippingLine = deliveryChoice === 'excluded' ? Number(shippingAmount) || 0 : 0
-  const subtotal = itemsSum + shippingLine
-  const vat = subtotal * 0.15
-  const total = subtotal + vat
+  const { subtotal, vat, total } = computeTotals(activeItems, shippingLine)
+
+  // ── Suggested prices: proposals from the catalogue / our own history ────────
+  async function suggestPrices() {
+    setSuggesting(true)
+    try {
+      const res = await fetch(`/api/furn/projects/${project.id}/suggest-prices`)
+      const j = await res.json().catch(() => ({}))
+      if (!res.ok) { toast.error(j.error || (isRtl ? 'فشل اقتراح الأسعار' : 'Suggestion failed')); return }
+      const s: Record<string, PriceSuggestion> = j.suggestions || {}
+      setSuggestions(s)
+      const n = Object.keys(s).length
+      if (n > 0) toast.success(isRtl ? `${n} سعر مقترح — راجعها واعتمد ما يناسبك` : `${n} suggested prices — review and apply what fits`)
+      else toast.info(isRtl ? 'لا توجد اقتراحات مطابقة لهذه البنود' : 'No matching suggestions for these items')
+    } catch {
+      toast.error(isRtl ? 'فشل اقتراح الأسعار' : 'Suggestion failed')
+    } finally {
+      setSuggesting(false)
+    }
+  }
+  function applySuggestion(itemId: string) {
+    const s = suggestions[itemId]
+    if (s) patchItem(itemId, { unit_price: s.price })
+  }
+  // Only fills EMPTY prices — never overwrites a number the team typed.
+  function applySuggestionsToUnpriced() {
+    setItems(prev => prev.map(it => (
+      (it.unit_price === null || it.unit_price === undefined) && suggestions[it.id]
+        ? { ...it, unit_price: suggestions[it.id].price }
+        : it
+    )))
+  }
+  const suggestedUnpriced = activeItems.filter(it => (it.unit_price === null || it.unit_price === undefined) && suggestions[it.id]).length
   const allPriced = activeItems.length > 0 && activeItems.every(it => it.unit_price !== null && it.unit_price !== undefined)
   // Why the "Send" button is blocked — shown to the user instead of a silently
   // disabled button, so they know exactly which fields to fill before creating.
@@ -625,6 +678,17 @@ export function FurnDetail({ project: initialProject, initialItems, initialQuota
                                 placeholder="—"
                                 className="h-8 text-xs"
                               />
+                              {/* A SUGGESTED price: labelled as such, applied only on click. */}
+                              {suggestions[it.id] && (
+                                <div className="mt-1 text-[10px] leading-tight text-indigo-700 flex items-center gap-1 flex-wrap" title={suggestions[it.id].label}>
+                                  <span className="rounded bg-indigo-50 border border-indigo-200 px-1 whitespace-nowrap">{isRtl ? 'سعر مقترح' : 'Suggested'}</span>
+                                  <span className="tabular-nums font-semibold">{suggestions[it.id].price.toLocaleString('en-US', { minimumFractionDigits: 2 })}</span>
+                                  <span className="text-muted-foreground truncate max-w-[9rem]">{suggestions[it.id].basis === 'catalog' ? (isRtl ? 'كتالوج' : 'catalogue') : (isRtl ? 'عروض سابقة' : 'history')}</span>
+                                  {canEditPrices && Number(it.unit_price) !== suggestions[it.id].price && (
+                                    <button type="button" onClick={() => applySuggestion(it.id)} className="underline font-medium">{isRtl ? 'اعتماد' : 'Apply'}</button>
+                                  )}
+                                </div>
+                              )}
                             </td>
                             <td className="px-3 py-2 font-medium text-foreground tabular-nums">
                               {it.unit_price !== null && it.unit_price !== undefined ? lineTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—'}
@@ -719,6 +783,14 @@ export function FurnDetail({ project: initialProject, initialItems, initialQuota
             </div>
           )}
 
+          {/* Terms & Conditions live right above the Send button, so they are
+              decided (and auto-saved) BEFORE a quotation can be generated. */}
+          {canExport && (
+            <div className="mb-3">
+              <QuoteTermsControl ref={termsRef} scopeKey={`furn:${project.id}`} uiAr={isRtl} quoteLang="ar" />
+            </div>
+          )}
+
           {canExport && missingReason && (
             <div className="flex items-start gap-1.5 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-md px-2.5 py-2 mb-3">
               <AlertTriangle className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
@@ -726,6 +798,18 @@ export function FurnDetail({ project: initialProject, initialItems, initialQuota
             </div>
           )}
           <div className="flex flex-wrap gap-3">
+            {canEditPrices && (
+              <Button onClick={suggestPrices} disabled={suggesting || activeItems.length === 0} variant="outline" className="gap-1.5"
+                title={isRtl ? 'يقترح سعراً لكل بند من الكتالوج أو من عروضك السابقة — اقتراح فقط، أنت تعتمده' : 'Proposes a price per item from the catalogue or your own history — a suggestion you approve'}>
+                {suggesting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+                {isRtl ? 'اقتراح الأسعار' : 'Suggest prices'}
+              </Button>
+            )}
+            {canEditPrices && suggestedUnpriced > 0 && (
+              <Button onClick={applySuggestionsToUnpriced} variant="outline" className="border-indigo-300 text-indigo-700">
+                {isRtl ? `اعتماد المقترح للبنود بدون سعر (${suggestedUnpriced})` : `Apply suggestions to unpriced (${suggestedUnpriced})`}
+              </Button>
+            )}
             {canEditPrices && (
               <Button onClick={savePrices} disabled={savingPrices} variant="outline">
                 {savingPrices
@@ -754,7 +838,7 @@ export function FurnDetail({ project: initialProject, initialItems, initialQuota
         <div className="space-y-4">
           {canExport && (
             <Card className="border-0 shadow-sm"><CardContent className="p-3">
-              <QuoteTermsControl scopeKey={`furn:${project.id}`} uiAr={isRtl} quoteLang="ar" />
+              <QuoteTermsControl ref={termsRef} scopeKey={`furn:${project.id}`} uiAr={isRtl} quoteLang="ar" />
             </CardContent></Card>
           )}
           {/* Send action — only shown until the first quotation lands.

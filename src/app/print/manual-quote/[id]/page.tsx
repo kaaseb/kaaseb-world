@@ -9,6 +9,7 @@ import { notFound, redirect } from 'next/navigation'
 import { QuotationPrint } from '@/components/furn/QuotationPrint'
 import { getManualQuote } from '@/lib/manual-quotes/store'
 import { resolveQuoteTerms } from '@/lib/quote-terms/store'
+import { computeTotals } from '@/lib/quotation/totals'
 import type { FurnProject, FurnItem, FurnQuotation, FurnSettings } from '@/types'
 
 export const dynamic = 'force-dynamic'
@@ -29,7 +30,6 @@ export default async function ManualQuotePrintPage({ params }: { params: Promise
   const settings = (settingsRow || {}) as FurnSettings
 
   const lang = quote.language
-  const itemsSum = quote.items.reduce((s, it) => s + (Number(it.quantity) || 0) * (Number(it.unit_price) || 0), 0)
   // Delivery: "included" → a note only; "excluded" → a priced line folded into the
   // subtotal (so VAT applies and it flows into the grand total). Mirrors Furn.
   const shipping = quote.delivery === 'excluded' ? Math.max(0, Number(quote.shipping) || 0) : 0
@@ -37,9 +37,8 @@ export default async function ManualQuotePrintPage({ params }: { params: Promise
     quote.delivery === 'included'
       ? lang === 'ar' ? 'الأسعار شاملة التوصيل.' : 'Prices include delivery.'
       : null
-  const subtotal = itemsSum + shipping
-  const vatAmount = subtotal * (quote.vat_rate || 0)
-  const total = subtotal + vatAmount
+  // ONE totals function for every surface.
+  const { subtotal, vat: vatAmount, total } = computeTotals(quote.items, shipping, quote.vat_rate || 0)
 
   const tc = await resolveQuoteTerms(`manual:${quote.id}`, quote.language)
 

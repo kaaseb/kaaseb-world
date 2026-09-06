@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -13,7 +13,8 @@ import {
 } from 'lucide-react'
 import { useLanguage } from '@/contexts/LanguageContext'
 import { uploadFile } from '@/lib/upload-client'
-import { QuoteTermsControl } from '@/components/quote-terms/QuoteTermsControl'
+import { QuoteTermsControl, type QuoteTermsHandle } from '@/components/quote-terms/QuoteTermsControl'
+import { computeTotals } from '@/lib/quotation/totals'
 import type { TannoorProject, TannoorItem, TannoorQuotation, TannoorAvailability } from '@/types'
 
 type ItemWithProduct = TannoorItem & {
@@ -62,13 +63,40 @@ export function TannoorDetail({ project: initialProject, initialItems, initialQu
   // Optional per-line thumbnail (itemId → S3 url) — shows on the PDF.
   const [images, setImages] = useState<Record<string, string>>({})
   const [uploadingImgId, setUploadingImgId] = useState<string | null>(null)
+  // Terms & Conditions control — flushed right before generating so what's in
+  // the box is exactly what the PDF carries.
+  const termsRef = useRef<QuoteTermsHandle>(null)
+  // Per-item details line from the router run (thickness – finish – colour…).
+  const [details, setDetails] = useState<Record<string, string>>({})
+  // Router progress line while a run is in flight ("فهرسة الملفات 34/200…").
+  const [runMessage, setRunMessage] = useState('')
+  // Delivery on the quotation — the same store + rule as Furn (keyed by project id).
+  const [deliveryChoice, setDeliveryChoice] = useState<'included' | 'excluded' | 'none'>('none')
+  const [shippingAmount, setShippingAmount] = useState(0)
+  useEffect(() => {
+    fetch(`/api/furn/delivery?projectId=${initialProject.id}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(j => { if (j?.choice) setDeliveryChoice(j.choice); if (j?.shipping) setShippingAmount(Number(j.shipping)) })
+      .catch(() => {})
+  }, [initialProject.id])
+  async function saveDelivery(choice: 'included' | 'excluded' | 'none', shipping: number) {
+    await fetch('/api/furn/delivery', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ projectId: initialProject.id, choice, shipping }),
+    }).catch(() => {})
+  }
+  function changeDelivery(choice: 'included' | 'excluded' | 'none') {
+    setDeliveryChoice(choice)
+    saveDelivery(choice, shippingAmount)
+  }
 
   const ChevronStart = isRtl ? ArrowRight : ArrowLeft
 
   async function loadSources() {
     try {
       const res = await fetch(`/api/tannoor/projects/${initialProject.id}/sources`)
-      if (res.ok) { const j = await res.json(); setSources(j.sources || {}) }
+      if (res.ok) { const j = await res.json(); setSources(j.sources || {}); setDetails(j.details || {}) }
     } catch { /* ignore */ }
   }
   async function loadImages() {
@@ -126,26 +154,60 @@ export function TannoorDetail({ project: initialProject, initialItems, initialQu
 
   async function runProcess() {
     setProcessing(true)
+    setRunMessage('')
     const res = await fetch(`/api/tannoor/projects/${project.id}/process`, { method: 'POST' })
-    const j = await res.json()
-    setProcessing(false)
+    const j = await res.json().catch(() => ({}))
     if (!res.ok) {
+      setProcessing(false)
       toast.error(j.error || 'Processing failed')
       await refreshProject()
       return
     }
-    if (j.missing_count > 0) {
-      toast.warning(`${j.items_count} extracted, ${j.missing_count} missing`)
-    } else {
-      toast.success(`${j.items_count} items priced`)
+    // 202: the router runs in the background (indexing attachments takes
+    // minutes — no HTTP request survives that). Poll the project + progress
+    // until the status leaves in_progress. Capped so a dead job can't spin forever.
+    const MAX_TICKS = 1125
+    for (let tick = 0; tick < MAX_TICKS; tick++) {
+      await new Promise(r => setTimeout(r, 4000))
+      try {
+        const [pRes, gRes] = await Promise.all([
+          fetch(`/api/tannoor/projects/${project.id}`),
+          fetch(`/api/tannoor/projects/${project.id}/process/progress`),
+        ])
+        if (gRes.ok) { const g = await gRes.json(); if (g.progress?.message) setRunMessage(g.progress.message) }
+        if (!pRes.ok) continue
+        const pj = await pRes.json()
+        const p = pj.project
+        if (!p || p.status === 'in_progress') continue
+        setProject(p)
+        setItems(pj.items || [])
+        setQuotations(pj.quotations || [])
+        loadSources()
+        loadImages()
+        setProcessing(false)
+        setRunMessage('')
+        if (p.status === 'rejected') {
+          toast.error(p.ai_error || 'Processing failed', { duration: 12000 })
+        } else {
+          const all = (pj.items || []) as Array<{ is_missing: boolean }>
+          const missing = all.filter(it => it.is_missing).length
+          if (missing > 0) toast.warning(`${all.length} extracted, ${missing} missing`)
+          else toast.success(`${all.length} items priced`)
+        }
+        return
+      } catch { /* transient — next tick */ }
     }
-    await refreshProject()
+    setProcessing(false)
+    setRunMessage('')
+    toast.error(isRtl ? 'طالت المعالجة — حدّث الصفحة للاطلاع على النتيجة' : 'Processing is taking long — refresh to see the result')
   }
 
   async function generateQuotation(language: 'ar' | 'en') {
     setGenerating(true)
-    // Persist any price edits first so the PDF uses the edited numbers.
+    // Persist any price edits first so the PDF uses the edited numbers — and
+    // the terms, because the print page reads the SAVED override.
     if (canExport) await savePrices()
+    await termsRef.current?.flush()
     const res = await fetch(`/api/tannoor/projects/${project.id}/quote`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -157,7 +219,8 @@ export function TannoorDetail({ project: initialProject, initialItems, initialQu
       toast.error(j.error || 'Quotation failed')
       return
     }
-    setQuotations(prev => [j.quotation, ...prev])
+    // Re-issue REPLACES the row for that language — merge by id, never stack.
+    setQuotations(prev => [j.quotation, ...prev.filter(q => q.id !== j.quotation.id)])
     setProject(prev => ({ ...prev, stage: 'quoted', status: 'completed' }))
     toast.success(t('furn_quotation_ready'))
   }
@@ -210,9 +273,10 @@ export function TannoorDetail({ project: initialProject, initialItems, initialQu
     toast.success(t('furn_save_prices'))
   }
 
-  const subtotal = items.reduce((sum, it) => sum + Number(it.quantity || 0) * priceOf(it), 0)
-  const vat = subtotal * 0.15
-  const total = subtotal + vat
+  // ONE totals function for every surface (same as the /quote route and the
+  // PDF); "not included" delivery adds a shipping line into the total.
+  const shippingLine = deliveryChoice === 'excluded' ? Number(shippingAmount) || 0 : 0
+  const { subtotal, vat, total } = computeTotals(items.map(it => ({ quantity: it.quantity, unit_price: priceOf(it) })), shippingLine)
 
   const hasMissing = items.some(it => it.is_missing) || (project.ai_missing_items?.length || 0) > 0
 
@@ -302,6 +366,9 @@ export function TannoorDetail({ project: initialProject, initialItems, initialQu
             ? <><Loader2 className={`w-4 h-4 animate-spin ${isRtl ? 'ml-2' : 'mr-2'}`} />{t('furn_processing_running')}</>
             : <><Sparkles className={`w-4 h-4 ${isRtl ? 'ml-2' : 'mr-2'}`} />{items.length > 0 ? t('furn_processing_retry') : t('furn_step1_title')}</>}
         </Button>
+        {processing && runMessage && (
+          <span className="self-center text-xs text-muted-foreground">{runMessage}</span>
+        )}
         {items.length > 0 && (
           <>
             <div className="inline-flex items-center gap-1 rounded-md border p-0.5">
@@ -356,6 +423,9 @@ export function TannoorDetail({ project: initialProject, initialItems, initialQu
                         <td className="px-3 py-2 text-muted-foreground">{idx + 1}</td>
                         <td className="px-3 py-2">
                           {it.description}
+                          {details[it.id] && (
+                            <div className="text-xs text-muted-foreground mt-0.5">{details[it.id]}</div>
+                          )}
                           {sources[it.id] && (
                             <div className="text-xs text-muted-foreground mt-0.5" title={isRtl ? 'المصدر (داخلي)' : 'Source (internal)'}>📄 {sources[it.id]}</div>
                           )}
@@ -434,10 +504,52 @@ export function TannoorDetail({ project: initialProject, initialItems, initialQu
         </Card>
       )}
 
-      {/* Terms & Conditions for this quote */}
+      {/* Delivery on the quotation — same store + rule as Furn */}
       {items.length > 0 && canExport && (
         <Card className="border-0 shadow-sm mb-4"><CardContent className="p-3">
-          <QuoteTermsControl scopeKey={`tannoor:${project.id}`} uiAr={isRtl} quoteLang="ar" />
+          <div className="flex flex-wrap items-center gap-2 text-sm">
+            <span className="text-muted-foreground">{isRtl ? 'التوصيل في العرض:' : 'Delivery on quote:'}</span>
+            {([
+              { v: 'included' as const, ar: 'شامل', en: 'Included' },
+              { v: 'excluded' as const, ar: 'غير شامل', en: 'Not included' },
+              { v: 'none' as const, ar: 'بدون', en: 'None' },
+            ]).map(opt => (
+              <button
+                key={opt.v}
+                type="button"
+                onClick={() => changeDelivery(opt.v)}
+                className={[
+                  'px-3 py-1 rounded-full border transition-colors',
+                  deliveryChoice === opt.v
+                    ? 'border-orange-500 bg-orange-50 text-orange-700 dark:bg-orange-950/30'
+                    : 'border-border hover:bg-muted',
+                ].join(' ')}
+              >
+                {isRtl ? opt.ar : opt.en}
+              </button>
+            ))}
+            {deliveryChoice === 'excluded' && (
+              <span className="inline-flex items-center gap-1.5">
+                <span className="text-muted-foreground">{isRtl ? 'سعر الشحن:' : 'Shipping:'}</span>
+                <Input
+                  type="number" min={0} step="any" inputMode="decimal"
+                  value={shippingAmount || ''}
+                  placeholder="0.00"
+                  onChange={e => setShippingAmount(Number(e.target.value) || 0)}
+                  onBlur={() => saveDelivery('excluded', shippingAmount)}
+                  className="h-8 w-28 tabular-nums"
+                />
+                <span className="text-xs text-muted-foreground">{currency}</span>
+              </span>
+            )}
+          </div>
+        </CardContent></Card>
+      )}
+
+      {/* Terms & Conditions for this quote — decided (and auto-saved) BEFORE generating */}
+      {items.length > 0 && canExport && (
+        <Card className="border-0 shadow-sm mb-4"><CardContent className="p-3">
+          <QuoteTermsControl ref={termsRef} scopeKey={`tannoor:${project.id}`} uiAr={isRtl} quoteLang="ar" />
         </CardContent></Card>
       )}
 

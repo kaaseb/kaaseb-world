@@ -26,6 +26,8 @@ import { denyUnlessPermitted } from '@/lib/api-guard'
 import { renderQuotationPdf } from '@/lib/quotation-pdf'
 import { uploadBufferToS3 } from '@/lib/s3'
 import { resolveShipping } from '@/lib/furn/delivery-store'
+import { computeTotals } from '@/lib/quotation/totals'
+import { reconcileQuotationRows } from '@/lib/quotation/reconcile'
 import { getProjectItemFlags } from '@/lib/furn/item-flags'
 import { getProfileOrFallback, getEffectivePermissions } from '@/lib/profile'
 import { hasPermission } from '@/lib/permissions'
@@ -82,13 +84,11 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     }, { status: 400 })
   }
 
-  const itemsSum = activeItems.reduce((s, it) => s + Number(it.quantity || 0) * Number(it.unit_price || 0), 0)
-  // "Not included" delivery adds a priced shipping line into the subtotal (so
-  // VAT applies to it and it flows into the grand total).
+  // ONE totals function for every surface (Furn / Tannoor / manual). "Not
+  // included" delivery adds a priced shipping line into the subtotal (so VAT
+  // applies to it and it flows into the grand total).
   const shipping = await resolveShipping(id)
-  const subtotal = itemsSum + shipping
-  const vatAmount = subtotal * VAT_RATE
-  const total = subtotal + vatAmount
+  const totals = computeTotals(activeItems, shipping, VAT_RATE)
 
   // One quotation number per project, shared by both AR and EN PDFs.
   // First time we finalize a project we allocate a fresh number; every
@@ -96,73 +96,40 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   // identifier no matter how many times we re-render.
   const admin = createAdminClient()
 
-  // Reconcile the quotation rows EXPLICITLY (find → delete extras → update/insert)
-  // rather than upsert-ON-CONFLICT. The old upsert needed a
-  // (project_id, quotation_number, language) unique index that may not exist on
-  // this database (its migration was never run) — when absent the upsert errors
-  // and NO quotation can be created. This path needs no special index, and it
-  // also collapses any legacy duplicate rows a previous code path left behind so
+  // Shared reconciliation (Furn + Tannoor): one number per project, one row per
+  // language, legacy duplicates removed, no dependency on a unique index — so
   // "Re-issue" always lands on a clean AR + EN pair.
-  const { data: existingRows } = await admin
-    .from('furn_quotations')
-    .select('id, quotation_number, language')
-    .eq('project_id', id)
-    .order('quotation_number', { ascending: true })
-  const existing = existingRows || []
-
-  // One canonical number for the whole offer: reuse the smallest already issued
-  // (stable across re-issues), else allocate a fresh one.
-  let quotationNumber: number
-  if (existing.length > 0) {
-    quotationNumber = Math.min(...existing.map((r) => r.quotation_number))
-  } else {
-    const { data: settingsRow } = await admin
-      .from('furn_settings').select('next_quotation_number').eq('id', 1).single()
-    if (!settingsRow) {
-      return NextResponse.json({ error: 'furn_settings missing — run the migration' }, { status: 500 })
-    }
-    quotationNumber = settingsRow.next_quotation_number || 1700
-    await admin.from('furn_settings')
-      .update({ next_quotation_number: quotationNumber + 1, updated_at: new Date().toISOString() })
-      .eq('id', 1)
-  }
-
-  // Keep exactly one row per language (the earliest); delete every other row for
-  // this project so duplicates never accumulate.
-  const keepId: Record<'ar' | 'en', string | undefined> = {
-    ar: existing.find((r) => r.language === 'ar')?.id,
-    en: existing.find((r) => r.language === 'en')?.id,
-  }
-  const staleIds = existing.filter((r) => r.id !== keepId.ar && r.id !== keepId.en).map((r) => r.id)
-  if (staleIds.length > 0) {
-    await admin.from('furn_quotations').delete().in('id', staleIds)
-  }
-
-  // Update the kept row per language, or insert a fresh one — no ON CONFLICT.
   const nowIso = new Date().toISOString()
-  type QRow = { id: string; language: 'ar' | 'en'; quotation_number: number; pdf_url: string | null }
-  const created: QRow[] = []
-  for (const lang of LANGUAGES) {
-    const base = {
-      project_id: id,
-      quotation_number: quotationNumber,
-      language: lang,
-      vat_rate: VAT_RATE,
-      subtotal,
-      vat_amount: vatAmount,
-      total,
-      pdf_url: null as string | null,
-      generated_by: user.id,
-      generated_at: nowIso,
-    }
-    const existingId = keepId[lang]
-    const q = existingId
-      ? await admin.from('furn_quotations').update(base).eq('id', existingId).select('*').single()
-      : await admin.from('furn_quotations').insert(base).select('*').single()
-    if (q.error || !q.data) {
-      return NextResponse.json({ error: q.error?.message || 'Failed to save quotation' }, { status: 500 })
-    }
-    created.push(q.data as QRow)
+  let created: Array<{ id: string; language: 'ar' | 'en'; quotation_number: number }>
+  try {
+    const rec = await reconcileQuotationRows({
+      db: admin,
+      table: 'furn_quotations',
+      projectId: id,
+      writeLanguages: LANGUAGES,
+      allocate: async () => {
+        const { data: settingsRow } = await admin
+          .from('furn_settings').select('next_quotation_number').eq('id', 1).single()
+        if (!settingsRow) throw new Error('furn_settings missing — run the migration')
+        const n = settingsRow.next_quotation_number || 1700
+        await admin.from('furn_settings')
+          .update({ next_quotation_number: n + 1, updated_at: nowIso })
+          .eq('id', 1)
+        return n
+      },
+      build: () => ({
+        vat_rate: VAT_RATE,
+        subtotal: totals.subtotal,
+        vat_amount: totals.vat,
+        total: totals.total,
+        pdf_url: null,
+        generated_by: user.id,
+        generated_at: nowIso,
+      }),
+    })
+    created = rec.rows
+  } catch (e) {
+    return NextResponse.json({ error: e instanceof Error ? e.message : 'Failed to save quotation' }, { status: 500 })
   }
 
   // The print page is server-rendered and needs a real origin. Use the

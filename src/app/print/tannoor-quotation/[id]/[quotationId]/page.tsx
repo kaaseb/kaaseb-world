@@ -9,6 +9,8 @@ import { QuotationPrint } from '@/components/furn/QuotationPrint'
 import { getProjectItemImages } from '@/lib/tannoor/item-images'
 import { getFxSettings, usdPrice } from '@/lib/settings/fx'
 import { resolveQuoteTerms } from '@/lib/quote-terms/store'
+import { resolveDeliveryNote, resolveShipping } from '@/lib/furn/delivery-store'
+import { getProjectItemDetails } from '@/lib/tannoor/item-details'
 import type {
   FurnProject, FurnItem, FurnQuotation, FurnSettings,
   TannoorProject, TannoorItem, TannoorQuotation,
@@ -49,6 +51,12 @@ export default async function TannoorPrintPage({
   const tQuote = quotation as TannoorQuotation
   const tItems = (items || []) as ItemWithProduct[]
   const isRtl = tQuote.language === 'ar'
+  const lang: 'ar' | 'en' = isRtl ? 'ar' : 'en'
+  // Delivery (same store + rule as Furn) and the per-item details line the
+  // router extracted (kept in S3 — tannoor_items has no details column).
+  const [deliveryNote, shipping, itemDetails] = await Promise.all([
+    resolveDeliveryNote(id, lang), resolveShipping(id), getProjectItemDetails(id),
+  ])
 
   // Adapt Tannoor → Furn-shaped props. Items use the product's price in the
   // chosen currency; the QuotationPrint component renders unit/qty/total
@@ -99,9 +107,9 @@ export default async function TannoorPrintPage({
     position: it.position || idx + 1,
     description: it.description,
     imageUrl: itemImages[it.id] || null,
-    // Tannoor items have no long descriptive line (that's a Furn-only field);
-    // null renders nothing under the title in the shared print component.
-    details: null,
+    // The descriptive sub-line (thickness – finish – size – colour) from the
+    // router run; null renders nothing under the title.
+    details: itemDetails[it.id] || null,
     quantity: Number(it.quantity),
     unit: it.unit,
     // Edited line price (single-currency project); fall back to the catalog
@@ -114,6 +122,26 @@ export default async function TannoorPrintPage({
     created_at: it.created_at,
     updated_at: it.updated_at,
   }))
+  // "Not included" → a priced delivery line, so the table matches the shipping
+  // folded into the stored subtotal (mirrors the Furn print page).
+  if (shipping > 0) {
+    itemsShim.push({
+      id: 'shipping',
+      project_id: tProject.id,
+      position: itemsShim.length + 1,
+      description: lang === 'ar' ? 'التوصيل' : 'Delivery',
+      details: null,
+      quantity: 1,
+      unit: lang === 'ar' ? 'مقطوعية' : 'lot',
+      unit_price: shipping,
+      notes: null,
+      ai_confidence: null,
+      created_at: tProject.created_at,
+      updated_at: tProject.updated_at,
+      imageUrl: null,
+    })
+  }
+
   const quotationShim: FurnQuotation = {
     id: tQuote.id,
     project_id: tQuote.project_id,
@@ -137,6 +165,7 @@ export default async function TannoorPrintPage({
       quotation={quotationShim}
       settings={settings as FurnSettings}
       currency={tQuote.currency === 'USD' ? 'USD' : 'SAR'}
+      deliveryNote={deliveryNote}
       terms={tc.show ? tc.lines : []}
     />
   )

@@ -59,6 +59,11 @@ function DashboardInner({ profile, permissions, children }: DashboardShellProps)
       sessionStorage.setItem('docs_expiry_checked', '1')
       fetch('/api/notifications/docs-expiry-check', { method: 'POST' }).catch(() => {})
     }
+    // Daily app-data backup — the server runs it at most once per calendar day.
+    if (profile?.role === 'super_admin' && !sessionStorage.getItem('backup_checked')) {
+      sessionStorage.setItem('backup_checked', '1')
+      fetch('/api/admin/backup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }).catch(() => {})
+    }
   }, [profile?.id, profile?.lock_enabled, profile?.role, searchParams])
 
   // Schedule presence after the page is interactive. requestIdleCallback
