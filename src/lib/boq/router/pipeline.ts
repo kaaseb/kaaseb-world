@@ -18,7 +18,9 @@
 
 import { getProvider } from '@/lib/ai'
 import { fetchAiFiles } from '@/lib/ai/files'
-import type { JsonSchema } from '@/lib/ai/provider'
+import type { AiFile, JsonSchema } from '@/lib/ai/provider'
+import { decodeTextFile, splitBoqText, CONTEXT_PREFIX } from './chunk'
+import { supersededMap } from './revision'
 import type { BoqAnalysisResult, BoqExtractedItem, SkippedFile } from '@/lib/furn/boq'
 import {
   AI_CALL_TIMEOUT_MS, INDEX_CONCURRENCY, MAX_INDEXED_ENTRIES, MAX_READ_GROUPS,
@@ -186,20 +188,53 @@ ${coveredList}
 PROJECT: ${input.projectName} — ${input.companyName}`
 
   const provider = await getProvider()
-  const parsed = await withTimeout(
+  const userText = drawingsMode
+    ? 'Extract every distinct stone element from these drawings/specs now. Quantity only if written; put thickness/finish/size/colour into details; explicit pointers into reference_hint. JSON only.'
+    : 'Extract the BOQ rows now. Quantities from THIS file only; pointers go into reference_hint. JSON only.'
+  const callPhase1 = (fs: AiFile[], partNote: string, label: string) => withTimeout(
     provider.generateStructured<RawPhase1>({
-      systemInstruction,
-      files,
-      userText: drawingsMode
-        ? 'Extract every distinct stone element from these drawings/specs now. Quantity only if written; put thickness/finish/size/colour into details; explicit pointers into reference_hint. JSON only.'
-        : 'Extract the BOQ rows now. Quantities from THIS file only; pointers go into reference_hint. JSON only.',
+      systemInstruction: systemInstruction + partNote,
+      files: fs,
+      userText,
       schema: PHASE1_SCHEMA,
       schemaName: 'boq_rows',
       temperature: 0.1,
     }),
     AI_CALL_TIMEOUT_MS,
-    'قراءة الـBOQ',
+    label,
   )
+
+  // LARGE BOQ: a text BOQ (Excel/CSV, or a PDF whose text extracted) past the
+  // trigger would blow the model's output budget in one call and silently lose
+  // its tail. It is split at section/blank boundaries — never mid-item — and
+  // read part by part, each part carrying the sheet + column headers as
+  // "# CONTEXT" lines. Small BOQs: one call, exactly as before.
+  const textBoq = !drawingsMode && files.length === 1 && (files[0].mimeType === 'text/csv' || files[0].mimeType === 'text/plain') ? files[0] : null
+  const chunks = textBoq ? splitBoqText(decodeTextFile(textBoq.data)) : []
+  let parsed: RawPhase1
+  if (textBoq && chunks.length > 1) {
+    log(`phase1: BOQ كبير — يُقرأ على ${chunks.length} أجزاء`)
+    const merged: RawPhase1 = { subject: '', detected_departments: [] as string[], items: [], notes: '' }
+    for (let i = 0; i < chunks.length; i++) {
+      const part: AiFile = {
+        data: Buffer.from(chunks[i], 'utf8').toString('base64'),
+        mimeType: textBoq.mimeType,
+        label: `${textBoq.label} (جزء ${i + 1}/${chunks.length})`,
+      }
+      const note = `\n\nTHIS IS PART ${i + 1} OF ${chunks.length} OF THE SAME BOQ. Lines starting with "${CONTEXT_PREFIX}" are the sheet name and column headers repeated for column meaning only — NEVER emit them as items. A parent row's specs still apply to the child rows that follow it within this part.`
+      const p = await callPhase1([part], note, `قراءة الـBOQ (جزء ${i + 1}/${chunks.length})`)
+      if (!merged.subject && p.subject) merged.subject = p.subject
+      merged.detected_departments = [
+        ...(merged.detected_departments as string[]),
+        ...(Array.isArray(p.detected_departments) ? (p.detected_departments as string[]) : []),
+      ]
+      merged.items = [...(merged.items || []), ...(p.items || [])]
+      if (p.notes) merged.notes = [merged.notes, String(p.notes)].filter(Boolean).join(' • ')
+    }
+    parsed = merged
+  } else {
+    parsed = await callPhase1(files, '', 'قراءة الـBOQ')
+  }
 
   const rows: RouterRow[] = (parsed.items || [])
     .map((it, i) => ({
@@ -467,6 +502,13 @@ export async function runBoqRouter(input: RouterInput): Promise<RouterResult> {
 
   // Phase 4 — read the routed pages, cheapest-first, bounded.
   const filesBySha = new Map(readable.map((f) => [f.sha, f]))
+  // Sheets that have a NEWER issue in the package — a number read from one is
+  // flagged in phase 5 (the router is already steered to the latest).
+  const superseded = supersededMap(readable.map((f) => ({
+    sha: f.sha, name: f.name, docNumber: f.docNumber, title: f.title,
+    firstPageText: f.pages[0]?.text ? f.pages[0].text.slice(0, 1500) : null,
+  })))
+  const shaByName = new Map(readable.map((f) => [f.name, f.sha]))
   const budget = { groups: MAX_READ_GROUPS }
   let pagesRead = 0
   let visualReads = 0
@@ -573,6 +615,17 @@ export async function runBoqRouter(input: RouterInput): Promise<RouterResult> {
         ? `${coverageLine} — لم يُوجَّه هذا البند لأي ملف`
         : `${coverageLine} — لم تُقرأ صفحات هذا البند (تجاوزنا حد القراءة)`
       confidence = Math.min(confidence, 0.35)
+    }
+
+    // A number taken from a superseded issue of a sheet is never silently
+    // trusted — the newer revision may have changed it.
+    if (resolution) {
+      const sha = shaByName.get(resolution.fileName)
+      const sup = sha ? superseded.get(sha) : undefined
+      if (sup) {
+        addNote(`⚠️ الرقم مأخوذ من إصدار أقدم (${sup.rev}) من ${resolution.fileName} — يوجد إصدار أحدث (${sup.latest}: ${sup.latestName}) لم يُعتمد لهذا البند، راجعه.`)
+        confidence = Math.min(confidence, 0.6)
+      }
     }
 
     // Attributes read from the project files: fill whatever the BOQ row left

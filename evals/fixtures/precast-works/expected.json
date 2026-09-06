@@ -1,0 +1,15 @@
+{
+  "name": "precast-works",
+  "confirmed": false,
+  "note": "Entire BOQ is precast concrete / interlock paving / kerbs — nothing is ours. Expect zero kept lines and all of them listed as dropped.",
+  "boq": "Precast Works-boq.xlsx",
+  "spec": [],
+  "drawing": [],
+  "other": [],
+  "expect": {
+    "items": [],
+    "absent": ["interlock", "precast", "curb", "kerb", "concrete"],
+    "minItems": 0,
+    "maxItems": 0
+  }
+}

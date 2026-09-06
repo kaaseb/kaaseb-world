@@ -1,0 +1,19 @@
+{
+  "name": "com-stone-marble",
+  "confirmed": false,
+  "note": "Division-based table repeated per building (Bill Name S1 / H1). Same item per building stays a SEPARATE line (mirror the file). Omani Stone is natural stone outside Marble/Granite → kept, flagged. Section rows with qty 0 are headings.",
+  "boq": "COM - Stone & marble (1).xlsx",
+  "spec": [],
+  "drawing": [],
+  "other": [],
+  "expect": {
+    "items": [
+      { "match": "omani stone stair tread", "quantity": 470.4, "unit": "m2" },
+      { "match": "omani stone stair riser", "quantity": 310.38, "unit": "m2" },
+      { "match": "omani stone stair landing", "quantity": 226.8, "unit": "m2" },
+      { "match": "threshold", "quantity": 1545.6, "unit": "m" }
+    ],
+    "absent": ["external cladding work"],
+    "minItems": 10
+  }
+}

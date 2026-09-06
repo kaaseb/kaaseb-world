@@ -1,0 +1,17 @@
+{
+  "name": "natural-stone-paver",
+  "confirmed": false,
+  "note": "Sheet is titled PRECAST CONCRETE but the single line is real granite (Material column) — must be kept, never dropped on the sheet name.",
+  "boq": "Natural Stone Paver.xlsx",
+  "spec": [],
+  "drawing": [],
+  "other": [],
+  "expect": {
+    "items": [
+      { "match": "granite setts", "quantity": 2370.9, "unit": "m2", "thickness_mm": 100 }
+    ],
+    "absent": [],
+    "minItems": 1,
+    "maxItems": 1
+  }
+}

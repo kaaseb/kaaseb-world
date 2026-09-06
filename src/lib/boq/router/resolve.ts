@@ -28,6 +28,7 @@ import {
   type ResolvedAttrs, type Resolution, type RouterRow,
 } from './core'
 import { extractPdfPageRange, refetchBytes } from './indexer'
+import { supersededMap } from './revision'
 
 // ─── explicit citations (deterministic) ─────────────────────────────────────
 
@@ -147,8 +148,15 @@ function buildCatalog(files: IndexedFile[]): { text: string; truncated: boolean 
   const blocks: string[] = []
   let budget = CATALOG_CHAR_CAP
   let truncated = false
+  // Older issues of a sheet are marked so the router prefers the latest.
+  const superseded = supersededMap(files.map((f) => ({
+    sha: f.sha, name: f.name, docNumber: f.docNumber, title: f.title,
+    firstPageText: f.pages[0]?.text ? f.pages[0].text.slice(0, 1500) : null,
+  })))
   files.forEach((f, i) => {
-    const head = `#${i + 1} ${f.name}${f.docNumber ? ` [${f.docNumber}]` : ''}${f.title ? ` — ${f.title}` : ''} (${f.bucket}, ${f.kind}, ${f.pageCount} صفحة${f.partialToc ? '، فهرس جزئي' : ''}${f.error ? '، خطأ: ' + f.error : ''})`
+    const sup = superseded.get(f.sha)
+    const revNote = sup ? `، ⚠ إصدار أقدم (${sup.rev}) — الأحدث ${sup.latest} في "${sup.latestName}"` : ''
+    const head = `#${i + 1} ${f.name}${f.docNumber ? ` [${f.docNumber}]` : ''}${f.title ? ` — ${f.title}` : ''} (${f.bucket}, ${f.kind}, ${f.pageCount} صفحة${f.partialToc ? '، فهرس جزئي' : ''}${f.error ? '، خطأ: ' + f.error : ''}${revNote})`
     const anchors = f.pages
       .filter((p) => p.anchor && !p.anchor.startsWith('(صفحة ممسوحة'))
       .slice(0, 14)
@@ -202,6 +210,7 @@ export async function routeRows(rows: RouterRow[], files: IndexedFile[]): Promis
 - صف "بلا سماكة": رشّح له صفحات المواصفات الفنية / جدول التشطيبات / تفاصيل القطاعات (details) — هناك تُكتب السماكة والفنش عادةً.
 - صف يحمل كوداً (مثل ST-01 / PV-01 / MA-003): رشّح له جدول الرموز / legend / جدول المواد الذي يفسّر الكود (مادته ولونه وفنشه).
 - صف كميته مذكورة في الـBOQ ما زال يحتاج مرشحاً للتحقق (الرسومات تتفوق عند التعارض) — أعطه أفضل مرشح إن وُجد.
+- لوحة عليها علامة "إصدار أقدم": رشّح الإصدار الأحدث منها دائماً، ولا ترشّح الأقدم إلا إن لم يُوجد غيره.
 - لا تخترع صفحات: التزم بأرقام الصفحات الظاهرة في الفهرس، أو null للملف كاملاً.
 - مرشح واحد جيد أفضل من ثلاثة ضعيفة. ولا مرشح إطلاقاً أفضل من مرشح مختلق.`,
       files: [],

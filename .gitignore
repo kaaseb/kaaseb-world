@@ -49,3 +49,7 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 SMTP_TO_UPLOAD.env
+
+# Evaluation fixtures: customer documents + run outputs stay local
+evals/fixtures/*/files/
+evals/results/

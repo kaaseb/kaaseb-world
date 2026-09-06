@@ -163,3 +163,29 @@ department, that is believed solely if the row's text carries no stone anchor �
 a sheet titled "PRECAST CONCRETE" listing "Granite Setts, Material: Granite" is
 flagged for a human, never dropped. Natural stone outside the covered list, or
 no material named, stays in and is flagged.
+
+## Hardening without live projects (2026-09)
+
+Built from the seven real BOQs the owner supplied, all deterministic, all under
+`npm test`, none changing the team's workflow:
+
+- **Structural validators** (`router/validate.ts`, run in the Furn process route
+  after extraction): a section/bill heading emitted as an item is dropped and
+  listed in the run summary; a child variant that lost its parent's material
+  ("90mm wide") or a dangling parent line ("Supply and installation of") is
+  flagged for review; a per-zone breakdown in `details` that does not add up to
+  the quantity is flagged with both numbers.
+- **Large-BOQ chunking** (`router/chunk.ts`): a text BOQ above
+  `BOQ_CHUNK_TRIGGER_LINES` is split at blank/sheet/heading boundaries — never
+  mid-item — and read part by part, each part carrying the sheet + column
+  headers as `# CONTEXT:` lines the model is told never to extract. Small BOQs
+  are untouched (one call).
+- **Revision awareness** (`router/revision.ts`): a revision token is parsed
+  from file name / title / first page; files are grouped per sheet and older
+  issues are marked in the routing catalogue ("إصدار أقدم — الأحدث X"), the
+  router is told to prefer the latest, and a quantity read from a superseded
+  issue is flagged in phase 5 with confidence capped at 0.6.
+- **Accuracy scorecard** (`npm run eval`, `evals/`): runs the real router on
+  fixture projects and scores against `expected.json` (owner-confirmed ground
+  truth). Fixture documents and results stay out of Git. Each run costs AI
+  calls; it is how "99%" becomes a number.

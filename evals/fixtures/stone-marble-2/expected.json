@@ -1,0 +1,17 @@
+{
+  "name": "stone-marble-2",
+  "confirmed": false,
+  "note": "Messy .xls: descriptions wrap over several rows, mixed materials. Gravel and exposed-aggregate concrete are out; natural stones stay (flagged when outside Marble/Granite).",
+  "boq": "Stone & Marble (2).xls",
+  "spec": [],
+  "drawing": [],
+  "other": [],
+  "expect": {
+    "items": [
+      { "match": "bali stone", "quantity": 273, "unit": "m2" },
+      { "match": "limestone coping", "quantity": 15, "unit": "m2" }
+    ],
+    "absent": ["pea gravel", "exposed aggregate"],
+    "minItems": 3
+  }
+}

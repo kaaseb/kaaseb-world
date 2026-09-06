@@ -1,0 +1,20 @@
+{
+  "name": "div09-finishes",
+  "confirmed": false,
+  "note": "Two sheets. Div.09: two-row header, TOTAL qty + per-room columns (take the TOTAL), granite stair + marble tiles + basalt/rough-stone cladding (natural stone outside Marble/Granite → kept, flagged). DIV.32: two-row items with PV-codes, basalt/travertine/slate pavers (kept, flagged). Only high-confidence expectations listed.",
+  "boq": "Div.09-Stone & Marble BOQ (1).xlsx",
+  "spec": [],
+  "drawing": [],
+  "other": [],
+  "expect": {
+    "items": [
+      { "match": "saudi bianco granite tread", "quantity": 35, "unit": "lm", "thickness_mm": 30 },
+      { "match": "saudi bianco granite landing", "quantity": 5, "unit": "m2", "thickness_mm": 30 },
+      { "match": "terraventino marble tiles entrances", "quantity": 779, "unit": "m2" },
+      { "match": "cobble tiles 600x600", "quantity": 345, "unit": "m2" },
+      { "match": "riyadh rough stone", "quantity": 40, "unit": "m2", "thickness_mm": 40 }
+    ],
+    "absent": ["division 09", "wall finishes", "floor finishes"],
+    "minItems": 8
+  }
+}

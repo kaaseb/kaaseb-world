@@ -1,0 +1,22 @@
+{
+  "name": "terrazzo-granite-thresholds",
+  "confirmed": false,
+  "note": "3-page PDF BOQ: ~46 terrazzo lines (out of scope) + 6 granite threshold widths (page 3). Expected = the assistant's reading; owner to confirm.",
+  "boq": "TERRAZO-&-GRANITE-BOQ-7.pdf",
+  "spec": ["TERRAZZO-TILES-SPECIFICATION-8.pdf"],
+  "drawing": [],
+  "other": [],
+  "expect": {
+    "items": [
+      { "match": "granite threshold 120mm", "quantity": 7, "unit": "m" },
+      { "match": "granite threshold 170mm", "quantity": 2, "unit": "m" },
+      { "match": "granite threshold 190mm", "quantity": 3, "unit": "m" },
+      { "match": "granite threshold 200mm", "quantity": 3, "unit": "m" },
+      { "match": "granite threshold 295mm", "quantity": 2, "unit": "m" },
+      { "match": "granite threshold 490mm", "quantity": 14, "unit": "m" }
+    ],
+    "absent": ["terrazzo", "agglotech"],
+    "minItems": 6,
+    "maxItems": 6
+  }
+}

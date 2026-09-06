@@ -25,6 +25,7 @@ import { setProjectItemSources } from '@/lib/furn/item-sources'
 import { setProjectItemSections } from '@/lib/furn/item-sections'
 import { setProjectItemFlags, type ItemFlag } from '@/lib/furn/item-flags'
 import { guardItem, guardDepartmentAnchor, isClearlyOutOfScope } from '@/lib/boq/department-guard'
+import { validateRow } from '@/lib/boq/router/validate'
 import { friendlyAiError } from '@/lib/ai/friendly-error'
 import { runBoqRouter, type RouterInput, type RouterResult } from '@/lib/boq/router/pipeline'
 
@@ -206,8 +207,16 @@ async function runProcessJob(
     // flagged for the team to approve or reject.
     const flaggedItems: typeof result.items = []
     const dropped: Array<{ description: string; department: string }> = []
+    // Section/bill headings the model emitted as items — not customer lines.
+    const headings: string[] = []
     for (const it of result.items) {
       const text = `${it.description || ''} ${it.details || ''}`
+
+      // Structural backstops for the table rules (header-as-item, orphan child,
+      // breakdown that doesn't add up). Deterministic; see router/validate.ts.
+      const structural = validateRow({ description: it.description, details: it.details, quantity: it.quantity, unit: it.unit }, coveredNames)
+      if (structural.drop) { headings.push(it.description); continue }
+
       const verdict = guardItem(text, it.department_match, coveredNames)
       const problem = verdict.disqualified ? verdict : guardDepartmentAnchor(text, coveredNames, it.department_match)
 
@@ -232,6 +241,7 @@ async function runProcessJob(
         marks.push(problem.reason || 'مادة غير مؤكدة')
       }
       if (isDuplicate) marks.push('مكرر محتمل — راجعه')
+      marks.push(...structural.marks)
 
       if (marks.length === 0) { flagByIndex.push(null); flaggedItems.push(it); continue }
 
@@ -306,10 +316,13 @@ async function runProcessJob(
     const droppedNote = dropped.length > 0
       ? `⛔ استُبعد ${dropped.length} بند واضح خارج النطاق (${Array.from(new Set(dropped.map((d) => d.department))).join('، ')}): ${dropped.slice(0, 10).map((d) => d.description).join('؛ ')}${dropped.length > 10 ? ` … و${dropped.length - 10} غيرها` : ''}`
       : null
+    const headingsNote = headings.length > 0
+      ? `ℹ️ تُجوهل ${headings.length} عنوان قسم غير قابل للتسعير: ${headings.slice(0, 6).join('؛ ')}${headings.length > 6 ? ' …' : ''}`
+      : null
 
     await supabase.from('furn_projects').update({
       subject: result.subject,
-      ai_summary: [warnNote, droppedNote, result.notes].filter(Boolean).join('\n'),
+      ai_summary: [warnNote, droppedNote, headingsNote, result.notes].filter(Boolean).join('\n'),
       ai_detected_departments: departmentsOut,
       ai_error: null,
       stage: 'pricing',
