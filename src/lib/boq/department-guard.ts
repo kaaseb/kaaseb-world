@@ -236,6 +236,36 @@ export function guardDepartmentAnchor(
   }
 }
 
+// Manufactured / non-stone departments the guards can NAME. Any of these is an
+// unambiguous "not ours".
+const MANUFACTURED_DEPTS = new Set<string>([
+  ...DISQUALIFYING.map((d) => d.department.toLowerCase()),
+  'look-alike / imitation',
+])
+// Natural-stone department words (bilingual). A NAMED department outside the
+// covered list that is one of these is a business boundary, not a certainty —
+// the team may still want to see and decide on it.
+const NATURAL_STONE_DEPTS = [
+  'marble', 'granite', 'limestone', 'quartzite', 'onyx', 'travertine', 'basalt',
+  'sandstone', 'slate', 'dolomite', 'porphyry', 'gabbro', 'stone',
+  'رخام', 'جرانيت', 'غرانيت', 'حجر', 'ترافرتين', 'بازلت', 'أونيكس', 'اونيكس', 'دولوميت', 'كوارتزايت',
+]
+
+/**
+ * The owner's two-tier rule ("أي بند واضح جداً خارج نطاقنا لا تحسبه من الأساس"):
+ *   CLEARLY out  = the guard NAMED a real other department and it is a
+ *                  manufactured/non-stone one (concrete, terrazzo, porcelain,
+ *                  gravel, GRC, look-alike…) → drop from the table (still reported).
+ *   Uncertain    = a natural stone we don't list, or no material named at all
+ *                  → keep, flagged for the team to approve or reject.
+ */
+export function isClearlyOutOfScope(verdict: GuardVerdict): boolean {
+  if (!verdict.disqualified || !verdict.realDepartment) return false
+  const d = verdict.realDepartment.trim().toLowerCase()
+  if (MANUFACTURED_DEPTS.has(d)) return true
+  return !NATURAL_STONE_DEPTS.some((s) => d.includes(s))
+}
+
 /** Both gates. A row survives only if neither fires. */
 export function guardItem(
   description: string,

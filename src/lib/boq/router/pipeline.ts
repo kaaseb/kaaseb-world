@@ -23,8 +23,9 @@ import type { BoqAnalysisResult, BoqExtractedItem, SkippedFile } from '@/lib/fur
 import {
   AI_CALL_TIMEOUT_MS, INDEX_CONCURRENCY, MAX_INDEXED_ENTRIES, MAX_READ_GROUPS,
   MAX_SOURCES, READ_CONCURRENCY,
-  makeProgressWriter, pooled, withTimeout,
-  type Candidate, type IndexedFile, type Resolution, type RouterRow, type SourceBucket,
+  detailsStateThickness, hasAnyAttr, makeProgressWriter, mergeAttrs, normalizeText,
+  pooled, thicknessFromText, withTimeout,
+  type AttrResolution, type Candidate, type IndexedFile, type Resolution, type RouterRow, type SourceBucket,
 } from './core'
 import { fetchSources, indexSource, type RawSource } from './indexer'
 import { readTextPage, readVisualPage, resolveExplicitHint, routeRows, type ReadGroup } from './resolve'
@@ -168,8 +169,16 @@ RULES:
 2. Ranges: "150-200" → 200. "approx 200" → 200.
 3. Units normalized to {m, m2, m3, pcs, kg, ton, set, lot, lm}.
 4. description = SHORT catalog title (3-8 words) — or the CODE if the row is identified by one (MA-003…). details = one line in THIS ORDER, only what's stated: السماكة – نوع المعالجة/الفنش – المقاس – النوع – اللون (thickness – finish – size – type – colour). Omit any part the row doesn't state. The team's notes column is not yours.
-5. Merge rows only when descriptions are identical after normalization.
+5. Merge rows only when descriptions are identical after normalization (this is NOT the parent/child case below).
 6. JSON only.
+
+TABLE STRUCTURE — real BOQs are never one-row-per-item. Every company lays its table out differently; apply these EXACTLY:
+7. PARENT + SUB-ITEMS: a row with NO quantity followed by lettered/numbered sub-rows (A, B, C… / 1, 2, 3… / i, ii…) is a PARENT. Its specs (material, thickness, finish, ref code, "as shown on drawings"…) apply to EVERY child. Emit ONE item PER CHILD: description = the parent's product + the child's variant (e.g. "Granite threshold 90mm wide", "Terrazzo floor ST-02 beige"); details = parent specs + child specs; quantity/unit = the child's own. NEVER emit the parent alone as an item, and NEVER emit a child stripped of its parent's specs.
+8. TWO-ROW ITEMS: a title row (item number + long description, no qty) immediately followed by a row carrying the short name/code + unit + qty = ONE item — merge both rows.
+9. WRAPPED TEXT: a description that continues over several rows (continuation rows have no item number and no qty) is ONE item.
+10. LOCATION COLUMNS: if a row has a TOTAL quantity plus a per-room/per-zone breakdown in extra columns (LIV, Toilet 1, H1P…), quantity = the TOTAL and put the breakdown in details ("LIV 900, H1P 150…"). If instead the file repeats the same item as SEPARATE rows per building/zone (S1, H1…), keep them as separate items with the zone in details — mirror the file. Only when the file gives neither a total nor per-zone rows, sum what it lists.
+11. CODES: if a row is identified by a code (ST-01, PV-01, EXT-199, MA-003) whose material/colour/finish is NOT stated on the row, keep the code in description and write "كود: <code>" in details — its meaning lives in a legend/spec that a later phase reads. Do NOT guess what a code means.
+12. SECTION HEADERS ("WALL FINISHES", "DIVISION 09", "Internal Threshold Finishes", "BILL NO. 2") are NOT items — never emit them as items; use them as the section field.
 
 COVERED DEPARTMENTS:
 ${coveredList}
@@ -227,9 +236,23 @@ interface RowState {
   row: RouterRow
   candidates: Candidate[]
   resolution: Resolution | null
+  /** Attributes (thickness/finish/size/colour/material) read from the project
+   *  files — merged per field across pages, first writer wins per field. */
+  attrs: AttrResolution | null
   /** How many of this row's candidate pages were actually opened & read. Lets
    *  the assembler tell "searched, nothing found" from "never searched" (D7). */
   candidatesRead: number
+}
+
+/** A row keeps consuming its candidate pages while its QUANTITY is unresolved —
+ *  or, once that's settled, while the BOQ gave no thickness and none has been
+ *  read yet ("ملف ثالث آخذ منه السماكة"). Finish/colour/size are captured
+ *  opportunistically on whatever page is opened; only thickness drives extra
+ *  reads, and every read still counts against the shared MAX_READ_GROUPS budget. */
+function needsRead(st: RowState): boolean {
+  if (!st.resolution) return true
+  if (detailsStateThickness(st.row.details)) return false
+  return (st.attrs?.attrs.thickness_mm ?? null) === null
 }
 
 // Dimensional families — an override across families (38 lm → 120 m²) is never
@@ -265,7 +288,7 @@ async function readRound(
 ): Promise<void> {
   const groups = new Map<string, ReadGroup>()
   for (const st of states) {
-    if (st.resolution) continue
+    if (!needsRead(st)) continue
     const cand = st.candidates[round]
     if (!cand) continue
     const file = filesBySha.get(cand.sha)
@@ -305,13 +328,21 @@ async function readRound(
     for (const st of states) if (inGroup.has(st.row.position)) st.candidatesRead++
     try {
       const results = visual ? await readVisualPage(g) : await readTextPage(g)
-      for (const res of results) {
+      for (const res of results.quantities) {
         const st = stByPos.get(res.position)
         // First writer wins; earlier rounds/higher-rank candidates come first.
         if (st && !st.resolution) st.resolution = res
       }
+      for (const hit of results.attributes) {
+        const st = stByPos.get(hit.position)
+        if (!st) continue
+        // Per-field first-writer: keep what earlier pages gave, fill the rest.
+        st.attrs = st.attrs
+          ? { ...st.attrs, attrs: mergeAttrs(st.attrs.attrs, hit.attrs) }
+          : hit
+      }
       onGroupDone(1, visual)
-      log(`قراءة ${g.file.name} ص${g.page ?? 1} (${visual ? 'بصري' : 'نص'}): ${results.length}/${g.rows.length} بند`)
+      log(`قراءة ${g.file.name} ص${g.page ?? 1} (${visual ? 'بصري' : 'نص'}): ${results.quantities.length} كمية + ${results.attributes.length} مواصفات / ${g.rows.length} بند`)
     } catch (e) {
       onGroupDone(0, visual)
       log(`فشل قراءة ${g.file.name} ص${g.page ?? 1}: ${e instanceof Error ? e.message : e}`)
@@ -392,6 +423,7 @@ export async function runBoqRouter(input: RouterInput): Promise<RouterResult> {
     row,
     candidates: resolveExplicitHint(row.referenceHint, readable),
     resolution: null,
+    attrs: null,
     candidatesRead: 0,
   }))
 
@@ -432,7 +464,7 @@ export async function runBoqRouter(input: RouterInput): Promise<RouterResult> {
   })
 
   for (let round = 0; round < 3; round++) {
-    const pending = states.filter((s) => !s.resolution && s.candidates[round]).length
+    const pending = states.filter((s) => needsRead(s) && s.candidates[round]).length
     if (pending === 0 || budget.groups <= 0) break
     await readRound(states, round, filesBySha, budget, (n, visual) => {
       pagesRead += n
@@ -451,7 +483,7 @@ export async function runBoqRouter(input: RouterInput): Promise<RouterResult> {
   let rowsUnsearched = 0
   const coverageLine = `فُهرس ${readable.length}/${entryCount} ملفاً${filesFailed > 0 ? ` (تعذّر ${filesFailed})` : ''}، وقُرئت ${pagesRead} صفحة موجّهة`
 
-  const items: BoqExtractedItem[] = states.map(({ row, resolution, candidates, candidatesRead }) => {
+  const items: BoqExtractedItem[] = states.map(({ row, resolution, attrs, candidates, candidatesRead }) => {
     let quantity = row.quantity
     let details = row.details
     let confidence = row.ai_confidence
@@ -527,6 +559,37 @@ export async function runBoqRouter(input: RouterInput): Promise<RouterResult> {
         ? `${coverageLine} — لم يُوجَّه هذا البند لأي ملف`
         : `${coverageLine} — لم تُقرأ صفحات هذا البند (تجاوزنا حد القراءة)`
       confidence = Math.min(confidence, 0.35)
+    }
+
+    // Attributes read from the project files: fill whatever the BOQ row left
+    // blank. Thickness follows the quantity rule — a DRAWING overrides a stated
+    // value loudly; any other source only notes the disagreement.
+    if (attrs && hasAnyAttr(attrs.attrs)) {
+      const a = attrs.attrs
+      const acite = `${attrs.fileName}${attrs.page ? ` ص${attrs.page}` : ''}`
+      const parts: string[] = []
+      const statedThk = thicknessFromText(details)
+      if (a.thickness_mm !== null) {
+        if (statedThk === null) {
+          parts.push(`سماكة ${a.thickness_mm} مم`)
+        } else if (Math.abs(statedThk - a.thickness_mm) > 0.01) {
+          if (attrs.bucket === 'drawing') {
+            addNote(`⚠️ تعارض سماكة: الـBOQ يقول ${statedThk} مم، والرسمة ${acite} تقول ${a.thickness_mm} مم — اعتُمدت سماكة الرسمة (الرسومات تتفوق).`)
+            parts.push(`سماكة ${a.thickness_mm} مم`)
+          } else {
+            addNote(`⚠️ تحقّق يدوي: الـBOQ يقول سماكة ${statedThk} مم، و${acite} يذكر ${a.thickness_mm} مم — أُبقيت سماكة الـBOQ.`)
+          }
+        }
+      }
+      const already = (w: string | null) => !!w && normalizeText(details || '').includes(normalizeText(w))
+      if (a.finish && !already(a.finish)) parts.push(`فنش ${a.finish}`)
+      if (a.size && !already(a.size)) parts.push(`مقاس ${a.size}`)
+      if (a.colour && !already(a.colour)) parts.push(`لون ${a.colour}`)
+      if (a.material && !already(a.material)) parts.push(a.material)
+      if (parts.length > 0) {
+        details = details ? `${details} — ${parts.join(' – ')}` : parts.join(' – ')
+        source = `${source}؛ المواصفات من ${acite}${attrs.verified === 'quote' ? ' (تحقق نصي)' : ' (قراءة بصرية مزدوجة)'}`
+      }
     }
 
     return {

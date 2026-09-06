@@ -22,8 +22,10 @@ import type { AiFile, JsonSchema } from '@/lib/ai/provider'
 import { mimeFromName } from '@/lib/ai/files'
 import {
   AI_CALL_TIMEOUT_MS, CATALOG_CHAR_CAP, MAX_CANDIDATES_PER_ROW, PAGE_TEXT_CAP,
+  attrsAgree, attrsVerify, detailsStateThickness, hasAnyAttr,
   normalizeText, readingVerifies, withTimeout,
-  type Candidate, type IndexedFile, type Resolution, type RouterRow,
+  type AttrResolution, type Candidate, type IndexedFile, type PageReadResult,
+  type ResolvedAttrs, type Resolution, type RouterRow,
 } from './core'
 import { extractPdfPageRange, refetchBytes } from './indexer'
 
@@ -182,6 +184,7 @@ export async function routeRows(rows: RouterRow[], files: IndexedFile[]): Promis
         `صف ${r.position}: ${r.description}`,
         r.details ? `تفاصيل: ${r.details.slice(0, 120)}` : '',
         r.quantityStated ? `كمية الـBOQ: ${r.quantity} ${r.unit} (تحقّق منها)` : `بلا كمية (${r.unit})`,
+        detailsStateThickness(r.details) ? '' : 'بلا سماكة — ابحث عنها في المواصفات/جدول التشطيبات',
         r.referenceHint ? `إشارة: ${r.referenceHint.slice(0, 80)}` : '',
       ].filter(Boolean)
       return bits.join(' | ')
@@ -191,11 +194,13 @@ export async function routeRows(rows: RouterRow[], files: IndexedFile[]): Promis
   const provider = await getProvider()
   const parsed = await withTimeout(
     provider.generateStructured<RawRoute>({
-      systemInstruction: `أنت موجّه مستندات في شركة رخام سعودية. أمامك صفوف BOQ وفهرس ملفات المشروع (أسماء، أرقام لوحات، وملخص كل صفحة). مهمتك فقط: لكل صف، حدّد أي ملف/صفحة يُرجّح أن تحتوي كميته أو أبعاده — لا تستخرج أرقاماً هنا.
+      systemInstruction: `أنت موجّه مستندات في شركة رخام سعودية. أمامك صفوف BOQ وفهرس ملفات المشروع (أسماء، أرقام لوحات، وملخص كل صفحة). مهمتك فقط: لكل صف، حدّد أي ملف/صفحة يُرجّح أن تحتوي كميته أو مواصفاته (السماكة، الفنش، المقاس، اللون، المادة) — لا تستخرج أرقاماً هنا.
 
 قواعد:
 - الفهرس ثنائي اللغة: "بلاط رخام لوبي" قد يجيب على "Lobby finishes schedule" — طابق بالمعنى لا بالحروف.
 - جداول التشطيبات/الكميات وملخصات المساحات هي المرشح الأول للكميات؛ اللوحات المعمارية للمقاسات.
+- صف "بلا سماكة": رشّح له صفحات المواصفات الفنية / جدول التشطيبات / تفاصيل القطاعات (details) — هناك تُكتب السماكة والفنش عادةً.
+- صف يحمل كوداً (مثل ST-01 / PV-01 / MA-003): رشّح له جدول الرموز / legend / جدول المواد الذي يفسّر الكود (مادته ولونه وفنشه).
 - صف كميته مذكورة في الـBOQ ما زال يحتاج مرشحاً للتحقق (الرسومات تتفوق عند التعارض) — أعطه أفضل مرشح إن وُجد.
 - لا تخترع صفحات: التزم بأرقام الصفحات الظاهرة في الفهرس، أو null للملف كاملاً.
 - مرشح واحد جيد أفضل من ثلاثة ضعيفة. ولا مرشح إطلاقاً أفضل من مرشح مختلق.`,
@@ -244,21 +249,36 @@ const READ_SCHEMA: JsonSchema = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['row', 'found', 'value', 'unit', 'quote'],
+        required: ['row', 'found', 'value', 'unit', 'quote', 'attributes', 'attr_quote'],
         properties: {
           row: { type: 'number' },
-          found: { type: 'boolean', description: 'true ONLY if a number for THIS item is actually present here.' },
-          value: { type: 'number', description: 'The number as written. 0 when found=false.' },
-          unit: { type: 'string', description: 'The unit as written next to the number (m2, lm, no., …). Empty when found=false.' },
-          quote: { type: 'string', description: 'VERBATIM: the exact text fragment containing the number, copied character-for-character (e.g. "Lobby ... 412 m2"). Empty when found=false.' },
+          found: { type: 'boolean', description: 'true ONLY if a QUANTITY number for THIS item is actually present here.' },
+          value: { type: 'number', description: 'The quantity as written. 0 when found=false.' },
+          unit: { type: 'string', description: 'The unit as written next to the quantity (m2, lm, no., …). Empty when found=false.' },
+          quote: { type: 'string', description: 'VERBATIM: the exact text fragment containing the quantity, copied character-for-character (e.g. "Lobby ... 412 m2"). Empty when found=false.' },
+          attributes: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['thickness_mm', 'finish', 'size', 'colour', 'material'],
+            description: 'Specification attributes for THIS item that are WRITTEN on this page (independent of the quantity). null/empty for anything not stated here — never guess.',
+            properties: {
+              thickness_mm: { type: ['number', 'null'], description: 'Thickness in millimetres as written (convert cm→mm). null if not stated.' },
+              finish: { type: 'string', description: 'Surface finish as written (polished, honed, flamed, bush-hammered, sand blasted…). Empty if not stated.' },
+              size: { type: 'string', description: 'Tile/slab size as written (e.g. "600x600mm"). Empty if not stated.' },
+              colour: { type: 'string', description: 'Colour / stone name as written (e.g. "Carrara White", "Lunar Grey"). Empty if not stated.' },
+              material: { type: 'string', description: 'The material as written (marble, granite, limestone, basalt, terrazzo, precast concrete…). Empty if not stated.' },
+            },
+          },
+          attr_quote: { type: 'string', description: 'VERBATIM evidence for the attributes: the exact fragment(s) they were read from, character-for-character, several fragments joined with " | ". Empty when no attribute was found.' },
         },
       },
     },
   },
 }
 
+interface RawAttrs { thickness_mm?: unknown; finish?: unknown; size?: unknown; colour?: unknown; material?: unknown }
 interface RawRead {
-  results?: Array<{ row?: unknown; found?: unknown; value?: unknown; unit?: unknown; quote?: unknown }>
+  results?: Array<{ row?: unknown; found?: unknown; value?: unknown; unit?: unknown; quote?: unknown; attributes?: RawAttrs; attr_quote?: unknown }>
 }
 
 export interface ReadGroup {
@@ -273,34 +293,64 @@ function rowsAsk(rows: RouterRow[]): string {
     .join('\n')
 }
 
-function parseRead(parsed: RawRead, allowed: Set<number>): Map<number, { value: number; unit: string; quote: string }> {
-  const out = new Map<number, { value: number; unit: string; quote: string }>()
+interface QtyHit { value: number; unit: string; quote: string }
+interface AttrHit { attrs: ResolvedAttrs; quote: string }
+interface ParsedRead { qty: Map<number, QtyHit>; attrs: Map<number, AttrHit> }
+
+const str = (v: unknown, cap = 80): string | null => {
+  const s = String(v ?? '').trim().slice(0, cap)
+  return s ? s : null
+}
+
+/** Quantities and attributes are parsed INDEPENDENTLY: a spec page legitimately
+ *  states a thickness for an item while carrying no quantity at all. */
+function parseRead(parsed: RawRead, allowed: Set<number>): ParsedRead {
+  const qty = new Map<number, QtyHit>()
+  const attrs = new Map<number, AttrHit>()
   for (const r of parsed.results || []) {
     const pos = Number(r?.row)
     if (!allowed.has(pos)) continue
-    if (r?.found !== true) continue
-    const value = Number(r?.value)
-    if (!Number.isFinite(value) || value <= 0) continue
-    const quote = String(r?.quote || '').trim()
-    if (!quote) continue
-    out.set(pos, { value, unit: String(r?.unit || '').trim().slice(0, 20), quote: quote.slice(0, 300) })
+
+    if (r?.found === true) {
+      const value = Number(r?.value)
+      const quote = String(r?.quote || '').trim()
+      if (Number.isFinite(value) && value > 0 && quote) {
+        qty.set(pos, { value, unit: String(r?.unit || '').trim().slice(0, 20), quote: quote.slice(0, 300) })
+      }
+    }
+
+    const a = r?.attributes
+    const aq = String(r?.attr_quote || '').trim()
+    if (a && aq) {
+      const t = Number(a.thickness_mm)
+      const hit: ResolvedAttrs = {
+        thickness_mm: Number.isFinite(t) && t > 0 && t < 1000 ? t : null,
+        finish: str(a.finish),
+        size: str(a.size),
+        colour: str(a.colour),
+        material: str(a.material),
+      }
+      if (hasAnyAttr(hit)) attrs.set(pos, { attrs: hit, quote: aq.slice(0, 400) })
+    }
   }
-  return out
+  return { qty, attrs }
 }
 
 /** TEXT page: read + verify each quote against the page text. A value whose
  *  quote does not occur verbatim is REJECTED — that's the hallucination gate. */
-export async function readTextPage(group: ReadGroup): Promise<Resolution[]> {
+const EMPTY_READ: PageReadResult = { quantities: [], attributes: [] }
+
+export async function readTextPage(group: ReadGroup): Promise<PageReadResult> {
   const page = group.page ?? 1
   const pageObj = group.file.pages.find((p) => p.page === page)
   const pageText = (pageObj?.text || '').slice(0, PAGE_TEXT_CAP)
-  if (!pageText) return []
+  if (!pageText) return EMPTY_READ
 
   const provider = await getProvider()
   const parsed = await withTimeout(
     provider.generateStructured<RawRead>({
       systemInstruction:
-        'أنت قارئ جداول كميات دقيق. أمامك نص صفحة واحدة من مستند مشروع، وقائمة بنود مطلوب إيجاد كمياتها/مقاساتها في هذه الصفحة تحديداً. لكل بند: إن وُجد رقم يخصه فعلاً في النص، أرجعه مع اقتباس حرفي (انسخ الجزء الذي يحوي الرقم كما هو تماماً). إن لم يوجد فأرجع found=false — لا تخمّن أبداً، ولا تجب من معرفة عامة.',
+        'أنت قارئ جداول كميات ومواصفات دقيق. أمامك نص صفحة واحدة من مستند مشروع، وقائمة بنود. لكل بند مطلوب أمران مستقلان: (١) الكمية: إن وُجد رقم كمية يخصه فعلاً في النص، أرجعه مع اقتباس حرفي (انسخ الجزء الذي يحوي الرقم كما هو تماماً)، وإلا found=false. (٢) المواصفات: إن كُتبت في هذه الصفحة سماكة/فنش/مقاس/لون/مادة تخص هذا البند تحديداً (أو تفسّر كوده مثل ST-01)، أرجعها في attributes مع attr_quote = المقاطع الحرفية التي قرأتها منها مفصولة بـ" | ". اترك ما لم يُكتب فارغاً/null. لا تخمّن أبداً، ولا تجب من معرفة عامة، ولا تنسب مواصفات بند لبند آخر.',
       files: [],
       userText: `## البنود\n${rowsAsk(group.rows)}\n\n## نص الصفحة (${group.file.name} ص${page})\n${pageText}\n\nJSON فقط.`,
       schema: READ_SCHEMA,
@@ -313,29 +363,40 @@ export async function readTextPage(group: ReadGroup): Promise<Resolution[]> {
 
   const allowed = new Set(group.rows.map((r) => r.position))
   const found = parseRead(parsed, allowed)
-  const out: Resolution[] = []
-  for (const [pos, r] of found) {
+  const quantities: Resolution[] = []
+  for (const [pos, r] of found.qty) {
     // Hallucination gate: the VALUE (not just the quote string) must be a real
     // number on the page AND inside its own quote. See readingVerifies.
     if (!readingVerifies(pageText, r.quote, r.value)) continue
-    out.push({
+    quantities.push({
       position: pos, value: r.value, unit: r.unit, quote: r.quote,
       fileName: group.file.name, page, bucket: group.file.bucket,
       verified: 'quote', visual: false,
     })
   }
-  return out
+  const attributes: AttrResolution[] = []
+  for (const [pos, a] of found.attrs) {
+    // Same promise for attributes: every quoted fragment must exist verbatim on
+    // the page, and a claimed thickness must be a real number there.
+    if (!attrsVerify(pageText, a.quote, a.attrs)) continue
+    attributes.push({
+      position: pos, attrs: a.attrs, quote: a.quote,
+      fileName: group.file.name, page, bucket: group.file.bucket,
+      verified: 'quote', visual: false,
+    })
+  }
+  return { quantities, attributes }
 }
 
 const VISUAL_READ_INSTRUCTION =
-  'أنت قارئ مخططات وجداول ممسوحة. أمامك صفحة واحدة (صورة). اقرأ فقط الأرقام المكتوبة فعلاً: خلايا الجداول، والمساحات/الأطوال المكتوبة كنص على المخطط، وأسطر الأبعاد المُعلَّمة. ممنوع منعاً باتاً: القياس من الرسم، أو حساب مساحة من تظليل، أو استخدام مقياس الرسم — الصورة قد تكون مصغّرة والمقياس بلا معنى. لكل بند: إن ظهر رقم يخصه، أرجعه مع quote = النص الظاهر حوله كما تقرؤه (مثل "Lobby marble 412 m2"). إن لم يظهر فـfound=false — لا تخمّن.'
+  'أنت قارئ مخططات وجداول ممسوحة. أمامك صفحة واحدة (صورة). اقرأ فقط ما هو مكتوب فعلاً: خلايا الجداول، والمساحات/الأطوال المكتوبة كنص على المخطط، وأسطر الأبعاد المُعلَّمة، وجداول الرموز/المواد (legend) ونصوص المواصفات (السماكة، الفنش، المقاس، اللون، المادة). ممنوع منعاً باتاً: القياس من الرسم، أو حساب مساحة من تظليل، أو استخدام مقياس الرسم — الصورة قد تكون مصغّرة والمقياس بلا معنى. لكل بند: (١) إن ظهر رقم كمية يخصه، أرجعه مع quote = النص الظاهر حوله كما تقرؤه (مثل "Lobby marble 412 m2")، وإلا found=false. (٢) إن ظهرت مواصفات تخصه تحديداً (أو تفسّر كوده)، أرجعها في attributes مع attr_quote = النص الظاهر كما تقرؤه. اترك غير المكتوب فارغاً — لا تخمّن.'
 
 async function visualReadOnce(
   provider: Awaited<ReturnType<typeof getProvider>>,
   aiFile: AiFile,
   group: ReadGroup,
   label: string,
-): Promise<Map<number, { value: number; unit: string; quote: string }>> {
+): Promise<ParsedRead> {
   const parsed = await withTimeout(
     provider.generateStructured<RawRead>({
       systemInstruction: VISUAL_READ_INSTRUCTION,
@@ -357,7 +418,7 @@ async function visualReadOnce(
  *  both reads land on the same number (within tolerance). Anchoring the second
  *  call with the first's value (the old "confirm this?" approach) just made it
  *  agree; two blind reads that must match is a real check. Same call count. */
-export async function readVisualPage(group: ReadGroup): Promise<Resolution[]> {
+export async function readVisualPage(group: ReadGroup): Promise<PageReadResult> {
   const buf = await refetchBytes(group.file)
   const mime = mimeFromName(group.file.name)
 
@@ -375,19 +436,32 @@ export async function readVisualPage(group: ReadGroup): Promise<Resolution[]> {
 
   const provider = await getProvider()
   const readA = await visualReadOnce(provider, aiFile, group, `قراءة بصرية أ ${group.file.name}`)
-  if (readA.size === 0) return [] // nothing to confirm — skip the second call, save tokens
+  if (readA.qty.size === 0 && readA.attrs.size === 0) return EMPTY_READ // nothing to confirm — skip the second call, save tokens
   const readB = await visualReadOnce(provider, aiFile, group, `قراءة بصرية ب ${group.file.name}`)
 
-  const out: Resolution[] = []
-  for (const [pos, a] of readA) {
-    const b = readB.get(pos)
+  const quantities: Resolution[] = []
+  for (const [pos, a] of readA.qty) {
+    const b = readB.qty.get(pos)
     // Both blind reads must produce the SAME number for this row.
     if (!b || Math.abs(a.value - b.value) > 0.01) continue
-    out.push({
+    quantities.push({
       position: pos, value: a.value, unit: a.unit || b.unit, quote: a.quote,
       fileName: group.file.name, page: pageLabel, bucket: group.file.bucket,
       verified: 'double-read', visual: true,
     })
   }
-  return out
+  const attributes: AttrResolution[] = []
+  for (const [pos, a] of readA.attrs) {
+    const b = readB.attrs.get(pos)
+    if (!b) continue
+    // Per field, only what BOTH blind reads agree on survives.
+    const agreed = attrsAgree(a.attrs, b.attrs)
+    if (!hasAnyAttr(agreed)) continue
+    attributes.push({
+      position: pos, attrs: agreed, quote: a.quote,
+      fileName: group.file.name, page: pageLabel, bucket: group.file.bucket,
+      verified: 'double-read', visual: true,
+    })
+  }
+  return { quantities, attributes }
 }

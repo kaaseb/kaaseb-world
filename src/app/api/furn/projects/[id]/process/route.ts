@@ -24,7 +24,7 @@ import { hasPermission } from '@/lib/permissions'
 import { setProjectItemSources } from '@/lib/furn/item-sources'
 import { setProjectItemSections } from '@/lib/furn/item-sections'
 import { setProjectItemFlags, type ItemFlag } from '@/lib/furn/item-flags'
-import { guardItem, guardDepartmentAnchor } from '@/lib/boq/department-guard'
+import { guardItem, guardDepartmentAnchor, isClearlyOutOfScope } from '@/lib/boq/department-guard'
 import { friendlyAiError } from '@/lib/ai/friendly-error'
 import { runBoqRouter, type RouterInput, type RouterResult } from '@/lib/boq/router/pipeline'
 
@@ -198,10 +198,24 @@ async function runProcessJob(
     // Per-item review flag, aligned by index with flaggedItems (→ position idx+1).
     const flagByIndex: Array<ItemFlag | null> = []
 
-    const flaggedItems = result.items.map((it, idx) => {
+    // Two tiers (the owner's rule). CLEARLY out of scope — a NAMED manufactured /
+    // non-stone department (concrete, terrazzo, porcelain, gravel, GRC, look-
+    // alike…) — is excluded from the table outright, but always listed in the
+    // summary so nothing vanishes silently. Everything else that's doubtful (a
+    // natural stone we don't list, no material named, a duplicate) stays in,
+    // flagged for the team to approve or reject.
+    const flaggedItems: typeof result.items = []
+    const dropped: Array<{ description: string; department: string }> = []
+    for (const it of result.items) {
       const text = `${it.description || ''} ${it.details || ''}`
       const verdict = guardItem(text, it.department_match, coveredNames)
       const problem = verdict.disqualified ? verdict : guardDepartmentAnchor(text, coveredNames, it.department_match)
+
+      if (isClearlyOutOfScope(problem)) {
+        if (problem.realDepartment) extraDepartments.add(problem.realDepartment)
+        dropped.push({ description: it.description, department: problem.realDepartment || '—' })
+        continue
+      }
 
       // Duplicate: same description already seen this run → flag the repeat.
       const key = (it.description || '').trim().toLowerCase().replace(/\s+/g, ' ')
@@ -210,9 +224,8 @@ async function runProcessJob(
       const isDuplicate = key.length > 0 && dupSeen > 0
 
       const marks: string[] = []
-      // RED = a likely upload mistake / not one of our departments (the model or
-      // guard could name a real other department). The team should call the
-      // customer. Ambiguous-but-maybe-ours and duplicates are amber, not red.
+      // RED = the guard named a department outside ours (a natural stone we
+      // don't list). Ambiguous-but-maybe-ours and duplicates are amber, not red.
       let red = false
       if (problem.disqualified) {
         if (problem.realDepartment) { extraDepartments.add(problem.realDepartment); red = true }
@@ -220,24 +233,25 @@ async function runProcessJob(
       }
       if (isDuplicate) marks.push('مكرر محتمل — راجعه')
 
-      if (marks.length === 0) { flagByIndex[idx] = null; return it }
+      if (marks.length === 0) { flagByIndex.push(null); flaggedItems.push(it); continue }
 
       const reason = marks.join(' • ')
-      flagByIndex[idx] = { reason, red, status: 'pending' }
+      flagByIndex.push({ reason, red, status: 'pending' })
       warned.push({ description: it.description, reason })
       // Cap confidence so the row reads as "needs a human". The warning REASON
       // lives only in the flag store (rendered as the ⚠️ banner + approve/reject
       // in the pricing table) — never in `details`, because `details` is printed
       // verbatim on the customer PDF and an approved-but-unedited flag would leak
       // the internal note to the client (same reason `source` is kept out of it).
-      return {
-        ...it,
-        ai_confidence: Math.min(it.ai_confidence ?? 0.5, 0.35),
-      }
-    })
+      flaggedItems.push({ ...it, ai_confidence: Math.min(it.ai_confidence ?? 0.5, 0.35) })
+    }
     if (warned.length > 0) {
       console.log(`[furn] flagged ${warned.length} item(s) for review in project ${id}:`)
       for (const r of warned) console.log(`  • "${r.description}" — ${r.reason}`)
+    }
+    if (dropped.length > 0) {
+      console.log(`[furn] dropped ${dropped.length} clearly-out-of-scope item(s) in project ${id}:`)
+      for (const d of dropped) console.log(`  ⛔ "${d.description}" — ${d.department}`)
     }
 
     // Case-insensitive union — never emit both "Marble" and "marble".
@@ -285,12 +299,17 @@ async function runProcessJob(
 
     // Nothing is dropped now — surface the count that needs a human eye instead.
     const warnNote = warned.length > 0
-      ? `⚠️ ${warned.length} بند يحتاج مراجعة/اعتماد (مادة غير مؤكدة أو خارج النطاق أو مكرر) — مُعلّمة بـ«يحتاج اعتماد» في الجدول.`
+      ? `⚠️ ${warned.length} بند يحتاج مراجعة/اعتماد (مادة غير مؤكدة أو حجر خارج أقسامكم أو مكرر) — مُعلّمة بـ«يحتاج اعتماد» في الجدول.`
+      : null
+    // The excluded lines are listed by name — the owner asked for them not to be
+    // counted, not for them to disappear without a trace.
+    const droppedNote = dropped.length > 0
+      ? `⛔ استُبعد ${dropped.length} بند واضح خارج النطاق (${Array.from(new Set(dropped.map((d) => d.department))).join('، ')}): ${dropped.slice(0, 10).map((d) => d.description).join('؛ ')}${dropped.length > 10 ? ` … و${dropped.length - 10} غيرها` : ''}`
       : null
 
     await supabase.from('furn_projects').update({
       subject: result.subject,
-      ai_summary: [warnNote, result.notes].filter(Boolean).join('\n'),
+      ai_summary: [warnNote, droppedNote, result.notes].filter(Boolean).join('\n'),
       ai_detected_departments: departmentsOut,
       ai_error: null,
       stage: 'pricing',
