@@ -155,6 +155,11 @@ export interface AttrResolution {
   bucket: SourceBucket
   verified: 'quote' | 'double-read'
   visual: boolean
+  /** Further pages that contributed a field this row lacked (audit trail). */
+  alsoFrom?: string[]
+  /** Which page/bucket supplied the thickness — drives "drawings override". */
+  thicknessCite?: string
+  thicknessBucket?: SourceBucket
 }
 
 /** What one page read yields: quantities (as before) plus attributes. */

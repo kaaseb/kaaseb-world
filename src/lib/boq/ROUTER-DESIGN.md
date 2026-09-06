@@ -127,3 +127,39 @@ an empty page cannot produce a quote that verifies.
 - `extractPdfText` judged text per DOCUMENT, not per page — a 3-page digital cover on a
   400-page scan passed the threshold and returned 397 empty pages that looked complete.
   Now per-page with a ratio gate. **This was costing real runs before any redesign.**
+
+## Attributes + the two-tier scope rule (2026-09)
+
+Two behaviours were added on the owner's decisions after reading seven real BOQs
+of wildly different layouts. Both live in code, not only in prompts.
+
+**Phase 4 reads attributes, not just quantities.** The owner's requirement:
+*"ملف رئيسي آخذ منه البنود، ملف ثاني الكمية، ملف ثالث السماكة"*. Every routed
+page read now returns `attributes` (thickness_mm / finish / size / colour /
+material) alongside the quantity, **in the same call** (no extra tokens), under the
+same hallucination gate: a text page must contain every quoted fragment verbatim
+(`attrsVerify`), a visual page needs two blind reads that agree per field
+(`attrsAgree`). A row keeps consuming its candidate pages while it lacks a
+quantity **or** — once that's settled — while the BOQ stated no thickness and
+none was read (`needsRead`); still bounded by `MAX_READ_GROUPS`. The second
+(confirming) visual read is taken only when read A found a quantity or a
+thickness. Thickness follows the quantity rule: a DRAWING overrides a stated
+value with a ⚠️ note, any other source only notes the disagreement. Values are
+appended to `details` label-free in phase 1's own order. `thicknessFromText`
+is deterministic and must not read `600x600mm`, `90mm wide` or `5mm grouting`
+as a thickness (22 cases from the owner's files, all passing).
+
+**Phase 1 table-structure rules (7–12).** Parent + lettered sub-items → one item
+per child inheriting the parent's specs; two-row items and wrapped text → one
+item; total + per-room columns → the total (breakdown in details), repeated
+per-building rows → mirror the file; codes (ST-01 / PV-01) are kept, never
+guessed; section headers are never items.
+
+**Two-tier scope (`isClearlyOutOfScope`).** *"أي بند واضح جداً خارج نطاقنا لا
+تحسبه من الأساس"*. A manufactured/non-stone department evidenced **in the row's
+own words** (concrete, terrazzo, porcelain, GRC, look-alike…) is dropped from the
+table and listed by name in `ai_summary`. When only the model claims another
+department, that is believed solely if the row's text carries no stone anchor —
+a sheet titled "PRECAST CONCRETE" listing "Granite Setts, Material: Granite" is
+flagged for a human, never dropped. Natural stone outside the covered list, or
+no material named, stays in and is flagged.

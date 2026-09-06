@@ -259,11 +259,31 @@ const NATURAL_STONE_DEPTS = [
  *   Uncertain    = a natural stone we don't list, or no material named at all
  *                  → keep, flagged for the team to approve or reject.
  */
-export function isClearlyOutOfScope(verdict: GuardVerdict): boolean {
-  if (!verdict.disqualified || !verdict.realDepartment) return false
-  const d = verdict.realDepartment.trim().toLowerCase()
+function isNonStoneDepartment(dept: string): boolean {
+  const d = dept.trim().toLowerCase()
   if (MANUFACTURED_DEPTS.has(d)) return true
   return !NATURAL_STONE_DEPTS.some((s) => d.includes(s))
+}
+
+export function isClearlyOutOfScope(
+  text: string,
+  departmentMatch: string | null | undefined,
+  coveredDepartments: string[],
+): boolean {
+  // Evidence in the row's OWN words — a manufactured word as the product, or an
+  // explicit look-alike phrasing — is conclusive.
+  const byDesc = guardDescription(text)
+  if (byDesc.disqualified) return !!byDesc.realDepartment && isNonStoneDepartment(byDesc.realDepartment)
+
+  // Only the MODEL says "other department". Believe it solely when the row's own
+  // text gives no stone anchor. A sheet titled "PRECAST CONCRETE" that lists
+  // "Granite Setts — Material: Granite" must be FLAGGED for a human, never
+  // dropped on the model's word: dropping a real sale is the worse failure.
+  const byMatch = guardDepartmentMatch(departmentMatch, coveredDepartments)
+  if (!byMatch.disqualified || !byMatch.realDepartment) return false
+  const anchored = !guardDepartmentAnchor(text, coveredDepartments, null).disqualified
+  if (anchored) return false
+  return isNonStoneDepartment(byMatch.realDepartment)
 }
 
 /** Both gates. A row survives only if neither fires. */

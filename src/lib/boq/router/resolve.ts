@@ -436,7 +436,12 @@ export async function readVisualPage(group: ReadGroup): Promise<PageReadResult> 
 
   const provider = await getProvider()
   const readA = await visualReadOnce(provider, aiFile, group, `قراءة بصرية أ ${group.file.name}`)
-  if (readA.qty.size === 0 && readA.attrs.size === 0) return EMPTY_READ // nothing to confirm — skip the second call, save tokens
+  // The confirming second read is the expensive half of a visual page. Spend it
+  // only when read A answered something a row actually NEEDS — a quantity or a
+  // thickness. Finish/colour alone on a scan isn't worth a second vision call,
+  // and a single unconfirmed visual read is never accepted, so it's simply not taken.
+  const worthConfirming = readA.qty.size > 0 || [...readA.attrs.values()].some((a) => a.attrs.thickness_mm !== null)
+  if (!worthConfirming) return EMPTY_READ
   const readB = await visualReadOnce(provider, aiFile, group, `قراءة بصرية ب ${group.file.name}`)
 
   const quantities: Resolution[] = []

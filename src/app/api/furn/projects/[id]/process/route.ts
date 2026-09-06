@@ -211,7 +211,7 @@ async function runProcessJob(
       const verdict = guardItem(text, it.department_match, coveredNames)
       const problem = verdict.disqualified ? verdict : guardDepartmentAnchor(text, coveredNames, it.department_match)
 
-      if (isClearlyOutOfScope(problem)) {
+      if (isClearlyOutOfScope(text, it.department_match, coveredNames)) {
         if (problem.realDepartment) extraDepartments.add(problem.realDepartment)
         dropped.push({ description: it.description, department: problem.realDepartment || '—' })
         continue

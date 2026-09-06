@@ -336,10 +336,24 @@ async function readRound(
       for (const hit of results.attributes) {
         const st = stByPos.get(hit.position)
         if (!st) continue
-        // Per-field first-writer: keep what earlier pages gave, fill the rest.
-        st.attrs = st.attrs
-          ? { ...st.attrs, attrs: mergeAttrs(st.attrs.attrs, hit.attrs) }
-          : hit
+        const cite = `${hit.fileName}${hit.page ? ` ص${hit.page}` : ''}`
+        const prev = st.attrs
+        if (!prev) {
+          st.attrs = hit.attrs.thickness_mm !== null ? { ...hit, thicknessCite: cite, thicknessBucket: hit.bucket } : hit
+          continue
+        }
+        // Per-field first-writer: keep what earlier pages gave, fill the rest —
+        // and credit every page that actually contributed something new.
+        const merged = mergeAttrs(prev.attrs, hit.attrs)
+        const keys = ['thickness_mm', 'finish', 'size', 'colour', 'material'] as const
+        const contributed = keys.some((k) => prev.attrs[k] === null && merged[k] !== null)
+        const gotThickness = prev.attrs.thickness_mm === null && merged.thickness_mm !== null
+        st.attrs = {
+          ...prev,
+          attrs: merged,
+          alsoFrom: contributed ? [...(prev.alsoFrom || []), cite] : prev.alsoFrom,
+          ...(gotThickness ? { thicknessCite: cite, thicknessBucket: hit.bucket } : {}),
+        }
       }
       onGroupDone(1, visual)
       log(`قراءة ${g.file.name} ص${g.page ?? 1} (${visual ? 'بصري' : 'نص'}): ${results.quantities.length} كمية + ${results.attributes.length} مواصفات / ${g.rows.length} بند`)
@@ -566,28 +580,34 @@ export async function runBoqRouter(input: RouterInput): Promise<RouterResult> {
     // value loudly; any other source only notes the disagreement.
     if (attrs && hasAnyAttr(attrs.attrs)) {
       const a = attrs.attrs
-      const acite = `${attrs.fileName}${attrs.page ? ` ص${attrs.page}` : ''}`
+      const firstCite = `${attrs.fileName}${attrs.page ? ` ص${attrs.page}` : ''}`
+      const acite = [firstCite, ...(attrs.alsoFrom || [])].join('، ')
+      const tCite = attrs.thicknessCite || firstCite
+      const tBucket = attrs.thicknessBucket || attrs.bucket
+      // Values are appended label-free in phase 1's own "thickness – finish –
+      // size – colour" order, so an English quotation never carries Arabic
+      // labels (details is printed verbatim on the customer PDF).
       const parts: string[] = []
       const statedThk = thicknessFromText(details)
       if (a.thickness_mm !== null) {
         if (statedThk === null) {
-          parts.push(`سماكة ${a.thickness_mm} مم`)
+          parts.push(`${a.thickness_mm}mm`)
         } else if (Math.abs(statedThk - a.thickness_mm) > 0.01) {
-          if (attrs.bucket === 'drawing') {
-            addNote(`⚠️ تعارض سماكة: الـBOQ يقول ${statedThk} مم، والرسمة ${acite} تقول ${a.thickness_mm} مم — اعتُمدت سماكة الرسمة (الرسومات تتفوق).`)
-            parts.push(`سماكة ${a.thickness_mm} مم`)
+          if (tBucket === 'drawing') {
+            addNote(`⚠️ تعارض سماكة: الـBOQ يقول ${statedThk} مم، والرسمة ${tCite} تقول ${a.thickness_mm} مم — اعتُمدت سماكة الرسمة (الرسومات تتفوق).`)
+            parts.push(`${a.thickness_mm}mm`)
           } else {
-            addNote(`⚠️ تحقّق يدوي: الـBOQ يقول سماكة ${statedThk} مم، و${acite} يذكر ${a.thickness_mm} مم — أُبقيت سماكة الـBOQ.`)
+            addNote(`⚠️ تحقّق يدوي: الـBOQ يقول سماكة ${statedThk} مم، و${tCite} يذكر ${a.thickness_mm} مم — أُبقيت سماكة الـBOQ.`)
           }
         }
       }
       const already = (w: string | null) => !!w && normalizeText(details || '').includes(normalizeText(w))
-      if (a.finish && !already(a.finish)) parts.push(`فنش ${a.finish}`)
-      if (a.size && !already(a.size)) parts.push(`مقاس ${a.size}`)
-      if (a.colour && !already(a.colour)) parts.push(`لون ${a.colour}`)
+      if (a.finish && !already(a.finish)) parts.push(a.finish)
+      if (a.size && !already(a.size)) parts.push(a.size)
+      if (a.colour && !already(a.colour)) parts.push(a.colour)
       if (a.material && !already(a.material)) parts.push(a.material)
       if (parts.length > 0) {
-        details = details ? `${details} — ${parts.join(' – ')}` : parts.join(' – ')
+        details = details ? `${details} – ${parts.join(' – ')}` : parts.join(' – ')
         source = `${source}؛ المواصفات من ${acite}${attrs.verified === 'quote' ? ' (تحقق نصي)' : ' (قراءة بصرية مزدوجة)'}`
       }
     }
