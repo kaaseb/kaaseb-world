@@ -69,6 +69,33 @@ export function FurnDetail({ project: initialProject, extras, initialItems, init
   // Suggested prices (catalogue match / our own history) — proposals only.
   const [suggestions, setSuggestions] = useState<Record<string, PriceSuggestion>>({})
   const [suggesting, setSuggesting] = useState(false)
+  // All BOQ files + imported notes/keywords — replaced in place by "re-import".
+  const [extrasState, setExtrasState] = useState<NonNullable<Props['extras']>>(extras ?? { boqFiles: [], notes: null, keywords: null })
+  const [reimporting, setReimporting] = useState(false)
+  async function reimportFromClient() {
+    if (reimporting) return
+    if (!confirm(isRtl
+      ? 'سيتم استبدال ملفات هذا المشروع وملاحظاته بكل ما هو موجود الآن في مشروع العميل (البنود لا تتغير حتى تضغط «إعادة المحاولة»). متابعة؟'
+      : 'This replaces this project’s files and notes with everything the client project holds now (items stay until you press “Retry”). Continue?')) return
+    setReimporting(true)
+    try {
+      const res = await fetch(`/api/furn/projects/${project.id}/reimport`, { method: 'POST' })
+      const j = await res.json().catch(() => ({}))
+      if (!res.ok) { toast.error(j.error || (isRtl ? 'فشل إعادة السحب' : 'Re-import failed')); return }
+      if (j.project) setProject(j.project)
+      if (j.extras) setExtrasState(j.extras)
+      const c = j.counts || {}
+      toast.success(isRtl
+        ? `تم السحب — BOQ ${c.boq || 0} · مواصفات ${c.spec || 0} · رسومات ${c.drawing || 0} · أخرى ${c.other || 0}${j.extras?.notes ? ' + الملاحظات' : ''}. اضغط «إعادة المحاولة» لإعادة القراءة.`
+        : `Re-imported — BOQ ${c.boq || 0} · specs ${c.spec || 0} · drawings ${c.drawing || 0} · other ${c.other || 0}${j.extras?.notes ? ' + notes' : ''}. Press “Retry” to re-read.`,
+        { duration: 10000 })
+      setTab('files')
+    } catch {
+      toast.error(isRtl ? 'فشل إعادة السحب' : 'Re-import failed')
+    } finally {
+      setReimporting(false)
+    }
+  }
   // Email the finished quotation PDF to the client.
   const [emailLang, setEmailLang] = useState<'ar' | 'en'>('ar')
   const [emailTo, setEmailTo] = useState('')
@@ -425,8 +452,8 @@ export function FurnDetail({ project: initialProject, extras, initialItems, init
       : ''
 
   // Every BOQ file of the project (extras when set, else the row's single one).
-  const boqFilesAll: Array<{ url: string; name: string }> = extras?.boqFiles?.length
-    ? extras.boqFiles
+  const boqFilesAll: Array<{ url: string; name: string }> = extrasState.boqFiles.length
+    ? extrasState.boqFiles
     : (project.boq_url ? [{ url: project.boq_url, name: project.boq_filename || 'BOQ' }] : [])
   const fileCount =
     boqFilesAll.length +
@@ -496,7 +523,17 @@ export function FurnDetail({ project: initialProject, extras, initialItems, init
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            <FilesSection project={project} boqFiles={boqFilesAll} notes={extras?.notes ?? null} keywords={extras?.keywords ?? null} isRtl={isRtl} t={t} />
+            {/* Imported projects can re-pull EVERYTHING from the client project in place. */}
+            {project.source_client_project_id && (
+              <div className="flex justify-end">
+                <Button variant="outline" size="sm" onClick={reimportFromClient} disabled={reimporting || processing} className="gap-1.5"
+                  title={isRtl ? 'يسحب كل الملفات (كل الفئات) + الملاحظات + الكلمات من مشروع العميل ويستبدلها هنا' : 'Pulls every file (all categories) + notes + keywords from the client project and replaces them here'}>
+                  {reimporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                  {isRtl ? 'إعادة سحب كل شيء من مشروع العميل' : 'Re-import everything from the client project'}
+                </Button>
+              </div>
+            )}
+            <FilesSection project={project} boqFiles={boqFilesAll} notes={extrasState.notes} keywords={extrasState.keywords} isRtl={isRtl} t={t} />
 
             {project.ai_error ? (
               <div className="p-3 rounded-lg border border-red-200 bg-red-50">
