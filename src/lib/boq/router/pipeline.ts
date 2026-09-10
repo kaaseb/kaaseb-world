@@ -21,6 +21,7 @@ import { fetchAiFiles } from '@/lib/ai/files'
 import type { AiFile, JsonSchema } from '@/lib/ai/provider'
 import { decodeTextFile, splitBoqText, CONTEXT_PREFIX } from './chunk'
 import { supersededMap } from './revision'
+import { mergePhase1Parts, dedupeAcrossFiles, type Phase1Part } from './merge'
 import type { BoqAnalysisResult, BoqExtractedItem, SkippedFile } from '@/lib/furn/boq'
 import {
   AI_CALL_TIMEOUT_MS, INDEX_CONCURRENCY, MAX_INDEXED_ENTRIES, MAX_READ_GROUPS,
@@ -44,6 +45,11 @@ export interface RouterInput {
   // extracted from the drawings/specs instead of a BOQ table.
   boqUrl: string | null
   boqFilename: string
+  /** ALL the project's BOQ files (a client package often ships one per trade
+   *  plus a combined workbook). When present it supersedes boqUrl/boqFilename. */
+  boqFiles?: { url: string; name: string }[]
+  /** Free text from the client project (notes, keywords) — context only. */
+  projectNotes?: string | null
   specFiles: { url: string; name: string }[]
   drawingFiles: { url: string; name: string }[]
   otherFiles: { url: string; name: string }[]
@@ -122,19 +128,37 @@ async function extractBoqRows(input: RouterInput): Promise<{
   rows: RouterRow[]
   notes: string | null
 }> {
-  const drawingsMode = !input.boqUrl
-  let files
-  if (input.boqUrl) {
-    files = await fetchAiFiles(input.boqUrl, `BOQ: ${input.boqFilename}`)
+  // EVERY BOQ file is read — a client package often ships one workbook per
+  // trade plus a combined one. Each is its own source (a ZIP may expand to
+  // several files); the results are merged and cross-file copies folded.
+  const boqList = input.boqFiles && input.boqFiles.length > 0
+    ? input.boqFiles
+    : (input.boqUrl ? [{ url: input.boqUrl, name: input.boqFilename }] : [])
+  const drawingsMode = boqList.length === 0
+  type Source = { label: string; files: AiFile[] }
+  const sources: Source[] = []
+  if (!drawingsMode) {
+    for (const b of boqList) {
+      try {
+        const fs = await fetchAiFiles(b.url, `BOQ: ${b.name}`)
+        if (fs.length > 0) sources.push({ label: b.name, files: fs })
+        else log(`BOQ "${b.name}": لا محتوى مقروء`)
+      } catch (e) {
+        log(`تعذّرت قراءة BOQ "${b.name}": ${e instanceof Error ? e.message : e}`)
+      }
+    }
+    if (sources.length === 0) throw new Error('تعذّرت قراءة ملفات الـBOQ')
   } else {
     // No BOQ → extract the items from the drawings/specs themselves (capped).
     const src = [...input.drawingFiles, ...input.specFiles, ...input.otherFiles].slice(0, DRAWINGS_FOR_EXTRACTION)
-    files = []
+    const files: AiFile[] = []
     for (const f of src) {
       try { files.push(...(await fetchAiFiles(f.url, `Drawing: ${f.name}`))) } catch { /* skip a bad file */ }
     }
+    if (files.length === 0) throw new Error('لا توجد رسومات لاستخراج البنود')
+    sources.push({ label: 'drawings', files })
   }
-  if (files.length === 0) throw new Error(drawingsMode ? 'لا توجد رسومات لاستخراج البنود' : 'تعذّرت قراءة ملف الـBOQ')
+  const multiBoq = !drawingsMode && sources.length > 1
 
   const coveredList = input.coveredDepartments.map((d) => `- ${d.name_en} (${d.name_ar})`).join('\n')
 
@@ -185,7 +209,10 @@ TABLE STRUCTURE — real BOQs are never one-row-per-item. Every company lays its
 COVERED DEPARTMENTS:
 ${coveredList}
 
-PROJECT: ${input.projectName} — ${input.companyName}`
+PROJECT: ${input.projectName} — ${input.companyName}${input.projectNotes ? `
+
+PROJECT NOTES (copied from the client's project record — CONTEXT ONLY, never BOQ rows; they may mention files or links you cannot open):
+${input.projectNotes.slice(0, 1500)}` : ''}`
 
   const provider = await getProvider()
   const userText = drawingsMode
@@ -204,39 +231,40 @@ PROJECT: ${input.projectName} — ${input.companyName}`
     label,
   )
 
-  // LARGE BOQ: a text BOQ (Excel/CSV, or a PDF whose text extracted) past the
-  // trigger would blow the model's output budget in one call and silently lose
-  // its tail. It is split at section/blank boundaries — never mid-item — and
-  // read part by part, each part carrying the sheet + column headers as
-  // "# CONTEXT" lines. Small BOQs: one call, exactly as before.
-  const textBoq = !drawingsMode && files.length === 1 && (files[0].mimeType === 'text/csv' || files[0].mimeType === 'text/plain') ? files[0] : null
-  const chunks = textBoq ? splitBoqText(decodeTextFile(textBoq.data)) : []
-  let parsed: RawPhase1
-  if (textBoq && chunks.length > 1) {
-    log(`phase1: BOQ كبير — يُقرأ على ${chunks.length} أجزاء`)
-    const merged: RawPhase1 = { subject: '', detected_departments: [] as string[], items: [], notes: '' }
-    for (let i = 0; i < chunks.length; i++) {
-      const part: AiFile = {
-        data: Buffer.from(chunks[i], 'utf8').toString('base64'),
-        mimeType: textBoq.mimeType,
-        label: `${textBoq.label} (جزء ${i + 1}/${chunks.length})`,
+  // One phase-1 read per BOQ file (or per drawings set). A LARGE text BOQ
+  // (Excel/CSV, or a PDF whose text extracted) past the trigger would blow the
+  // model's output budget in one call and silently lose its tail — it is split
+  // at section/blank boundaries, never mid-item, each part carrying the sheet
+  // + column headers as "# CONTEXT" lines. Small files: one call, as before.
+  const isText = (f: AiFile) => f.mimeType === 'text/csv' || f.mimeType === 'text/plain'
+  const parts: Phase1Part[] = []
+  for (let s = 0; s < sources.length; s++) {
+    const src = sources[s]
+    const fileNote = multiBoq
+      ? `\n\nTHIS BOQ FILE ("${src.label}") IS ONE OF ${sources.length} BOQ FILES OF THE SAME PROJECT. Extract THIS file completely; the others are read separately and merged later.`
+      : ''
+    const textBoq = !drawingsMode && src.files.length === 1 && isText(src.files[0]) ? src.files[0] : null
+    const chunks = textBoq ? splitBoqText(decodeTextFile(textBoq.data)) : []
+    if (textBoq && chunks.length > 1) {
+      log(`phase1: BOQ كبير "${src.label}" — يُقرأ على ${chunks.length} أجزاء`)
+      for (let i = 0; i < chunks.length; i++) {
+        const part: AiFile = {
+          data: Buffer.from(chunks[i], 'utf8').toString('base64'),
+          mimeType: textBoq.mimeType,
+          label: `${textBoq.label} (جزء ${i + 1}/${chunks.length})`,
+        }
+        const note = `${fileNote}\n\nTHIS IS PART ${i + 1} OF ${chunks.length} OF THE SAME BOQ FILE. Lines starting with "${CONTEXT_PREFIX}" are the sheet name and column headers repeated for column meaning only — NEVER emit them as items. A parent row's specs still apply to the child rows that follow it within this part.`
+        const p = await callPhase1([part], note, `قراءة "${src.label}" (جزء ${i + 1}/${chunks.length})`)
+        parts.push({ fileName: src.label, ...p })
       }
-      const note = `\n\nTHIS IS PART ${i + 1} OF ${chunks.length} OF THE SAME BOQ. Lines starting with "${CONTEXT_PREFIX}" are the sheet name and column headers repeated for column meaning only — NEVER emit them as items. A parent row's specs still apply to the child rows that follow it within this part.`
-      const p = await callPhase1([part], note, `قراءة الـBOQ (جزء ${i + 1}/${chunks.length})`)
-      if (!merged.subject && p.subject) merged.subject = p.subject
-      merged.detected_departments = [
-        ...(merged.detected_departments as string[]),
-        ...(Array.isArray(p.detected_departments) ? (p.detected_departments as string[]) : []),
-      ]
-      merged.items = [...(merged.items || []), ...(p.items || [])]
-      if (p.notes) merged.notes = [merged.notes, String(p.notes)].filter(Boolean).join(' • ')
+    } else {
+      const p = await callPhase1(src.files, fileNote, multiBoq ? `قراءة "${src.label}"` : 'قراءة الـBOQ')
+      parts.push({ fileName: src.label, ...p })
     }
-    parsed = merged
-  } else {
-    parsed = await callPhase1(files, '', 'قراءة الـBOQ')
   }
+  const parsed = mergePhase1Parts(parts, multiBoq)
 
-  const rows: RouterRow[] = (parsed.items || [])
+  const rawRows: RouterRow[] = parsed.items
     .map((it, i) => ({
       position: i + 1,
       description: String(it.description || '').trim(),
@@ -249,19 +277,30 @@ PROJECT: ${input.projectName} — ${input.companyName}`
         ? Math.max(0, Math.min(1, Number(it.ai_confidence)))
         : 0.5,
       referenceHint: String(it.reference_hint || '').trim().slice(0, 200),
-      section: String(it.section || '').trim().slice(0, 120) || null,
+      section: String(it.section || '').trim().slice(0, 160) || null,
+      boqFile: drawingsMode ? null : String(it._boqFile || '').trim() || null,
+      dupOf: null,
     }))
     .filter((r) => r.description)
-    // Re-number after the filter so positions stay dense and stable.
-    .map((r, i) => ({ ...r, position: i + 1 }))
+
+  // The combined workbook repeating a package's lines is the same customer
+  // line twice — fold identical cross-file copies, keep the audit trail.
+  const { rows: dedupedRows, merged: folded } = dedupeAcrossFiles(rawRows)
+  // Re-number after the filters so positions stay dense and stable.
+  const rows = dedupedRows.map((r, i) => ({ ...r, position: i + 1 }))
+  if (folded.length > 0) log(`phase1: ${folded.length} بند مكرر بين ملفات الـBOQ — أُبقيت نسخة واحدة`)
+
+  const noteBits = [
+    parsed.notes,
+    multiBoq ? `قُرئت ${sources.length} ملفات BOQ: ${sources.map((x) => x.label).join('، ')}` : null,
+    folded.length > 0 ? `${folded.length} بند مكرر بين ملفات الـBOQ (نفس الوصف والكمية والوحدة) — أُبقيت نسخة واحدة لكل بند.` : null,
+  ].filter(Boolean)
 
   return {
-    subject: (String(parsed.subject || '') || `supply ${input.projectName}`).trim().slice(0, 80),
-    detectedDepartments: Array.from(
-      new Set((Array.isArray(parsed.detected_departments) ? parsed.detected_departments : []).map((s) => String(s).trim()).filter(Boolean)),
-    ),
+    subject: (parsed.subject || `supply ${input.projectName}`).trim().slice(0, 80),
+    detectedDepartments: parsed.detected_departments,
     rows,
-    notes: (String(parsed.notes || '')).trim() || null,
+    notes: noteBits.length ? noteBits.join(' • ') : null,
   }
 }
 
@@ -616,6 +655,10 @@ export async function runBoqRouter(input: RouterInput): Promise<RouterResult> {
         : `${coverageLine} — لم تُقرأ صفحات هذا البند (تجاوزنا حد القراءة)`
       confidence = Math.min(confidence, 0.35)
     }
+
+    // The same line existed in another BOQ file too (combined workbook +
+    // package file) — say so, once, on the copy we kept.
+    if (row.dupOf) source = `${source}؛ البند نفسه مكرر في «${row.dupOf}» — أُبقيت نسخة واحدة`
 
     // A number taken from a superseded issue of a sheet is never silently
     // trusted — the newer revision may have changed it.

@@ -189,3 +189,23 @@ Built from the seven real BOQs the owner supplied, all deterministic, all under
   fixture projects and scores against `expected.json` (owner-confirmed ground
   truth). Fixture documents and results stay out of Git. Each run costs AI
   calls; it is how "99%" becomes a number.
+
+## Several BOQ files per project (2026-09)
+
+A client package arrives as one workbook per trade plus an "ALL PACKAGES
+COMBINED" one — and the import used to keep only the LAST file (a single
+`boqFile` slot overwritten in a loop), so a 7-file package produced a 1-item
+quotation. `furn_projects` still holds a single `boq_url` (no migrations), so:
+
+- **All BOQ files** live in the S3 extras store (`lib/furn/project-extras.ts`,
+  written atomically); `boq_url` stays = the first file for compatibility.
+  The form's BOQ bucket is multi-file; the import pulls every file of every
+  category, plus the client project's **notes** (links included) and
+  **keywords**, which are shown on the project and given to phase 1 as
+  context only.
+- **Phase 1 reads every BOQ file** (each its own call, chunked when large),
+  `mergePhase1Parts` prefixes the pricing-screen section with the file name,
+  and `dedupeAcrossFiles` folds a line that appears IDENTICALLY (description +
+  quantity + unit) in two different files — the combined workbook repeating a
+  package — keeping one copy with the other file recorded in its source.
+  Same-file repeats are left to the review flag. Tests: tests/boq-merge.test.ts.

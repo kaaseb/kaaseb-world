@@ -100,6 +100,10 @@ export interface RouterRow {
   referenceHint: string
   /** The sheet/section heading this row came from (Excel tab name). */
   section: string | null
+  /** Which BOQ file the row came from (a project may ship several). */
+  boqFile: string | null
+  /** Other BOQ file(s) that carried this identical line (cross-file copy folded). */
+  dupOf: string | null
 }
 
 export interface Candidate {

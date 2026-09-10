@@ -94,8 +94,13 @@ export function FurnNewForm() {
   const [specialConditionsAr, setSpecialConditionsAr] = useState('')
   const [specialConditionsEn, setSpecialConditionsEn] = useState('')
 
-  // Per-bucket file state. BOQ is single, the rest are multi.
-  const [boqFile, setBoqFile] = useState<UploadedFile | null>(null)
+  // Per-bucket file state — ALL buckets are multi. A client package routinely
+  // ships one BOQ per trade plus a combined workbook; every one of them is read.
+  const [boqFiles, setBoqFiles] = useState<UploadedFile[]>([])
+  // Free text imported from the client project (notes with links, keywords) —
+  // shown on the Furn project and given to the AI as context. Editable here.
+  const [notes, setNotes] = useState('')
+  const [keywords, setKeywords] = useState('')
   const [specFiles, setSpecFiles] = useState<UploadedFile[]>([])
   const [drawingFiles, setDrawingFiles] = useState<UploadedFile[]>([])
   const [otherFiles, setOtherFiles] = useState<UploadedFile[]>([])
@@ -168,28 +173,41 @@ export function FurnNewForm() {
   // anything else → other. Files saved before the category field existed
   // fall into 'other' so nothing is lost. Text fields are unconditionally
   // overwritten — the user picked this source on purpose.
+  // EVERYTHING is pulled, literally: every file of every category (all the BOQ
+  // workbooks, not just one), the notes (with their links) and the keywords.
   function importFromClientProject(cp: ClientProject) {
     setSourceId(cp.id)
     setProjectName(cp.name_ar || cp.name_en || '')
     setCompanyName(cp.company_ar || cp.company_en || '')
     setEngineerName(cp.engineer_name_ar || cp.engineer_name_en || '')
     setEngineerPhone(cp.engineer_phone || '')
+    setNotes(cp.notes || '')
+    setKeywords(cp.keywords || '')
 
-    let imported = 0
+    const byBucket: Record<Bucket, UploadedFile[]> = { boq: [], spec: [], drawing: [], other: [] }
+    const seen = new Set<string>()
     for (const f of (cp.files || [])) {
-      const uploaded: UploadedFile = {
-        url: f.url,
-        name: f.name,
-        size: typeof f.bytes === 'number' ? f.bytes : 0,
-      }
-      imported++
-      if (f.category === 'boq') setBoqFile(uploaded)
-      else if (f.category === 'spec')    setSpecFiles(prev => [...prev, uploaded])
-      else if (f.category === 'drawing') setDrawingFiles(prev => [...prev, uploaded])
-      else                               setOtherFiles(prev => [...prev, uploaded])
+      if (!f?.url || seen.has(f.url)) continue // the same file listed twice stays one file
+      seen.add(f.url)
+      const uploaded: UploadedFile = { url: f.url, name: f.name, size: typeof f.bytes === 'number' ? f.bytes : 0 }
+      const b: Bucket = f.category === 'boq' ? 'boq' : f.category === 'spec' ? 'spec' : f.category === 'drawing' ? 'drawing' : 'other'
+      byBucket[b].push(uploaded)
     }
+    // Replace (not append): the user picked this source on purpose.
+    setBoqFiles(byBucket.boq)
+    setSpecFiles(byBucket.spec)
+    setDrawingFiles(byBucket.drawing)
+    setOtherFiles(byBucket.other)
+
+    const imported = seen.size
     if (imported > 0) {
-      toast.success(t('furn_imported_files_toast').replace('{n}', String(imported)))
+      const breakdown = [
+        byBucket.boq.length ? `BOQ ${byBucket.boq.length}` : null,
+        byBucket.spec.length ? `${isRtl ? 'مواصفات' : 'specs'} ${byBucket.spec.length}` : null,
+        byBucket.drawing.length ? `${isRtl ? 'رسومات' : 'drawings'} ${byBucket.drawing.length}` : null,
+        byBucket.other.length ? `${isRtl ? 'أخرى' : 'other'} ${byBucket.other.length}` : null,
+      ].filter(Boolean).join(' · ')
+      toast.success(`${t('furn_imported_files_toast').replace('{n}', String(imported))} — ${breakdown}${cp.notes ? (isRtl ? ' + الملاحظات' : ' + notes') : ''}`)
     } else {
       toast.success(t('furn_imported_no_files'))
     }
@@ -220,7 +238,7 @@ export function FurnNewForm() {
         })
         if (!result.url) throw new Error(result.error || 'Upload failed')
         const uploaded: UploadedFile = { url: result.url, name: f.name, size: f.size }
-        if (bucket === 'boq') setBoqFile(uploaded)
+        if (bucket === 'boq') setBoqFiles(prev => [...prev, uploaded])
         else if (bucket === 'spec') setSpecFiles(prev => [...prev, uploaded])
         else if (bucket === 'drawing') setDrawingFiles(prev => [...prev, uploaded])
         else setOtherFiles(prev => [...prev, uploaded])
@@ -240,12 +258,12 @@ export function FurnNewForm() {
   function moveFile(from: Bucket, idx: number, to: Bucket) {
     if (from === to) return
     let file: UploadedFile | null = null
-    if (from === 'boq') { file = boqFile; setBoqFile(null) }
+    if (from === 'boq')          { file = boqFiles[idx] || null;     setBoqFiles(prev => prev.filter((_, i) => i !== idx)) }
     else if (from === 'spec')    { file = specFiles[idx] || null;    setSpecFiles(prev => prev.filter((_, i) => i !== idx)) }
     else if (from === 'drawing') { file = drawingFiles[idx] || null; setDrawingFiles(prev => prev.filter((_, i) => i !== idx)) }
     else                         { file = otherFiles[idx] || null;   setOtherFiles(prev => prev.filter((_, i) => i !== idx)) }
     if (!file) return
-    if (to === 'boq')        setBoqFile(file)
+    if (to === 'boq')        setBoqFiles(prev => [...prev, file!])
     else if (to === 'spec')  setSpecFiles(prev => [...prev, file!])
     else if (to === 'drawing') setDrawingFiles(prev => [...prev, file!])
     else                     setOtherFiles(prev => [...prev, file!])
@@ -259,7 +277,7 @@ export function FurnNewForm() {
     // the team imports a project that's only partly filled out.
     // BOQ is optional now — a project can be drawings-only. Require at least
     // ONE file overall so we never create an empty project with nothing to read.
-    if (!boqFile && specFiles.length === 0 && drawingFiles.length === 0 && otherFiles.length === 0) {
+    if (boqFiles.length === 0 && specFiles.length === 0 && drawingFiles.length === 0 && otherFiles.length === 0) {
       toast.error(t('furn_form_boq_required'))
       return
     }
@@ -268,7 +286,7 @@ export function FurnNewForm() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        project_name: projectName.trim() || (boqFile?.name || 'Untitled project'),
+        project_name: projectName.trim() || (boqFiles[0]?.name || 'Untitled project'),
         company_name: companyName.trim() || '—',
         engineer_name: engineerName,
         engineer_phone: engineerPhone,
@@ -289,8 +307,11 @@ export function FurnNewForm() {
         offer_duration_en: offerDurationEn,
         special_conditions_ar: specialConditionsAr,
         special_conditions_en: specialConditionsEn,
-        boq_url: boqFile?.url ?? null,
-        boq_filename: boqFile?.name ?? null,
+        boq_url: boqFiles[0]?.url ?? null,
+        boq_filename: boqFiles[0]?.name ?? null,
+        boq_files: boqFiles.map(f => ({ url: f.url, name: f.name })),
+        notes: notes.trim() || null,
+        keywords: keywords.trim() || null,
         spec_files: specFiles.map(f => ({ url: f.url, name: f.name })),
         drawing_files: drawingFiles.map(f => ({ url: f.url, name: f.name })),
         other_files: otherFiles.map(f => ({ url: f.url, name: f.name })),
@@ -443,19 +464,37 @@ export function FurnNewForm() {
           </CardContent>
         </Card>
 
-        {/* Files — 4 buckets. Each row carries a "move to" dropdown so
-            imported files can be re-categorized after the fact. */}
+        {/* Project notes + keywords — imported verbatim from the client project
+            (links included), editable, shown on the project and read by the AI. */}
+        <Card className="border-0 shadow-sm">
+          <CardHeader>
+            <CardTitle className="text-base font-semibold">{isRtl ? 'ملاحظات المشروع' : 'Project notes'}</CardTitle>
+            <CardDescription className="text-xs">
+              {isRtl ? 'تُنقل من مشروع العميل (روابط، تعليمات) — تظهر على المشروع وتُعطى للذكاء كسياق. اختيارية.' : 'Imported from the client project (links, instructions) — shown on the project and given to the AI as context. Optional.'}
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <Textarea rows={4} value={notes} onChange={e => setNotes(e.target.value)} placeholder={isRtl ? 'أي ملاحظات أو روابط تخص المشروع…' : 'Any notes or links about the project…'} />
+            <div className="space-y-1">
+              <Label>{isRtl ? 'كلمات مفتاحية' : 'Keywords'}</Label>
+              <Input value={keywords} onChange={e => setKeywords(e.target.value)} placeholder={isRtl ? 'مثال: رخام، جرانيت، أرضيات' : 'e.g. marble, granite, flooring'} />
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Files — 4 buckets, ALL multi. Each row carries a "move to" dropdown
+            so imported files can be re-categorized after the fact. */}
         <FileBucketCard
           title={t('furn_form_boq')}
-          hint={t('furn_form_boq_hint')}
+          hint={isRtl ? 'كل ملفات جداول الكميات — Excel أو CSV أو PDF أو صورة. يمكن إضافة أكثر من ملف؛ تُقرأ كلها.' : 'All BOQ files — Excel, CSV, PDF or image. Add as many as the client sent; every one is read.'}
           icon={<FileSpreadsheet className="w-4 h-4 text-emerald-600" />}
           accept=".xlsx,.xls,.csv,.png,.jpg,.jpeg,.webp,.pdf"
-          multiple={false}
-          files={boqFile ? [boqFile] : []}
+          multiple
+          files={boqFiles}
           pending={pending.boq}
           onFiles={(fl) => handleUpload('boq', fl)}
-          onRemove={() => setBoqFile(null)}
-          onMove={(_idx, to) => moveFile('boq', 0, to)}
+          onRemove={(i) => setBoqFiles(prev => prev.filter((_, idx) => idx !== i))}
+          onMove={(i, to) => moveFile('boq', i, to)}
           bucket="boq"
           t={t}
         />
@@ -505,7 +544,7 @@ export function FurnNewForm() {
           t={t}
         />
 
-        <Button type="submit" disabled={submitting || (!boqFile && specFiles.length === 0 && drawingFiles.length === 0 && otherFiles.length === 0)} size="lg" className="w-full bg-orange-600 hover:bg-orange-700 text-white">
+        <Button type="submit" disabled={submitting || (boqFiles.length === 0 && specFiles.length === 0 && drawingFiles.length === 0 && otherFiles.length === 0)} size="lg" className="w-full bg-orange-600 hover:bg-orange-700 text-white">
           {submitting
             ? <><Loader2 className={`w-5 h-5 animate-spin ${isRtl ? 'ml-2' : 'mr-2'}`} />{t('furn_form_submitting')}</>
             : <>{t('furn_form_submit')} <ChevronEnd className={`w-5 h-5 ${isRtl ? 'mr-2' : 'ml-2'}`} /></>}

@@ -6,6 +6,7 @@ import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { verifyOrigin } from '@/lib/csrf'
 import { denyUnlessPermitted } from '@/lib/api-guard'
+import { deleteFurnExtras } from '@/lib/furn/project-extras'
 
 const ALLOWED_PATCH_KEYS = new Set([
   'project_name', 'company_name', 'engineer_name', 'commercial_register', 'tax_number',
@@ -81,5 +82,7 @@ export async function DELETE(request: Request, { params }: { params: Promise<{ i
 
   const { error } = await supabase.from('furn_projects').delete().eq('id', id)
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  // Best-effort cleanup of the S3 extras (all BOQ files + imported notes).
+  await deleteFurnExtras(id).catch(() => {})
   return NextResponse.json({ ok: true })
 }

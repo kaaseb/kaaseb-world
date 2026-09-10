@@ -28,6 +28,7 @@ import { guardItem, guardDepartmentAnchor, isClearlyOutOfScope } from '@/lib/boq
 import { validateRow } from '@/lib/boq/router/validate'
 import { friendlyAiError } from '@/lib/ai/friendly-error'
 import { runBoqRouter, type RouterInput, type RouterResult } from '@/lib/boq/router/pipeline'
+import { getFurnExtras, resolveBoqFiles } from '@/lib/furn/project-extras'
 
 export const maxDuration = 300
 
@@ -67,9 +68,15 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   const { data: project, error: pErr } = await supabase
     .from('furn_projects').select('*').eq('id', id).single()
   if (pErr || !project) return NextResponse.json({ error: 'Project not found' }, { status: 404 })
+  // ALL the project's BOQ files (the row holds only the first; the rest live in
+  // the S3 extras store) + the client project's notes/keywords as AI context.
+  const extras = await getFurnExtras(id)
+  const boqFiles = resolveBoqFiles(project, extras)
+  const projectNotes = [extras.notes, extras.keywords ? `كلمات مفتاحية: ${extras.keywords}` : null].filter(Boolean).join('\n') || null
+
   // BOQ is optional now: a project may be drawings-only. Require SOMETHING to
   // read, though — a BOQ, or at least one spec/drawing/other file.
-  const hasFiles = !!project.boq_url
+  const hasFiles = boqFiles.length > 0
     || (Array.isArray(project.spec_files) && project.spec_files.length > 0)
     || (Array.isArray(project.drawing_files) && project.drawing_files.length > 0)
     || (Array.isArray(project.other_files) && project.other_files.length > 0)
@@ -128,8 +135,10 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
 
   const input: RouterInput = {
     projectId: id,
-    boqUrl: project.boq_url,
-    boqFilename: project.boq_filename || 'BOQ',
+    boqUrl: boqFiles[0]?.url ?? null,
+    boqFilename: boqFiles[0]?.name || 'BOQ',
+    boqFiles,
+    projectNotes,
     specFiles: Array.isArray(project.spec_files) ? project.spec_files : [],
     drawingFiles: Array.isArray(project.drawing_files) ? project.drawing_files : [],
     otherFiles: Array.isArray(project.other_files) ? project.other_files : [],

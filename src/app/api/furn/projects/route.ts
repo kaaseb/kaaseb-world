@@ -5,6 +5,7 @@ import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { verifyOrigin } from '@/lib/csrf'
 import { denyUnlessPermitted } from '@/lib/api-guard'
+import { setFurnExtras, type FurnBoqFile } from '@/lib/furn/project-extras'
 
 export async function GET(request: Request) {
   const supabase = await createClient()
@@ -75,6 +76,10 @@ export async function POST(request: Request) {
     special_conditions_ar?: string
     boq_url?: string | null
     boq_filename?: string | null
+    /** ALL BOQ files, in order (the row keeps only the first; the rest go to the S3 extras). */
+    boq_files?: { url: string; name: string }[]
+    notes?: string | null
+    keywords?: string | null
     spec_files?: { url: string; name: string }[]
     drawing_files?: { url: string; name: string }[]
     other_files?: { url: string; name: string }[]
@@ -84,7 +89,21 @@ export async function POST(request: Request) {
 
   // BOQ is OPTIONAL now — a project can be drawings-only. Require at least one
   // file overall so we never store an empty project with nothing to process.
-  const anyFile = !!body.boq_url
+  // Every BOQ file the form sent, deduplicated by url, first one = the row's boq_url.
+  const boqFiles: FurnBoqFile[] = []
+  const seenBoq = new Set<string>()
+  const rawBoqs = Array.isArray(body.boq_files) && body.boq_files.length > 0
+    ? body.boq_files
+    : (body.boq_url ? [{ url: body.boq_url, name: body.boq_filename || 'BOQ' }] : [])
+  for (const f of rawBoqs.slice(0, BUCKET_CAP)) {
+    if (!f || typeof f.url !== 'string' || !f.url || seenBoq.has(f.url)) continue
+    seenBoq.add(f.url)
+    boqFiles.push({ url: f.url, name: String(f.name || 'BOQ').slice(0, 200) })
+  }
+  const notes = typeof body.notes === 'string' ? body.notes.trim().slice(0, 10_000) : ''
+  const keywords = typeof body.keywords === 'string' ? body.keywords.trim().slice(0, 1_000) : ''
+
+  const anyFile = boqFiles.length > 0
     || (Array.isArray(body.spec_files) && body.spec_files.length > 0)
     || (Array.isArray(body.drawing_files) && body.drawing_files.length > 0)
     || (Array.isArray(body.other_files) && body.other_files.length > 0)
@@ -113,8 +132,8 @@ export async function POST(request: Request) {
     offer_duration_ar: body.offer_duration_ar?.trim() || null,
     special_conditions_en: body.special_conditions_en?.trim() || null,
     special_conditions_ar: body.special_conditions_ar?.trim() || null,
-    boq_url: body.boq_url ?? null,
-    boq_filename: body.boq_url ? (body.boq_filename || 'BOQ') : null,
+    boq_url: boqFiles[0]?.url ?? null,
+    boq_filename: boqFiles[0]?.name ?? null,
     // Raised from 20. AGENTS.md promises "a real project can ship 200+
     // attachments", and the team confirms it: a job can genuinely arrive as 200
     // PDFs. The old cap silently threw away 140 of them — no error, no warning,
@@ -137,5 +156,22 @@ export async function POST(request: Request) {
     .single()
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+
+  // The extra BOQ files + imported notes live in S3. Losing them silently would
+  // be the worst outcome (a quotation missing whole packages), so if that write
+  // fails the project is rolled back and the user sees an error instead.
+  if (boqFiles.length > 1 || notes || keywords) {
+    try {
+      await setFurnExtras(data.id, {
+        boqFiles,
+        notes: notes || null,
+        keywords: keywords || null,
+        importedFrom: body.source_client_project_id || null,
+      })
+    } catch (e) {
+      await supabase.from('furn_projects').delete().eq('id', data.id)
+      return NextResponse.json({ error: `فشل حفظ ملفات المشروع الإضافية — ${e instanceof Error ? e.message : 'حاول مرة أخرى'}` }, { status: 500 })
+    }
+  }
   return NextResponse.json({ project: data })
 }

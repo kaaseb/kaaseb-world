@@ -42,6 +42,8 @@ import type { FurnProject, FurnItem, FurnQuotation } from '@/types'
 
 interface Props {
   project: FurnProject
+  /** All BOQ files + imported notes/keywords (S3 extras; the row holds one BOQ). */
+  extras?: { boqFiles: Array<{ url: string; name: string }>; notes: string | null; keywords: string | null }
   initialItems: FurnItem[]
   initialQuotations: FurnQuotation[]
   canEditPrices: boolean
@@ -50,7 +52,7 @@ interface Props {
 
 type Tab = 'files' | 'pricing' | 'quotations'
 
-export function FurnDetail({ project: initialProject, initialItems, initialQuotations, canEditPrices, canExport }: Props) {
+export function FurnDetail({ project: initialProject, extras, initialItems, initialQuotations, canEditPrices, canExport }: Props) {
   const { t, isRtl } = useLanguage()
 
   const [project, setProject] = useState<FurnProject>(initialProject)
@@ -422,8 +424,12 @@ export function FurnDetail({ project: initialProject, initialItems, initialQuota
           : `${unpricedActive.length} item(s) have no price yet — fill every price first.`)
       : ''
 
+  // Every BOQ file of the project (extras when set, else the row's single one).
+  const boqFilesAll: Array<{ url: string; name: string }> = extras?.boqFiles?.length
+    ? extras.boqFiles
+    : (project.boq_url ? [{ url: project.boq_url, name: project.boq_filename || 'BOQ' }] : [])
   const fileCount =
-    (project.boq_url ? 1 : 0) +
+    boqFilesAll.length +
     (project.spec_files?.length || 0) +
     (project.drawing_files?.length || 0) +
     (project.other_files?.length || 0)
@@ -490,7 +496,7 @@ export function FurnDetail({ project: initialProject, initialItems, initialQuota
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            <FilesSection project={project} t={t} />
+            <FilesSection project={project} boqFiles={boqFilesAll} notes={extras?.notes ?? null} keywords={extras?.keywords ?? null} isRtl={isRtl} t={t} />
 
             {project.ai_error ? (
               <div className="p-3 rounded-lg border border-red-200 bg-red-50">
@@ -981,13 +987,47 @@ function TabButton({ active, onClick, icon, label, count }: {
   )
 }
 
-function FilesSection({ project, t }: { project: FurnProject; t: (k: Parameters<ReturnType<typeof useLanguage>['t']>[0]) => string }) {
+// Plain text with its URLs turned into safe links (no HTML is ever injected).
+function Linkified({ text }: { text: string }) {
+  const parts = text.split(/(https?:\/\/[^\s<>"']+)/g)
+  return (
+    <>
+      {parts.map((p, i) => /^https?:\/\//.test(p)
+        ? <a key={i} href={p} target="_blank" rel="noopener noreferrer" className="text-blue-700 underline break-all">{p}</a>
+        : <span key={i}>{p}</span>)}
+    </>
+  )
+}
+
+function FilesSection({ project, boqFiles, notes, keywords, isRtl, t }: {
+  project: FurnProject
+  boqFiles: Array<{ url: string; name: string }>
+  notes: string | null
+  keywords: string | null
+  isRtl: boolean
+  t: (k: Parameters<ReturnType<typeof useLanguage>['t']>[0]) => string
+}) {
   return (
     <div className="space-y-3">
+      {/* Imported notes (links included) + keywords — exactly as the client
+          project holds them, so nothing the team wrote is lost on the way. */}
+      {(notes || keywords) && (
+        <div className="rounded-lg border bg-amber-50/40 border-amber-100 p-3 space-y-2">
+          <p className="text-sm font-medium flex items-center gap-1.5"><FileTextIcon className="w-4 h-4 text-amber-600" />{isRtl ? 'ملاحظات المشروع' : 'Project notes'}</p>
+          {notes && <div className="text-sm whitespace-pre-wrap break-words"><Linkified text={notes} /></div>}
+          {keywords && (
+            <div className="flex flex-wrap gap-1">
+              {keywords.split(/[،,]/).map((k) => k.trim()).filter(Boolean).map((k, i) => (
+                <span key={i} className="px-2 py-0.5 rounded-full bg-white border text-xs">{k}</span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
       <FilesGroup
-        title={t('furn_form_boq')}
+        title={`${t('furn_form_boq')}${boqFiles.length > 1 ? ` (${boqFiles.length})` : ''}`}
         icon={<FileSpreadsheet className="w-4 h-4 text-emerald-600" />}
-        files={project.boq_url ? [{ url: project.boq_url, name: project.boq_filename || 'BOQ' }] : []}
+        files={boqFiles}
       />
       <FilesGroup
         title={t('furn_form_specs')}
