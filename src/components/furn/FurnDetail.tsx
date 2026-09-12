@@ -26,6 +26,7 @@ import {
 import { useLanguage } from '@/contexts/LanguageContext'
 import { QuoteTermsControl, type QuoteTermsHandle } from '@/components/quote-terms/QuoteTermsControl'
 import { computeTotals } from '@/lib/quotation/totals'
+import { FurnFileActions } from '@/components/furn/FurnFileActions'
 
 // A SUGGESTED price for one item — shown next to the price box with its basis,
 // applied only when the team clicks. Never written by itself.
@@ -534,6 +535,16 @@ export function FurnDetail({ project: initialProject, extras, initialItems, init
               </div>
             )}
             <FilesSection project={project} boqFiles={boqFilesAll} notes={extrasState.notes} keywords={extrasState.keywords} isRtl={isRtl} t={t} />
+            {/* Links found in the email + add files to this project in place —
+                no new project, same workflow, then «Retry». */}
+            <FurnFileActions
+              project={project}
+              notes={extrasState.notes}
+              boqFiles={boqFilesAll}
+              isRtl={isRtl}
+              disabled={processing}
+              onAttached={(p, boqFiles) => { setProject(p); setExtrasState((s) => ({ ...s, boqFiles })) }}
+            />
 
             {project.ai_error ? (
               <div className="p-3 rounded-lg border border-red-200 bg-red-50">

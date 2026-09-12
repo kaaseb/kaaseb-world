@@ -16,6 +16,7 @@ import {
 } from 'lucide-react'
 import { useLanguage } from '@/contexts/LanguageContext'
 import type { ClientProject } from '@/types'
+import { bucketForFile } from '@/lib/links/discover'
 
 interface UploadedFile {
   url: string
@@ -124,10 +125,18 @@ export function FurnNewForm() {
       })
       const j = await res.json().catch(() => ({}))
       if (!res.ok || !j.url) { toast.error(j.error || 'تعذّر جلب الملف', { duration: 12000 }); return }
-      // Lands in "drawings" by default; the bucket's "move to" re-files it.
-      setDrawingFiles(prev => [...prev, { url: j.url, name: j.name, size: j.bytes || 0 }])
+      // The engine may return many files (folder, ZIP/RAR): file each by name —
+      // Excel → BOQ, PDF → specs, DWG/images → drawings; "move to" re-files any.
+      const got: Array<{ url: string; name: string; bytes?: number }> = Array.isArray(j.files) && j.files.length ? j.files : [j]
+      const by: Record<Bucket, UploadedFile[]> = { boq: [], spec: [], drawing: [], other: [] }
+      for (const f of got) by[bucketForFile(f.name)].push({ url: f.url, name: f.name, size: f.bytes || 0 })
+      if (by.boq.length) setBoqFiles(prev => [...prev, ...by.boq])
+      if (by.spec.length) setSpecFiles(prev => [...prev, ...by.spec])
+      if (by.drawing.length) setDrawingFiles(prev => [...prev, ...by.drawing])
+      if (by.other.length) setOtherFiles(prev => [...prev, ...by.other])
       setLinkUrl('')
-      toast.success(`تم جلب: ${j.name}`)
+      const counts = (['boq', 'spec', 'drawing', 'other'] as Bucket[]).filter(b => by[b].length).map(b => `${b === 'boq' ? 'BOQ' : b === 'spec' ? 'مواصفات' : b === 'drawing' ? 'رسومات' : 'أخرى'} ${by[b].length}`).join(' · ')
+      toast.success(`تم جلب ${got.length} ملف من ${j.provider || 'الرابط'}: ${counts}${j.notices?.length ? ` — ${j.notices.slice(0, 2).join(' · ')}` : ''}`, { duration: 10000 })
     } catch {
       toast.error('تعذّر جلب الملف')
     } finally {
@@ -446,15 +455,17 @@ export function FurnNewForm() {
           </CardContent>
         </Card>
 
-        {/* Import a file from a public cloud link. Direct links only — a
-            login/OTP-gated page can't be pulled; download + upload those. */}
+        {/* Import from a share link: WeTransfer, Google Drive (file/folder),
+            Dropbox, OneDrive, SharePoint (when public), GoFile, direct files —
+            ZIP/RAR opened, files sorted into buckets by name. A sign-in-gated
+            link answers with the reason; download + upload those. */}
         <Card className="border-0 shadow-sm">
           <CardContent className="py-3 flex flex-col sm:flex-row sm:items-center gap-2">
             <div className="text-sm font-medium flex-shrink-0">استيراد من رابط</div>
             <Input
               dir="ltr" value={linkUrl} onChange={e => setLinkUrl(e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); importLink() } }}
-              placeholder="https://we.tl/…  ·  drive.google.com/…  ·  dropbox.com/…"
+              placeholder="https://we.tl/…  ·  drive.google.com/…  ·  dropbox.com/…  ·  sharepoint.com/…"
               className="flex-1"
             />
             <Button type="button" onClick={importLink} disabled={linkBusy || !linkUrl.trim()} variant="outline" className="gap-2">

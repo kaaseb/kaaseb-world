@@ -44,6 +44,9 @@ const nextConfig: NextConfig = {
   compress: true,
   // Hide the framework version (small recon win for attackers).
   poweredByHeader: false,
+  // RAR extraction (client transfers) — the WASM unrar is loaded from
+  // node_modules at runtime, so keep it out of the server bundle.
+  serverExternalPackages: ['node-unrar-js'],
   experimental: {
     // When proxy.ts is present, Next.js 16 buffers the request body in
     // memory so both the proxy and the route handler can read it. The
