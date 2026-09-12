@@ -12,17 +12,48 @@ const KEY = 'app-data/furn-project-extras.json'
 
 export interface FurnBoqFile { url: string; name: string }
 
+/** Outcome of the last «جلب» on one share link — persisted so the card still
+ *  says "fetched, N files, when" after navigating away, and offers "fetch again". */
+export interface LinkFetch {
+  at: string
+  status: 'files' | 'needsLogin' | 'password' | 'expired' | 'notFound' | 'page' | 'unsupported'
+  provider: string
+  files: number
+  message?: string
+}
+
 export interface FurnProjectExtras {
   boqFiles: FurnBoqFile[]
   notes: string | null
   keywords: string | null
   /** client_projects.id this project was imported from (audit). */
   importedFrom: string | null
+  /** Per share link (url → last fetch outcome). */
+  linkFetches: Record<string, LinkFetch>
 }
 
 type Store = Record<string, Partial<FurnProjectExtras>>
 
-const EMPTY: FurnProjectExtras = { boqFiles: [], notes: null, keywords: null, importedFrom: null }
+const EMPTY: FurnProjectExtras = { boqFiles: [], notes: null, keywords: null, importedFrom: null, linkFetches: {} }
+const LINK_STATUSES = new Set<LinkFetch['status']>(['files', 'needsLogin', 'password', 'expired', 'notFound', 'page', 'unsupported'])
+const MAX_LINKS = 100
+
+function cleanLinkFetches(v: unknown): Record<string, LinkFetch> {
+  const out: Record<string, LinkFetch> = {}
+  if (!v || typeof v !== 'object') return out
+  for (const [url, r] of Object.entries(v as Record<string, Partial<LinkFetch>>).slice(-MAX_LINKS)) {
+    if (!/^https?:\/\//i.test(url) || url.length > 2048 || !r || typeof r !== 'object') continue
+    if (!LINK_STATUSES.has(r.status as LinkFetch['status'])) continue
+    out[url] = {
+      at: typeof r.at === 'string' ? r.at : new Date(0).toISOString(),
+      status: r.status as LinkFetch['status'],
+      provider: String(r.provider || '').slice(0, 60),
+      files: Math.max(0, Math.floor(Number(r.files) || 0)),
+      ...(typeof r.message === 'string' && r.message ? { message: r.message.slice(0, 400) } : {}),
+    }
+  }
+  return out
+}
 
 function clean(e: Partial<FurnProjectExtras> | undefined): FurnProjectExtras {
   return {
@@ -32,6 +63,7 @@ function clean(e: Partial<FurnProjectExtras> | undefined): FurnProjectExtras {
     notes: typeof e?.notes === 'string' && e.notes.trim() ? e.notes : null,
     keywords: typeof e?.keywords === 'string' && e.keywords.trim() ? e.keywords : null,
     importedFrom: typeof e?.importedFrom === 'string' && e.importedFrom ? e.importedFrom : null,
+    linkFetches: cleanLinkFetches(e?.linkFetches),
   }
 }
 
@@ -42,6 +74,18 @@ export async function getFurnExtras(projectId: string): Promise<FurnProjectExtra
 
 export async function setFurnExtras(projectId: string, patch: Partial<FurnProjectExtras>): Promise<void> {
   await mutateJson<Store>(KEY, {}, (s) => ({ ...s, [projectId]: clean({ ...EMPTY, ...(s[projectId] || {}), ...patch }) }))
+}
+
+/** Record one link's fetch outcome atomically (read-modify-write inside mutateJson). */
+export async function recordLinkFetch(projectId: string, url: string, rec: LinkFetch): Promise<Record<string, LinkFetch>> {
+  let result: Record<string, LinkFetch> = {}
+  await mutateJson<Store>(KEY, {}, (s) => {
+    const cur = clean({ ...EMPTY, ...(s[projectId] || {}) })
+    const next = { ...cur, linkFetches: cleanLinkFetches({ ...cur.linkFetches, [url]: rec }) }
+    result = next.linkFetches
+    return { ...s, [projectId]: next }
+  })
+  return result
 }
 
 export async function deleteFurnExtras(projectId: string): Promise<void> {

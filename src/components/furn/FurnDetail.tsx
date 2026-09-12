@@ -26,7 +26,7 @@ import {
 import { useLanguage } from '@/contexts/LanguageContext'
 import { QuoteTermsControl, type QuoteTermsHandle } from '@/components/quote-terms/QuoteTermsControl'
 import { computeTotals } from '@/lib/quotation/totals'
-import { FurnFileActions } from '@/components/furn/FurnFileActions'
+import { FurnFileActions, type LinkFetch } from '@/components/furn/FurnFileActions'
 
 // A SUGGESTED price for one item — shown next to the price box with its basis,
 // applied only when the team clicks. Never written by itself.
@@ -44,7 +44,7 @@ import type { FurnProject, FurnItem, FurnQuotation } from '@/types'
 interface Props {
   project: FurnProject
   /** All BOQ files + imported notes/keywords (S3 extras; the row holds one BOQ). */
-  extras?: { boqFiles: Array<{ url: string; name: string }>; notes: string | null; keywords: string | null }
+  extras?: { boqFiles: Array<{ url: string; name: string }>; notes: string | null; keywords: string | null; linkFetches?: Record<string, LinkFetch> }
   initialItems: FurnItem[]
   initialQuotations: FurnQuotation[]
   canEditPrices: boolean
@@ -71,7 +71,7 @@ export function FurnDetail({ project: initialProject, extras, initialItems, init
   const [suggestions, setSuggestions] = useState<Record<string, PriceSuggestion>>({})
   const [suggesting, setSuggesting] = useState(false)
   // All BOQ files + imported notes/keywords — replaced in place by "re-import".
-  const [extrasState, setExtrasState] = useState<NonNullable<Props['extras']>>(extras ?? { boqFiles: [], notes: null, keywords: null })
+  const [extrasState, setExtrasState] = useState<NonNullable<Props['extras']>>(extras ?? { boqFiles: [], notes: null, keywords: null, linkFetches: {} })
   const [reimporting, setReimporting] = useState(false)
   async function reimportFromClient() {
     if (reimporting) return
@@ -534,16 +534,21 @@ export function FurnDetail({ project: initialProject, extras, initialItems, init
                 </Button>
               </div>
             )}
-            <FilesSection project={project} boqFiles={boqFilesAll} notes={extrasState.notes} keywords={extrasState.keywords} isRtl={isRtl} t={t} />
-            {/* Links found in the email + add files to this project in place —
-                no new project, same workflow, then «Retry». */}
-            <FurnFileActions
-              project={project}
-              notes={extrasState.notes}
-              boqFiles={boqFilesAll}
-              isRtl={isRtl}
-              disabled={processing}
-              onAttached={(p, boqFiles) => { setProject(p); setExtrasState((s) => ({ ...s, boqFiles })) }}
+            <FilesSection project={project} boqFiles={boqFilesAll} notes={extrasState.notes} keywords={extrasState.keywords} isRtl={isRtl} t={t}
+              actions={
+                /* Links found in the email + add files to this project in place —
+                   above the BOQ list, no new project, same workflow, then «Retry». */
+                <FurnFileActions
+                  project={project}
+                  notes={extrasState.notes}
+                  boqFiles={boqFilesAll}
+                  fetched={extrasState.linkFetches || {}}
+                  isRtl={isRtl}
+                  disabled={processing}
+                  onAttached={(p, boqFiles, linkFetches) => { setProject(p); setExtrasState((s) => ({ ...s, boqFiles, ...(linkFetches ? { linkFetches } : {}) })) }}
+                  onFetchRecorded={(linkFetches) => setExtrasState((s) => ({ ...s, linkFetches }))}
+                />
+              }
             />
 
             {project.ai_error ? (
@@ -1047,13 +1052,15 @@ function Linkified({ text }: { text: string }) {
   )
 }
 
-function FilesSection({ project, boqFiles, notes, keywords, isRtl, t }: {
+function FilesSection({ project, boqFiles, notes, keywords, isRtl, t, actions }: {
   project: FurnProject
   boqFiles: Array<{ url: string; name: string }>
   notes: string | null
   keywords: string | null
   isRtl: boolean
   t: (k: Parameters<ReturnType<typeof useLanguage>['t']>[0]) => string
+  /** Link-fetch + add-files controls, rendered right above the BOQ files. */
+  actions?: React.ReactNode
 }) {
   return (
     <div className="space-y-3">
@@ -1072,6 +1079,7 @@ function FilesSection({ project, boqFiles, notes, keywords, isRtl, t }: {
           )}
         </div>
       )}
+      {actions}
       <FilesGroup
         title={`${t('furn_form_boq')}${boqFiles.length > 1 ? ` (${boqFiles.length})` : ''}`}
         icon={<FileSpreadsheet className="w-4 h-4 text-emerald-600" />}

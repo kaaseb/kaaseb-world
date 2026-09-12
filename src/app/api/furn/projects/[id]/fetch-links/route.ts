@@ -15,6 +15,7 @@ import { denyUnlessPermitted } from '@/lib/api-guard'
 import { serverAudit } from '@/lib/audit-server'
 import { ingestLink } from '@/lib/links/ingest'
 import { attachFilesToFurnProject, groupByName } from '@/lib/furn/attach-files'
+import { recordLinkFetch } from '@/lib/furn/project-extras'
 
 export const runtime = 'nodejs'
 export const maxDuration = 300
@@ -39,18 +40,22 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   if (!exists) return NextResponse.json({ error: 'Project not found' }, { status: 404 })
 
   const ing = await ingestLink({ url, kind: 'furn', userId: user.id, folder: id })
+  const at = new Date().toISOString()
   if (ing.status !== 'files') {
-    return NextResponse.json({ status: ing.status, provider: ing.provider, message: ing.message, files: [], notices: ing.notices })
+    // Remember the refusal too: after navigating away the card still says why.
+    const linkFetches = await recordLinkFetch(id, url, { at, status: ing.status, provider: ing.provider, files: 0, message: ing.message }).catch(() => undefined)
+    return NextResponse.json({ status: ing.status, provider: ing.provider, message: ing.message, files: [], notices: ing.notices, linkFetches })
   }
 
   const groups = groupByName(ing.files.map((f) => ({ url: f.url, name: f.name })))
   const r = await attachFilesToFurnProject(supabase, id, groups)
   if ('error' in r) return NextResponse.json({ error: r.error }, { status: r.status })
+  const linkFetches = await recordLinkFetch(id, url, { at, status: 'files', provider: ing.provider, files: ing.files.length }).catch(() => undefined)
 
   await serverAudit({ user, supabase, action: 'edit', objectType: 'furn_project', objectId: id, objectName: `جلب ${ing.files.length} ملف من رابط ${ing.provider}` })
 
   return NextResponse.json({
     status: 'files', provider: ing.provider, files: ing.files, notices: ing.notices,
-    added: r.added, demoted: r.demoted, project: r.project, boqFiles: r.boqFiles,
+    added: r.added, demoted: r.demoted, project: r.project, boqFiles: r.boqFiles, linkFetches,
   })
 }
