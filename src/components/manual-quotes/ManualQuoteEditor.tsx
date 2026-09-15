@@ -4,7 +4,9 @@
 // optional thumbnail uploaded straight to S3) + live totals. Saves the whole
 // quote to S3 via PATCH.
 
-import { Fragment, useRef, useState } from 'react'
+import { Fragment, useCallback, useRef, useState } from 'react'
+import { useAutosave } from '@/hooks/useAutosave'
+import { AutosaveBadge } from '@/components/ui/autosave-badge'
 import { useRouter } from 'next/navigation'
 import { ArrowLeft, ArrowRight, Plus, Trash2, Loader2, Save, Printer, ImagePlus, ClipboardPaste, X, FileSpreadsheet } from 'lucide-react'
 import { toast } from 'sonner'
@@ -145,20 +147,30 @@ export function ManualQuoteEditor({ initial }: { initial: ManualQuote }) {
   const { subtotal, vat, total } = computeTotals(q.items, shipping, q.vat_rate || 0)
   const money = (n: number) => n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
+  // ONE persist function for the autosave and the Save button.
+  const persist = useCallback(async (value: ManualQuote) => {
+    const res = await fetch(`/api/manual-quotes/${value.id}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      keepalive: true,
+      body: JSON.stringify(value),
+    })
+    if (!res.ok) {
+      const j = await res.json().catch(() => ({}))
+      throw new Error(j.error || 'فشل الحفظ')
+    }
+  }, [])
+  // Autosave ~1.5 s after the last edit; leaving the tab flushes at once.
+  const autosave = useAutosave(q, persist, { delayMs: 1500 })
+
   async function save(thenPrint = false) {
     setSaving(true)
     try {
       // Terms first: the print page reads the SAVED override.
       await termsRef.current?.flush()
-      const res = await fetch(`/api/manual-quotes/${q.id}`, {
-        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(q),
-      })
-      const j = await res.json().catch(() => ({}))
-      if (!res.ok) { toast.error(j.error || 'فشل الحفظ'); return }
+      await autosave.flush(true)
       toast.success(ar ? 'تم الحفظ ✓' : 'Saved ✓')
       if (thenPrint) window.open(`/print/manual-quote/${q.id}`, '_blank')
-    } catch { toast.error('فشل الحفظ') } finally { setSaving(false) }
+    } catch (e) { toast.error(e instanceof Error ? e.message : 'فشل الحفظ') } finally { setSaving(false) }
   }
 
   return (
@@ -295,7 +307,8 @@ export function ManualQuoteEditor({ initial }: { initial: ManualQuote }) {
         </div>
       </CardContent></Card>
 
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 flex-wrap">
+        <AutosaveBadge a={autosave} ar={ar} />
         <Button onClick={() => save(false)} disabled={saving} className="gap-2">
           {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}{ar ? 'حفظ' : 'Save'}
         </Button>

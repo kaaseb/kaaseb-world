@@ -11,7 +11,9 @@
 // scrolling, and the act of sending the quotation is a single deliberate
 // click (no more two-button "Download AR / Download EN" dance).
 
-import { useEffect, useRef, useState, Fragment } from 'react'
+import { useCallback, useEffect, useRef, useState, Fragment } from 'react'
+import { useAutosave } from '@/hooks/useAutosave'
+import { AutosaveBadge } from '@/components/ui/autosave-badge'
 import Link from 'next/link'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -210,6 +212,7 @@ export function FurnDetail({ project: initialProject, extras, initialItems, init
     const j = await res.json()
     setProject(j.project)
     setItems(j.items || [])
+    autosave.markClean()
     setQuotations(j.quotations || [])
   }
 
@@ -247,6 +250,7 @@ export function FurnDetail({ project: initialProject, extras, initialItems, init
         if (p.status === 'rejected' || p.stage !== 'processing') {
           setProject(p)
           setItems(j.items || [])
+          autosave.markClean()
           setQuotations(j.quotations || [])
           setProcessing(false)
           setRunMessage('')
@@ -334,13 +338,14 @@ export function FurnDetail({ project: initialProject, extras, initialItems, init
     setItems(prev => [...prev, j.item])
   }
 
-  async function savePrices() {
-    setSavingPrices(true)
+  // ONE persist function for both the autosave and the Save button.
+  const persistItems = useCallback(async (list: FurnItem[]) => {
     const res = await fetch(`/api/furn/projects/${project.id}/items`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
+      keepalive: true,
       body: JSON.stringify({
-        items: items.map(it => ({
+        items: list.map(it => ({
           id: it.id,
           description: it.description,
           details: it.details,
@@ -351,13 +356,27 @@ export function FurnDetail({ project: initialProject, extras, initialItems, init
         })),
       }),
     })
-    setSavingPrices(false)
-    const j = await res.json()
     if (!res.ok) {
-      toast.error(j.error || 'Save failed')
-      return
+      const j = await res.json().catch(() => ({}))
+      throw new Error(j.error || 'Save failed')
     }
-    toast.success(t('furn_save_prices'))
+  }, [project.id])
+
+  // Autosave: every edit in the table lands on the server ~1.5 s after the last
+  // keystroke; leaving the tab flushes at once. The Save button stays as the
+  // explicit safety net (and always saves, even when nothing changed).
+  const autosave = useAutosave(items, persistItems, { delayMs: 1500, enabled: canEditPrices && !processing })
+
+  async function savePrices() {
+    setSavingPrices(true)
+    try {
+      await autosave.flush(true)
+      toast.success(t('furn_save_prices'))
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Save failed')
+    } finally {
+      setSavingPrices(false)
+    }
   }
 
   // One click → AR + EN quotations + both PDFs persisted to S3. Errors are
@@ -870,11 +889,14 @@ export function FurnDetail({ project: initialProject, extras, initialItems, init
               </Button>
             )}
             {canEditPrices && (
-              <Button onClick={savePrices} disabled={savingPrices} variant="outline">
-                {savingPrices
-                  ? <Loader2 className="w-4 h-4 animate-spin" />
-                  : t('furn_save_prices')}
-              </Button>
+              <span className="inline-flex items-center gap-2">
+                <AutosaveBadge a={autosave} ar={isRtl} />
+                <Button onClick={savePrices} disabled={savingPrices} variant="outline">
+                  {savingPrices
+                    ? <Loader2 className="w-4 h-4 animate-spin" />
+                    : t('furn_save_prices')}
+                </Button>
+              </span>
             )}
             {canExport && (
               <Button

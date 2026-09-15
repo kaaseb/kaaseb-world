@@ -268,7 +268,7 @@ const READ_SCHEMA: JsonSchema = {
           attributes: {
             type: 'object',
             additionalProperties: false,
-            required: ['thickness_mm', 'finish', 'size', 'colour', 'material'],
+            required: ['thickness_mm', 'finish', 'size', 'colour', 'material', 'treatment', 'cut'],
             description: 'Specification attributes for THIS item that are WRITTEN on this page (independent of the quantity). null/empty for anything not stated here — never guess.',
             properties: {
               thickness_mm: { type: ['number', 'null'], description: 'Thickness in millimetres as written (convert cm→mm). null if not stated.' },
@@ -276,6 +276,8 @@ const READ_SCHEMA: JsonSchema = {
               size: { type: 'string', description: 'Tile/slab size as written (e.g. "600x600mm"). Empty if not stated.' },
               colour: { type: 'string', description: 'Colour / stone name as written (e.g. "Carrara White", "Lunar Grey"). Empty if not stated.' },
               material: { type: 'string', description: 'The material as written (marble, granite, limestone, basalt, terrazzo, precast concrete…). Empty if not stated.' },
+              treatment: { type: 'string', description: 'Surface treatment beyond the finish as written (sealer/impregnation, anti-slip, waxing, crystallisation…). Empty if not stated.' },
+              cut: { type: 'string', description: 'Cutting / edge method as written (cut-to-size, tiles, slabs, water-jet, bullnose, bevelled edge, mitred…). Empty if not stated.' },
             },
           },
           attr_quote: { type: 'string', description: 'VERBATIM evidence for the attributes: the exact fragment(s) they were read from, character-for-character, several fragments joined with " | ". Empty when no attribute was found.' },
@@ -285,7 +287,7 @@ const READ_SCHEMA: JsonSchema = {
   },
 }
 
-interface RawAttrs { thickness_mm?: unknown; finish?: unknown; size?: unknown; colour?: unknown; material?: unknown }
+interface RawAttrs { thickness_mm?: unknown; finish?: unknown; size?: unknown; colour?: unknown; material?: unknown; treatment?: unknown; cut?: unknown }
 interface RawRead {
   results?: Array<{ row?: unknown; found?: unknown; value?: unknown; unit?: unknown; quote?: unknown; attributes?: RawAttrs; attr_quote?: unknown }>
 }
@@ -338,6 +340,8 @@ function parseRead(parsed: RawRead, allowed: Set<number>): ParsedRead {
         size: str(a.size),
         colour: str(a.colour),
         material: str(a.material),
+        treatment: str(a.treatment),
+        cut: str(a.cut),
       }
       if (hasAnyAttr(hit)) attrs.set(pos, { attrs: hit, quote: aq.slice(0, 400) })
     }
@@ -359,7 +363,7 @@ export async function readTextPage(group: ReadGroup): Promise<PageReadResult> {
   const parsed = await withTimeout(
     provider.generateStructured<RawRead>({
       systemInstruction:
-        'أنت قارئ جداول كميات ومواصفات دقيق. أمامك نص صفحة واحدة من مستند مشروع، وقائمة بنود. لكل بند مطلوب أمران مستقلان: (١) الكمية: إن وُجد رقم كمية يخصه فعلاً في النص، أرجعه مع اقتباس حرفي (انسخ الجزء الذي يحوي الرقم كما هو تماماً)، وإلا found=false. (٢) المواصفات: إن كُتبت في هذه الصفحة سماكة/فنش/مقاس/لون/مادة تخص هذا البند تحديداً (أو تفسّر كوده مثل ST-01)، أرجعها في attributes مع attr_quote = المقاطع الحرفية التي قرأتها منها مفصولة بـ" | ". اترك ما لم يُكتب فارغاً/null. لا تخمّن أبداً، ولا تجب من معرفة عامة، ولا تنسب مواصفات بند لبند آخر.',
+        'أنت قارئ جداول كميات ومواصفات دقيق. أمامك نص صفحة واحدة من مستند مشروع، وقائمة بنود. لكل بند مطلوب أمران مستقلان: (١) الكمية: إن وُجد رقم كمية يخصه فعلاً في النص، أرجعه مع اقتباس حرفي (انسخ الجزء الذي يحوي الرقم كما هو تماماً)، وإلا found=false. (٢) المواصفات: إن كُتبت في هذه الصفحة سماكة/فنش/مقاس/لون/مادة/معالجة (مانع تسرب، مضاد انزلاق…)/طريقة قص أو حافة تخص هذا البند تحديداً (أو تفسّر كوده مثل ST-01)، أرجعها في attributes مع attr_quote = المقاطع الحرفية التي قرأتها منها مفصولة بـ" | ". اترك ما لم يُكتب فارغاً/null. لا تخمّن أبداً، ولا تجب من معرفة عامة، ولا تنسب مواصفات بند لبند آخر.',
       files: [],
       userText: `## البنود\n${rowsAsk(group.rows)}\n\n## نص الصفحة (${group.file.name} ص${page})\n${pageText}\n\nJSON فقط.`,
       schema: READ_SCHEMA,

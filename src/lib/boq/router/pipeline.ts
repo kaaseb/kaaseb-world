@@ -2,6 +2,9 @@
 //
 //   1. EXTRACT   — read the BOQ ALONE (no attachments): rows + reference hints.
 //   2. INDEX     — hash + index every attachment (cached; free for digital).
+//   2½. SPECS    — harvest every stone-material definition (spec clauses,
+//                  finishes schedules, legends, notes) into a per-project
+//                  knowledge base, cached per file hash (see specs.ts).
 //   3. ROUTE     — explicit citations in code, everything else in ONE LLM call.
 //   4. READ      — only the routed pages; text verified by quote, scans by
 //                  double-read vision (numbers live in pixels there).
@@ -26,12 +29,14 @@ import type { BoqAnalysisResult, BoqExtractedItem, SkippedFile } from '@/lib/fur
 import {
   AI_CALL_TIMEOUT_MS, INDEX_CONCURRENCY, MAX_INDEXED_ENTRIES, MAX_READ_GROUPS,
   MAX_SOURCES, READ_CONCURRENCY,
-  detailsStateThickness, hasAnyAttr, makeProgressWriter, mergeAttrs, normalizeText,
+  ATTR_KEYS, EMPTY_ATTRS,
+  detailsStateThickness, hasAnyAttr, makeProgressWriter, mergeAttrs, missingAttrs, normalizeText,
   pooled, thicknessFromText, withTimeout,
   type AttrResolution, type Candidate, type IndexedFile, type Resolution, type RouterRow, type SourceBucket,
 } from './core'
 import { fetchSources, indexSource, type RawSource } from './indexer'
 import { readTextPage, readVisualPage, resolveExplicitHint, routeRows, type ReadGroup } from './resolve'
+import { harvestSpecs, matchSpec, type SpecEntry } from './specs'
 
 const log = (msg: string) => console.log(`[راوتر] ${msg}`)
 
@@ -73,6 +78,10 @@ export interface RouterCoverage {
   rowsResolved: number
   rowsConflict: number
   catalogTruncated: boolean
+  /** Spec knowledge base: definitions harvested, pages read for it, rows it completed. */
+  specEntries: number
+  specPagesRead: number
+  rowsSpecFilled: number
 }
 
 export type RouterResult = BoqAnalysisResult & { coverage: RouterCoverage }
@@ -419,8 +428,7 @@ async function readRound(
         // Per-field first-writer: keep what earlier pages gave, fill the rest —
         // and credit every page that actually contributed something new.
         const merged = mergeAttrs(prev.attrs, hit.attrs)
-        const keys = ['thickness_mm', 'finish', 'size', 'colour', 'material'] as const
-        const contributed = keys.some((k) => prev.attrs[k] === null && merged[k] !== null)
+        const contributed = ATTR_KEYS.some((k) => prev.attrs[k] === null && merged[k] !== null)
         const gotThickness = prev.attrs.thickness_mm === null && merged.thickness_mm !== null
         st.attrs = {
           ...prev,
@@ -503,9 +511,10 @@ export async function runBoqRouter(input: RouterInput): Promise<RouterResult> {
   const readable = indexed.filter((f) => f.kind !== 'unreadable')
   log(`phase2: indexed ${indexed.length} (cache ${filesFromCache}, failed ${filesFailed})`)
 
+  // Phase 2½ — the spec knowledge base (runs alongside routing: independent).
   // Phase 3 — routing. Explicit citations first (deterministic, rank 2), then
   // ONE semantic call for everything; both feed the same candidate lists.
-  await progress.push({ stage: 'routing', message: 'توجيه البنود إلى الملفات…' })
+  await progress.push({ stage: 'routing', message: 'قراءة المواصفات العامة وتوجيه البنود…' })
   let catalogTruncated = false
   const states: RowState[] = boq.rows.map((row) => ({
     row,
@@ -514,6 +523,14 @@ export async function runBoqRouter(input: RouterInput): Promise<RouterResult> {
     attrs: null,
     candidatesRead: 0,
   }))
+
+  let specEntries: SpecEntry[] = []
+  let specPagesRead = 0
+  const specJob = readable.length > 0 || input.projectNotes
+    ? harvestSpecs(readable, input.projectNotes ?? null, log)
+        .then((r) => { specEntries = r.entries; specPagesRead = r.pagesRead; log(`phase2½: ${r.entries.length} spec entries (${r.pagesRead} pages read, ${r.pagesFromCache} cached)`) })
+        .catch((e) => log(`spec harvest failed: ${e instanceof Error ? e.message : e}`))
+    : Promise.resolve()
 
   if (readable.length > 0 && boq.rows.length > 0) {
     try {
@@ -538,6 +555,7 @@ export async function runBoqRouter(input: RouterInput): Promise<RouterResult> {
       log(`routing call failed: ${e instanceof Error ? e.message : e}`)
     }
   }
+  await specJob
 
   // Phase 4 — read the routed pages, cheapest-first, bounded.
   const filesBySha = new Map(readable.map((f) => [f.sha, f]))
@@ -576,6 +594,7 @@ export async function runBoqRouter(input: RouterInput): Promise<RouterResult> {
   await progress.push({ stage: 'assembling', message: 'تجميع النتائج…' })
   let rowsConflict = 0
   let rowsUnsearched = 0
+  let rowsSpecFilled = 0
   const coverageLine = `فُهرس ${readable.length}/${entryCount} ملفاً${filesFailed > 0 ? ` (تعذّر ${filesFailed})` : ''}، وقُرئت ${pagesRead} صفحة موجّهة`
 
   const items: BoqExtractedItem[] = states.map(({ row, resolution, attrs, candidates, candidatesRead }) => {
@@ -702,9 +721,45 @@ export async function runBoqRouter(input: RouterInput): Promise<RouterResult> {
       if (a.size && !already(a.size)) parts.push(a.size)
       if (a.colour && !already(a.colour)) parts.push(a.colour)
       if (a.material && !already(a.material)) parts.push(a.material)
+      if (a.treatment && !already(a.treatment)) parts.push(a.treatment)
+      if (a.cut && !already(a.cut)) parts.push(a.cut)
       if (parts.length > 0) {
         details = details ? `${details} – ${parts.join(' – ')}` : parts.join(' – ')
         source = `${source}؛ المواصفات من ${acite}${attrs.verified === 'quote' ? ' (تحقق نصي)' : ' (قراءة بصرية مزدوجة)'}`
+      }
+    }
+
+    // Still-missing attributes → the project's spec knowledge base (a code
+    // legend, a finishes schedule, a general spec clause, the client's notes).
+    // A blanket clause is an ASSUMPTION: it's cited as such and caps confidence,
+    // so the pricer sees "20mm per spec §9.3 (general)" and knows to confirm.
+    const have = attrs?.attrs ?? EMPTY_ATTRS
+    const stillMissing = missingAttrs(have).filter((k) => k !== 'thickness_mm' || thicknessFromText(details) === null)
+    if (stillMissing.length > 0 && specEntries.length > 0) {
+      const m = matchSpec({ description: row.description, details, section: row.section, department_match: row.department_match }, specEntries)
+      if (m) {
+        const already = (w: string | null) => !!w && normalizeText(details || '').includes(normalizeText(w))
+        const parts: string[] = []
+        for (const k of stillMissing) {
+          const v = m.attrs[k]
+          if (v === null || v === '') continue
+          if (k === 'thickness_mm') parts.push(`${v}mm`)
+          else if (!already(String(v))) parts.push(String(v))
+        }
+        // A specific entry disagreeing with a stated thickness is worth a human look.
+        const statedThk = thicknessFromText(details)
+        if (!m.generic && statedThk !== null && m.attrs.thickness_mm !== null && Math.abs(statedThk - m.attrs.thickness_mm) > 0.01) {
+          addNote(`⚠️ تحقّق يدوي: البند يذكر سماكة ${statedThk} مم، والمواصفات (${m.cites.join('، ')}) تذكر ${m.attrs.thickness_mm} مم — أُبقيت سماكة البند.`)
+          confidence = Math.min(confidence, 0.6)
+        }
+        if (parts.length > 0) {
+          details = details ? `${details} – ${parts.join(' – ')}` : parts.join(' – ')
+          source = m.generic
+            ? `${source}؛ مواصفات عامة من ${m.cites.join('، ')} (بند عام لهذه المادة — افتراض، تأكد)`
+            : `${source}؛ المواصفات من ${m.cites.join('، ')} (قاعدة مواصفات المشروع)`
+          if (m.generic) confidence = Math.min(confidence, 0.7)
+          rowsSpecFilled++
+        }
       }
     }
 
@@ -725,6 +780,7 @@ export async function runBoqRouter(input: RouterInput): Promise<RouterResult> {
     boq.notes,
     coverageLine,
     rowsConflict > 0 ? `${rowsConflict} بند فيه تعارض/تحقّق يدوي — راجع الملاحظات.` : null,
+    specEntries.length > 0 ? `قاعدة مواصفات المشروع: ${specEntries.length} تعريف مادة من ${new Set(specEntries.map((e) => e.fileName)).size} ملف — أكملت مواصفات ${rowsSpecFilled} بند.` : null,
     rowsUnsearched > 0 ? `${rowsUnsearched} بند لم تُقرأ مصادره (بلا كمية موثّقة) — يحتاج مراجعة يدوية.` : null,
     entryCapHit ? `عدد الملفات تجاوز حد الفهرسة (${MAX_INDEXED_ENTRIES}) — بعضها لم يُفهرس.` : null,
     catalogTruncated ? 'فهرس التوجيه اختُصر لكبر عدد الملفات — بعض المرشحين لم يُعرض.' : null,
@@ -750,6 +806,9 @@ export async function runBoqRouter(input: RouterInput): Promise<RouterResult> {
       rowsResolved,
       rowsConflict,
       catalogTruncated,
+      specEntries: specEntries.length,
+      specPagesRead,
+      rowsSpecFilled,
     },
   }
 }

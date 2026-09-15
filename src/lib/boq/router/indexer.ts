@@ -12,15 +12,14 @@
 //      bytes = same index forever, across re-runs, re-uploads and projects.
 //      Failures are NEVER cached — a 503 is not a property of the file.
 
-import { unzipSync } from 'fflate'
-import { PDFDocument } from 'pdf-lib'
+import { heavy } from '@/lib/heavy'
 import { readJson, writeJson, fetchAppOwned } from '@/lib/s3'
 import { getProvider } from '@/lib/ai'
 import type { AiFile, JsonSchema } from '@/lib/ai/provider'
 import { extOf, mimeFromName } from '@/lib/ai/files'
 import {
   INDEX_VERSION, VISION_TOC_MAX_PAGES, MIN_PAGE_TEXT_CHARS, AI_CALL_TIMEOUT_MS,
-  sha256, withTimeout,
+  withTimeout,
   type IndexedFile, type IndexedPage, type SourceRef,
 } from './core'
 
@@ -58,18 +57,17 @@ export async function fetchSources(
     return [{ ref: { url, name, bucket }, buf }]
   }
 
-  let entries: Record<string, Uint8Array>
+  // Unzipped OFF the request thread (a drawing set can be hundreds of MB).
+  let entries: Array<{ path: string; data: Uint8Array }>
   try {
-    entries = unzipSync(new Uint8Array(buf))
+    entries = (await heavy.unzip(new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength))).entries
   } catch {
     throw new Error('ملف ZIP تالف')
   }
   const out: RawSource[] = []
-  for (const [entryPath, data] of Object.entries(entries)) {
-    if (entryPath.endsWith('/') || entryPath.includes('__MACOSX')) continue
+  for (const { path: entryPath, data } of entries) {
     const base = entryPath.split('/').pop() || entryPath
-    if (!base || base.startsWith('.')) continue
-    out.push({ ref: { url, name: base, bucket, zipEntry: entryPath }, buf: Buffer.from(data) })
+    out.push({ ref: { url, name: base, bucket, zipEntry: entryPath }, buf: Buffer.from(data.buffer, data.byteOffset, data.byteLength) })
   }
   return out
 }
@@ -80,14 +78,14 @@ export async function fetchSources(
 export async function refetchBytes(file: IndexedFile): Promise<Buffer> {
   const res = await fetchAppOwned(file.source.url)
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
-  let buf = Buffer.from(await res.arrayBuffer())
+  let buf: Buffer = Buffer.from(await res.arrayBuffer())
   if (file.source.zipEntry) {
-    const entries = unzipSync(new Uint8Array(buf))
-    const data = entries[file.source.zipEntry]
-    if (!data) throw new Error('اختفى الملف من داخل الـZIP')
-    buf = Buffer.from(data)
+    const { entries } = await heavy.unzip(new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength))
+    const hit = entries.find((e) => e.path === file.source.zipEntry)
+    if (!hit) throw new Error('اختفى الملف من داخل الـZIP')
+    buf = Buffer.from(hit.data.buffer, hit.data.byteOffset, hit.data.byteLength)
   }
-  if (sha256(buf) !== file.sha) {
+  if ((await heavy.sha256(buf)) !== file.sha) {
     throw new Error('تغيّر محتوى الملف منذ الفهرسة — أعد المعالجة')
   }
   return buf
@@ -105,10 +103,9 @@ function anchorOf(text: string): string {
 
 async function extractPdfPages(buf: Buffer): Promise<{ pages: IndexedPage[]; pageCount: number } | null> {
   try {
-    const { extractText, getDocumentProxy } = await import('unpdf')
-    const pdf = await getDocumentProxy(new Uint8Array(buf))
-    const { text } = await extractText(pdf, { mergePages: false })
-    const raw = Array.isArray(text) ? text : [String(text)]
+    // Text extraction runs in the worker pool — a 400-page PDF is seconds of CPU.
+    const { pages: raw } = await heavy.pdfText(buf)
+    if (!raw) return null
     const pages: IndexedPage[] = raw.map((p, i) => {
       const t = (p || '').trim()
       // Per-page judgement (the Sold.pdf lesson): a page under the threshold is
@@ -125,12 +122,7 @@ async function extractPdfPages(buf: Buffer): Promise<{ pages: IndexedPage[]; pag
 }
 
 async function pdfPageCount(buf: Buffer): Promise<number> {
-  try {
-    const doc = await PDFDocument.load(buf, { ignoreEncryption: true, updateMetadata: false })
-    return doc.getPageCount()
-  } catch {
-    return 0
-  }
+  return heavy.pdfPageCount(buf)
 }
 
 /**
@@ -140,15 +132,8 @@ async function pdfPageCount(buf: Buffer): Promise<number> {
  * instead of a 400-page document.
  */
 export async function extractPdfPageRange(buf: Buffer, from1: number, to1: number): Promise<Buffer> {
-  const src = await PDFDocument.load(buf, { ignoreEncryption: true, updateMetadata: false })
-  const out = await PDFDocument.create()
-  const count = src.getPageCount()
-  const a = Math.min(Math.max(1, from1), count) - 1
-  const b = Math.min(Math.max(from1, to1), count) - 1
-  const idx = Array.from({ length: b - a + 1 }, (_, i) => a + i)
-  const copied = await out.copyPages(src, idx)
-  for (const p of copied) out.addPage(p)
-  return Buffer.from(await out.save())
+  const bytes = await heavy.pdfPageRange(buf, from1, to1)
+  return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength)
 }
 
 // ─── vision TOC (scanned files only) ────────────────────────────────────────
@@ -221,7 +206,7 @@ async function visionToc(
  * entry that says WHY, because "we searched everything" must never be a lie.
  */
 export async function indexSource(raw: RawSource): Promise<{ file: IndexedFile; cached: boolean }> {
-  const sha = sha256(raw.buf)
+  const sha = await heavy.sha256(raw.buf)
 
   const cached = await readJson<IndexedFile | null>(cacheKey(sha), null)
   if (cached && cached.sha === sha) {
@@ -251,10 +236,8 @@ export async function indexSource(raw: RawSource): Promise<{ file: IndexedFile; 
   // Excel / CSV / TXT → sheets & text are "pages", free.
   if (ext === 'xlsx' || ext === 'xls') {
     try {
-      const XLSX = await import('xlsx')
-      const wb = XLSX.read(raw.buf, { type: 'buffer' })
-      const pages: IndexedPage[] = wb.SheetNames.map((sheet, i) => {
-        const csv = XLSX.utils.sheet_to_csv(wb.Sheets[sheet], { strip: true, blankrows: false }).slice(0, SHEET_TEXT_CAP)
+      const { sheets } = await heavy.xlsxSheets(raw.buf, SHEET_TEXT_CAP)
+      const pages: IndexedPage[] = sheets.map(({ name: sheet, csv }, i) => {
         const text = `## Sheet: ${sheet}\n${csv}`
         return { page: i + 1, text, anchor: `ورقة "${sheet}": ${anchorOf(csv)}` }
       })

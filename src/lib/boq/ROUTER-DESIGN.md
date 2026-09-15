@@ -209,3 +209,36 @@ quotation. `furn_projects` still holds a single `boq_url` (no migrations), so:
   quantity + unit) in two different files — the combined workbook repeating a
   package — keeping one copy with the other file recorded in its source.
   Same-file repeats are left to the review flag. Tests: tests/boq-merge.test.ts.
+
+## Addendum — phase 2½: the spec knowledge base (`specs.ts`)
+
+The per-row reader only opens the 1–3 pages routed for a row and only accepts
+attributes written *for that item*. Real projects state specs elsewhere: a
+general clause in the spec book ("Marble: 20 mm, polished, Crema Marfil"), a
+finishes schedule keyed by code (ST-01 → …), a room/element schedule, a drawing
+legend, a stone datasheet in "other", the client's notes.
+
+So once per run, alongside routing, every page that *reads like* a stone spec
+(deterministic score: a stone word + ≥4 spec vocabulary hits; visual pages whose
+TOC line says legend/schedule/finishes) is harvested into `SpecEntry[]` — code,
+name, material, colour, finish, thickness, size, **treatment**, **cut/edge**,
+applies-to, scope (general/specific) — each with a verbatim quote verified
+against the page (visual pages: two blind reads must agree). Cached per file
+hash under `app-data/boq-specs/v1-<sha>.json`, so re-runs and other projects
+sharing the file cost nothing. Bounded: 30 text pages + 6 visual pages per run.
+
+Assembly then fills whatever a row still lacks, deterministically: a code in the
+row → that entry; a stone name/colour in the row → that entry; applies-to words
+overlapping the row/section → that entry; only a *general* clause for the row's
+material → filled **as an assumption** (source says so, confidence capped at
+0.7). A granite clause never fills a marble row. Nothing without a verified
+quote ever enters.
+
+## Addendum — heavy CPU off the request thread (`src/lib/heavy`, `workers/heavy.mjs`)
+
+Excel parsing, PDF text extraction, page slicing, ZIP/RAR unpacking and SHA-256
+hashing are synchronous CPU work. On the single Next.js event loop they froze
+every user's request for seconds — the "النظام يهنق" reports. They now run in a
+small worker-thread pool (1–2 workers, FIFO, per-job timeout, crash-replaced)
+with an in-process fallback if the worker file is missing. Nothing about the
+results changed; only where the CPU burns.

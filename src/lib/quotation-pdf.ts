@@ -67,7 +67,20 @@ export interface RenderQuotationInput {
   cookieHeader: string
 }
 
-export async function renderQuotationPdf(
+// Renders are serialised: two Chromium page loads at once double the CPU
+// spike on a small VPS and make every other request lag. AR then EN is fine.
+let _chain: Promise<unknown> = Promise.resolve()
+function serialized<T>(fn: () => Promise<T>): Promise<T> {
+  const next = _chain.then(fn, fn)
+  _chain = next.catch(() => {})
+  return next
+}
+
+export function renderQuotationPdf(input: RenderQuotationInput): Promise<Buffer> {
+  return serialized(() => renderQuotationPdfNow(input))
+}
+
+async function renderQuotationPdfNow(
   input: RenderQuotationInput
 ): Promise<Buffer> {
   const browser = await getBrowser()

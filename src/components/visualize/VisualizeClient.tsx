@@ -172,14 +172,19 @@ export function VisualizeClient({ products, images, topProductIds, isSuperAdmin 
     } catch { /* keep the catalogue fallback */ }
   }, [])
 
+  const processingCountForPoll = jobs.filter(j => j.status === 'processing').length
   useEffect(() => {
     // Defer first loads off the effect body (timer callbacks, like the interval)
     // so they don't setState synchronously during the effect.
     const first = setTimeout(refetch, 0)
-    const t = setInterval(refetch, 5000)
+    // Poll fast only while a render is in flight; a quiet gallery checks rarely,
+    // and a hidden tab not at all — this page used to hit the server every 5 s
+    // per open tab forever.
+    const every = processingCountForPoll > 0 ? 5000 : 45_000
+    const t = setInterval(() => { if (!document.hidden) void refetch() }, every)
     const models = setTimeout(loadImageModels, 0)
     return () => { clearTimeout(first); clearInterval(t); clearTimeout(models) }
-  }, [refetch, loadImageModels])
+  }, [refetch, loadImageModels, processingCountForPoll])
 
   function toggleSurface(k: string) {
     setSurfaces(prev => (prev.includes(k) ? prev.filter(x => x !== k) : [...prev, k]))

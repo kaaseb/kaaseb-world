@@ -54,6 +54,8 @@ COPY --from=builder /app/public ./public
 COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/package.json ./package.json
+# Heavy-CPU worker threads (Excel/PDF/ZIP/RAR parsing off the request thread).
+COPY --from=builder /app/workers ./workers
 
 EXPOSE 8080
 

@@ -18,9 +18,7 @@
 // Output is provider-agnostic (base64 + mimeType + label); each provider then
 // encodes it (input_text / input_image / input_file).
 
-import * as XLSX from 'xlsx'
-import { extractText, getDocumentProxy } from 'unpdf'
-import { unzipSync } from 'fflate'
+import { heavy } from '@/lib/heavy'
 import { fetchAppOwned } from '@/lib/s3'
 import type { AiFile } from './provider'
 
@@ -74,15 +72,11 @@ function fileNameFromUrl(url: string): string {
   return decodeURIComponent(url.split('/').pop() || 'file').split('?')[0]
 }
 
-function excelBufferToCsv(buf: Buffer, originalName: string): string {
-  const wb = XLSX.read(buf, { type: 'buffer' })
-  const parts: string[] = []
-  for (const name of wb.SheetNames) {
-    const ws = wb.Sheets[name]
-    if (!ws) continue
-    const csv = XLSX.utils.sheet_to_csv(ws, { strip: true, blankrows: false })
-    parts.push(`## Sheet: ${name}\n${csv}`)
-  }
+async function excelBufferToCsv(buf: Buffer, originalName: string): Promise<string> {
+  // Parsed in the worker pool — SheetJS is synchronous CPU and a big BOQ used
+  // to stall every request on the server while it ran.
+  const { sheets } = await heavy.xlsxSheets(buf)
+  const parts = sheets.map(({ name, csv }) => `## Sheet: ${name}\n${csv}`)
   return `# Workbook: ${originalName}\n\n${parts.join('\n\n')}`
 }
 
@@ -90,9 +84,8 @@ function excelBufferToCsv(buf: Buffer, originalName: string): string {
 // meaningful extractable text (scanned).
 async function extractPdfText(buf: Buffer): Promise<string | null> {
   try {
-    const pdf = await getDocumentProxy(new Uint8Array(buf))
-    const { text } = await extractText(pdf, { mergePages: false })
-    const pages = Array.isArray(text) ? text : [String(text)]
+    const { pages } = await heavy.pdfText(buf)
+    if (!pages) return null
 
     // Judge EACH PAGE, not the document total.
     //
@@ -133,7 +126,7 @@ async function bytesToAiFile(buf: Buffer, name: string, label: string, opts: Fet
   const mime = mimeFromName(name)
 
   if (EXCEL_MIMES.has(mime)) {
-    const csv = excelBufferToCsv(buf, name)
+    const csv = await excelBufferToCsv(buf, name)
     return { data: Buffer.from(csv, 'utf8').toString('base64'), mimeType: 'text/csv', label }
   }
 
@@ -172,18 +165,15 @@ export async function fetchAiFiles(url: string, label: string, opts: FetchOpts =
   // ZIP → unzip and process each entry.
   if (mimeFromName(name) === 'application/zip') {
     const out: AiFile[] = []
-    let entries: Record<string, Uint8Array>
+    let entries: Array<{ path: string; data: Uint8Array }>
     try {
-      entries = unzipSync(new Uint8Array(buf))
+      entries = (await heavy.unzip(new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength))).entries // junk entries already skipped
     } catch {
       return [] // corrupt / unsupported zip — skip rather than crash the run
     }
-    for (const [entryPath, data] of Object.entries(entries)) {
-      if (entryPath.endsWith('/')) continue                       // directory
-      if (entryPath.includes('__MACOSX')) continue                // mac resource forks
+    for (const { path: entryPath, data } of entries) {
       const base = entryPath.split('/').pop() || entryPath
-      if (!base || base.startsWith('.')) continue                 // dotfiles (.DS_Store …)
-      const af = await bytesToAiFile(Buffer.from(data), base, `${label} › ${base}`, opts)
+      const af = await bytesToAiFile(Buffer.from(data.buffer, data.byteOffset, data.byteLength), base, `${label} › ${base}`, opts)
       if (af) out.push(af)
     }
     return out

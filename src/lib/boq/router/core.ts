@@ -145,9 +145,14 @@ export interface ResolvedAttrs {
   size: string | null
   colour: string | null
   material: string | null
+  /** Surface treatment beyond the finish: sealer, anti-slip, impregnation… */
+  treatment: string | null
+  /** Cutting / edge method: cut-to-size, tiles, slabs, water-jet, bullnose, bevel… */
+  cut: string | null
 }
 
-export const EMPTY_ATTRS: ResolvedAttrs = { thickness_mm: null, finish: null, size: null, colour: null, material: null }
+export const ATTR_KEYS = ['thickness_mm', 'finish', 'size', 'colour', 'material', 'treatment', 'cut'] as const
+export const EMPTY_ATTRS: ResolvedAttrs = { thickness_mm: null, finish: null, size: null, colour: null, material: null, treatment: null, cut: null }
 
 export interface AttrResolution {
   position: number
@@ -173,7 +178,11 @@ export interface PageReadResult {
 }
 
 export function hasAnyAttr(a: ResolvedAttrs | null | undefined): boolean {
-  return !!a && (a.thickness_mm !== null || !!a.finish || !!a.size || !!a.colour || !!a.material)
+  return !!a && ATTR_KEYS.some((k) => a[k] !== null && a[k] !== '')
+}
+/** Which attribute fields are still empty. */
+export function missingAttrs(a: ResolvedAttrs | null | undefined): Array<typeof ATTR_KEYS[number]> {
+  return ATTR_KEYS.filter((k) => !a || a[k] === null || a[k] === '')
 }
 
 /** First-writer-wins per FIELD: an earlier page's finish is kept, a later page
@@ -186,6 +195,8 @@ export function mergeAttrs(base: ResolvedAttrs | null, add: ResolvedAttrs): Reso
     size: b.size || add.size,
     colour: b.colour || add.colour,
     material: b.material || add.material,
+    treatment: b.treatment || add.treatment,
+    cut: b.cut || add.cut,
   }
 }
 
@@ -268,7 +279,10 @@ export function attrsAgree(a: ResolvedAttrs, b: ResolvedAttrs): ResolvedAttrs {
   const same = (x: string | null, y: string | null) => x && y && normalizeText(x) === normalizeText(y) ? x : null
   const thick = a.thickness_mm !== null && b.thickness_mm !== null && Math.abs(a.thickness_mm - b.thickness_mm) < NUM_EPS
     ? a.thickness_mm : null
-  return { thickness_mm: thick, finish: same(a.finish, b.finish), size: same(a.size, b.size), colour: same(a.colour, b.colour), material: same(a.material, b.material) }
+  return {
+    thickness_mm: thick, finish: same(a.finish, b.finish), size: same(a.size, b.size), colour: same(a.colour, b.colour),
+    material: same(a.material, b.material), treatment: same(a.treatment, b.treatment), cut: same(a.cut, b.cut),
+  }
 }
 
 // ─── run progress (what the UI polls) ───────────────────────────────────────
