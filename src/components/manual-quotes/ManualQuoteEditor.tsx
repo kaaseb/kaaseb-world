@@ -148,11 +148,13 @@ export function ManualQuoteEditor({ initial }: { initial: ManualQuote }) {
   const money = (n: number) => n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
   // ONE persist function for the autosave and the Save button.
-  const persist = useCallback(async (value: ManualQuote) => {
+  const persist = useCallback(async (value: ManualQuote, ctx: { leaving: boolean }) => {
+    const body = JSON.stringify(value)
     const res = await fetch(`/api/manual-quotes/${value.id}`, {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-      keepalive: true,
-      body: JSON.stringify(value),
+      // keepalive survives the tab closing; browsers cap it at 64KB of body.
+      keepalive: ctx.leaving && body.length < 60_000,
+      body,
     })
     if (!res.ok) {
       const j = await res.json().catch(() => ({}))

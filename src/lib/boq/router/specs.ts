@@ -67,7 +67,8 @@ const STONE_RE = /\b(marble|granite|limestone|travertine|basalt|onyx|quartzite|s
 const SPEC_HINT_RE = /\b(thick(?:ness)?|thk|mm|finish(?:es|ed)?|polished|honed|flamed|bush[- ]?hammered|sand[- ]?blast(?:ed)?|leather(?:ed)?|tumbled|brushed|schedule|legend|specification|material|colou?r|size|edge|bullnose|bevel(?:led)?|sealer|sealed|anti[- ]?slip|water[- ]?jet|cut[- ]to[- ]size|slab|tile)\b|سماك|فنش|تشطيب|مصقول|مطفي|ملمع|مفرش|جدول|مواصف|لون|مقاس|حاف|قص|مانع|انزلاق|معالج/gi
 
 export function specScore(text: string | null | undefined): number {
-  const t = text || ''
+  // First 6k chars decide — enough for a page's character, cheap for 400 files.
+  const t = (text || '').slice(0, 6000)
   if (!STONE_RE.test(t)) return 0
   const hits = (t.match(SPEC_HINT_RE) || []).length
   return hits >= 4 ? Math.min(hits, 60) : 0
@@ -289,6 +290,30 @@ export async function harvestSpecs(
   }
 
   return { entries, pagesRead, pagesFromCache }
+}
+
+// ─── what a row already states (never contradicted by a file) ───────────────
+
+const FINISH_RE = /\b(polished|honed|flamed|bush[- ]?hammered|sand[- ]?blast(?:ed)?|leather(?:ed)?|tumbled|brushed|antiqued|matt?e?|glossy|riven|split[- ]face)\b|مصقول|مطفي|ملمع|محروق|مفرش|مطرق|مجلّد|مجلد|لامع/i
+const SIZE_RE = /\d+\s*[x×*]\s*\d+|\b(slabs?|tiles?|cut[- ]to[- ]size|random|free[- ]length)\b|مقاس|شرائح|بلاط|قطع حسب/i
+// Colour words + the trade names that ARE the colour in this industry (Crema
+// Marfil, Nero Marquina, Calacatta…): a row naming one has its colour pinned.
+const COLOUR_RE = /\b(white|black|grey|gray|beige|cream|brown|green|red|blue|gold|golden|yellow|pink|ivory|silver|crema|marfil|carrara|calacatta|statuario|botticino|emperador|marquina|galaxy|kashmir|absolute|nero|bianco|rosso|verde|giallo|grigio|perlato|travertino|thassos|volakas|pietra|jura|moca|arabescato)\b|أبيض|ابيض|أسود|اسود|رمادي|بيج|كريمي|بني|أخضر|اخضر|أحمر|احمر|أزرق|ازرق|ذهبي|أصفر|اصفر|وردي|عاجي|فضي/i
+const TREATMENT_RE = /\b(seal(?:ed|er|ant)?|impregnat\w*|anti[- ]?slip|non[- ]?slip|wax(?:ed)?|crystalli[sz]\w*|coat(?:ed|ing)?|epoxy)\b|مانع|انزلاق|معالج|شمع|طلاء|ايبوكسي|إيبوكسي/i
+const CUT_RE = /\b(water[- ]?jet|bullnose|bevel(?:led)?|mitred?|mitered?|chamfer(?:ed)?|eased edge|pencil edge|ogee|half[- ]?bullnose|book[- ]?match(?:ed)?)\b|حافة|حواف|قص|ووتر ?جت|شطف/i
+
+/** Attribute fields the row's own text already pins down. Used so a file
+ *  never appends "honed" under a row the BOQ says is "polished". */
+export function statedFields(text: string | null | undefined): Set<typeof ATTR_KEYS[number]> {
+  const t = text || ''
+  const out = new Set<typeof ATTR_KEYS[number]>()
+  if (FINISH_RE.test(t)) out.add('finish')
+  if (SIZE_RE.test(t)) out.add('size')
+  if (COLOUR_RE.test(t)) out.add('colour')
+  if (materialOf(t)) out.add('material')
+  if (TREATMENT_RE.test(t)) out.add('treatment')
+  if (CUT_RE.test(t)) out.add('cut')
+  return out
 }
 
 // ─── matching (deterministic) ───────────────────────────────────────────────

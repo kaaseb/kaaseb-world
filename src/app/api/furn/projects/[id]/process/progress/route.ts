@@ -5,6 +5,7 @@
 
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
+import { denyUnlessPermitted } from '@/lib/api-guard'
 import { readRunProgress } from '@/lib/boq/router/core'
 
 export const runtime = 'nodejs'
@@ -14,6 +15,9 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  // Furn data is for Furn users only — same gate as the page itself.
+  const deny = await denyUnlessPermitted('page.furn')
+  if (deny) return deny
 
   const { id } = await params
   const progress = await readRunProgress(id)

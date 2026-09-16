@@ -36,7 +36,7 @@ import {
 } from './core'
 import { fetchSources, indexSource, type RawSource } from './indexer'
 import { readTextPage, readVisualPage, resolveExplicitHint, routeRows, type ReadGroup } from './resolve'
-import { harvestSpecs, matchSpec, type SpecEntry } from './specs'
+import { harvestSpecs, matchSpec, statedFields, type SpecEntry } from './specs'
 
 const log = (msg: string) => console.log(`[راوتر] ${msg}`)
 
@@ -716,13 +716,16 @@ export async function runBoqRouter(input: RouterInput): Promise<RouterResult> {
           }
         }
       }
+      // A field the row's own text already states is left alone — a file may
+      // fill a GAP, never contradict "polished" with "honed" on the same line.
+      const stated = statedFields(`${row.description} ${details || ''}`)
       const already = (w: string | null) => !!w && normalizeText(details || '').includes(normalizeText(w))
-      if (a.finish && !already(a.finish)) parts.push(a.finish)
-      if (a.size && !already(a.size)) parts.push(a.size)
-      if (a.colour && !already(a.colour)) parts.push(a.colour)
-      if (a.material && !already(a.material)) parts.push(a.material)
-      if (a.treatment && !already(a.treatment)) parts.push(a.treatment)
-      if (a.cut && !already(a.cut)) parts.push(a.cut)
+      if (a.finish && !stated.has('finish') && !already(a.finish)) parts.push(a.finish)
+      if (a.size && !stated.has('size') && !already(a.size)) parts.push(a.size)
+      if (a.colour && !stated.has('colour') && !already(a.colour)) parts.push(a.colour)
+      if (a.material && !stated.has('material') && !already(a.material)) parts.push(a.material)
+      if (a.treatment && !stated.has('treatment') && !already(a.treatment)) parts.push(a.treatment)
+      if (a.cut && !stated.has('cut') && !already(a.cut)) parts.push(a.cut)
       if (parts.length > 0) {
         details = details ? `${details} – ${parts.join(' – ')}` : parts.join(' – ')
         source = `${source}؛ المواصفات من ${acite}${attrs.verified === 'quote' ? ' (تحقق نصي)' : ' (قراءة بصرية مزدوجة)'}`
@@ -734,7 +737,9 @@ export async function runBoqRouter(input: RouterInput): Promise<RouterResult> {
     // A blanket clause is an ASSUMPTION: it's cited as such and caps confidence,
     // so the pricer sees "20mm per spec §9.3 (general)" and knows to confirm.
     const have = attrs?.attrs ?? EMPTY_ATTRS
-    const stillMissing = missingAttrs(have).filter((k) => k !== 'thickness_mm' || thicknessFromText(details) === null)
+    const statedByRow = statedFields(`${row.description} ${details || ''}`)
+    const stillMissing = missingAttrs(have)
+      .filter((k) => (k === 'thickness_mm' ? thicknessFromText(details) === null : !statedByRow.has(k)))
     if (stillMissing.length > 0 && specEntries.length > 0) {
       const m = matchSpec({ description: row.description, details, section: row.section, department_match: row.department_match }, specEntries)
       if (m) {

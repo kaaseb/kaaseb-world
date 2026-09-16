@@ -32,9 +32,15 @@ export interface Autosave {
   dirty: boolean
 }
 
+export interface SaveContext {
+  /** true when the tab is hiding/closing — the persist function may use a
+   *  keepalive request (small bodies only; browsers cap those at 64KB). */
+  leaving: boolean
+}
+
 export function useAutosave<T>(
   value: T,
-  save: (value: T) => Promise<void>,
+  save: (value: T, ctx: SaveContext) => Promise<void>,
   opts: { delayMs?: number; enabled?: boolean } = {},
 ): Autosave {
   const delay = opts.delayMs ?? 1500
@@ -60,13 +66,14 @@ export function useAutosave<T>(
 
   const setDirty = useCallback((d: boolean) => { dirty.current = d; setIsDirty(d) }, [])
 
+  const leaving = useRef(false)
   const runSave = useCallback(async (): Promise<void> => {
     if (saving.current) { again.current = true; return }
     saving.current = true
     setStatus('saving')
     const snapshot = latest.current
     try {
-      await saveRef.current(snapshot)
+      await saveRef.current(snapshot, { leaving: leaving.current })
       // Edits that landed DURING the save keep the document dirty.
       if (latest.current === snapshot) setDirty(false)
       setSavedAt(new Date())
@@ -107,10 +114,11 @@ export function useAutosave<T>(
 
   // Leaving the tab flushes; closing it with unsaved edits warns.
   useEffect(() => {
-    const onHide = () => { if (document.visibilityState === 'hidden' && dirty.current && enabledRef.current) void flush().catch(() => {}) }
+    const leave = () => { leaving.current = true; void flush().catch(() => {}).finally(() => { leaving.current = false }) }
+    const onHide = () => { if (document.visibilityState === 'hidden' && dirty.current && enabledRef.current) leave() }
     const onUnload = (e: BeforeUnloadEvent) => {
       if (!dirty.current || !enabledRef.current) return
-      void flush().catch(() => {})
+      leave()
       e.preventDefault()
       e.returnValue = ''
     }

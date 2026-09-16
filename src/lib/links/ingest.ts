@@ -90,6 +90,8 @@ export async function ingestLink(o: IngestOptions): Promise<IngestResult> {
   const store = async (name: string, data: Uint8Array, declaredType?: string) => {
     if (files.length >= MAX_FILES_PER_LINK) { notices.push(`تجاوز الرابط ${MAX_FILES_PER_LINK} ملف — أُخذت الأوائل`); return }
     const contentType = mimeFor(name, declaredType)
+    // A web page is never a project file — and the bucket must never host HTML.
+    if (/html|xhtml|javascript|svg/.test(contentType) || /\.(html?|xhtml|js|mjs|svg)$/i.test(name)) { notices.push(`تخطّي «${name}» — صفحة ويب لا ملف`); return }
     if (!mimeAllowed(policy, contentType) && !mimeAllowed(policy, 'application/octet-stream')) { notices.push(`تخطّي «${name}» — نوع غير مسموح`); return }
     const buffer = Buffer.from(data.buffer, data.byteOffset, data.byteLength)
     const key = `${o.kind}/${folder}/link-${o.userId.slice(0, 6)}-${safeNameStem(name)}-${buffer.byteLength}.${safeExtension(name)}`

@@ -66,3 +66,11 @@ test('matchSpec: only a general clause → marked generic; wrong material never 
   const gr = matchSpec({ description: 'Granite threshold', details: null, section: null, department_match: 'Granite' }, entries)
   assert.ok(!gr || gr.attrs.thickness_mm !== 30, 'marble general clause must not fill a granite row')
 })
+
+test('statedFields: what the row already says is never contradicted by a file', async () => {
+  const { statedFields } = await import('@/lib/boq/router/specs')
+  const s = statedFields('Marble flooring 20mm – polished – 600x600 – Crema Marfil – sealed – bullnose edge')
+  assert.deepEqual([...s].sort(), ['colour', 'cut', 'finish', 'material', 'size', 'treatment'].sort())
+  assert.deepEqual([...statedFields('Threshold as per drawings')], [])
+  assert.deepEqual([...statedFields('رخام مصقول أبيض')].sort(), ['colour', 'finish', 'material'])
+})

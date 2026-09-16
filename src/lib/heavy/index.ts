@@ -40,6 +40,8 @@ const IDLE_EXIT_MS = 5 * 60_000
 type Job = {
   op: string
   buf: Uint8Array
+  /** Move the buffer to the worker instead of copying (caller must not reuse it). */
+  transfer: boolean
   opts: Record<string, unknown>
   resolve: (v: unknown) => void
   reject: (e: Error) => void
@@ -108,7 +110,12 @@ function pump() {
       void slot!.worker.terminate()
     }, JOB_TIMEOUT_MS)
     slot.worker.ref() // a job is in flight — the event loop must wait for it
-    slot.worker.postMessage({ id, op: job.op, buf: job.buf, opts: job.opts })
+    // Transfer only when the view covers its whole ArrayBuffer (a slice of a
+    // shared pool buffer must still be copied — transferring would detach it).
+    const whole = job.buf.byteOffset === 0 && job.buf.byteLength === job.buf.buffer.byteLength
+    const msg = { id, op: job.op, buf: job.buf, opts: job.opts }
+    if (job.transfer && whole) slot.worker.postMessage(msg, [job.buf.buffer as ArrayBuffer])
+    else slot.worker.postMessage(msg)
   }
   // Idle workers go away after a while so a quiet server holds no extra memory.
   for (const s of slots) {
@@ -119,9 +126,9 @@ function pump() {
   }
 }
 
-function run<T>(op: string, buf: Uint8Array, opts: Record<string, unknown> = {}): Promise<T> {
+function run<T>(op: string, buf: Uint8Array, opts: Record<string, unknown> = {}, transfer = false): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    queue.push({ op, buf, opts, resolve: resolve as (v: unknown) => void, reject })
+    queue.push({ op, buf, transfer, opts, resolve: resolve as (v: unknown) => void, reject })
     pump()
   })
 }
@@ -184,11 +191,11 @@ async function fallback<T>(op: string, buf: Uint8Array, opts: Record<string, unk
 }
 
 let useWorkers: boolean | null = null
-async function call<T>(op: string, buf: Uint8Array, opts: Record<string, unknown> = {}): Promise<T> {
+async function call<T>(op: string, buf: Uint8Array, opts: Record<string, unknown> = {}, transfer = false): Promise<T> {
   if (useWorkers === null) useWorkers = workerAvailable()
   if (!useWorkers) return fallback<T>(op, buf, opts)
   try {
-    return await run<T>(op, buf, opts)
+    return await run<T>(op, buf, opts, transfer)
   } catch (e) {
     // Worker infrastructure failure (not a content error) → do it here rather
     // than fail the user's request. Content errors are thrown by both paths.
@@ -204,10 +211,11 @@ export interface RarResult { encrypted: boolean; entries: ZipEntry[]; skipped: A
 
 export const heavy = {
   sha256: (buf: Uint8Array) => call<string>('sha256', buf),
-  unzip: (buf: Uint8Array, entryCap?: number) => call<{ entries: ZipEntry[] }>('unzip', buf, entryCap ? { entryCap } : {}),
+  /** `transfer` moves the bytes to the worker (no copy) — the caller must not touch `buf` afterwards. */
+  unzip: (buf: Uint8Array, entryCap?: number, transfer = false) => call<{ entries: ZipEntry[] }>('unzip', buf, entryCap ? { entryCap } : {}, transfer),
   xlsxSheets: (buf: Uint8Array, csvCap?: number) => call<{ sheets: Array<{ name: string; csv: string }> }>('xlsxSheets', buf, csvCap ? { csvCap } : {}),
   pdfText: (buf: Uint8Array) => call<{ pages: string[] | null }>('pdfText', buf),
   pdfPageCount: (buf: Uint8Array) => call<number>('pdfPageCount', buf),
   pdfPageRange: (buf: Uint8Array, from: number, to: number) => call<Uint8Array>('pdfPageRange', buf, { from, to }),
-  rarExtract: (buf: Uint8Array, caps: { entryCap?: number; totalCap?: number; maxEntries?: number } = {}) => call<RarResult>('rarExtract', buf, caps),
+  rarExtract: (buf: Uint8Array, caps: { entryCap?: number; totalCap?: number; maxEntries?: number } = {}, transfer = false) => call<RarResult>('rarExtract', buf, caps, transfer),
 }

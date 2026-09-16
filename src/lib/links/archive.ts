@@ -69,7 +69,7 @@ export async function extractArchive(kind: ArchiveKind, buf: Uint8Array, sink: E
   if (kind === 'zip') {
     let entries: Array<{ path: string; data: Uint8Array }>
     try {
-      entries = (await heavy.unzip(buf, ENTRY_CAP)).entries
+      entries = (await heavy.unzip(buf, ENTRY_CAP, true)).entries // bytes moved, not copied
     } catch (e) {
       throw new Error(`تعذّر فتح ملف ZIP — ${e instanceof Error ? e.message : 'تالف أو مشفّر'}`)
     }
@@ -80,7 +80,7 @@ export async function extractArchive(kind: ArchiveKind, buf: Uint8Array, sink: E
   if (kind === 'rar') {
     let r
     try {
-      r = await heavy.rarExtract(buf, { entryCap: ENTRY_CAP, totalCap: TOTAL_CAP, maxEntries: MAX_ENTRIES })
+      r = await heavy.rarExtract(buf, { entryCap: ENTRY_CAP, totalCap: TOTAL_CAP, maxEntries: MAX_ENTRIES }, true) // bytes moved, not copied
     } catch (e) {
       throw new Error(`تعذّر فتح ملف RAR — ${e instanceof Error ? e.message : 'تالف'}`)
     }

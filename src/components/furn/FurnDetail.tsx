@@ -339,22 +339,25 @@ export function FurnDetail({ project: initialProject, extras, initialItems, init
   }
 
   // ONE persist function for both the autosave and the Save button.
-  const persistItems = useCallback(async (list: FurnItem[]) => {
+  const persistItems = useCallback(async (list: FurnItem[], ctx: { leaving: boolean }) => {
+    const body = JSON.stringify({
+      items: list.map(it => ({
+        id: it.id,
+        description: it.description,
+        details: it.details,
+        quantity: it.quantity,
+        unit: it.unit,
+        unit_price: it.unit_price,
+        notes: it.notes,
+      })),
+    })
     const res = await fetch(`/api/furn/projects/${project.id}/items`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      keepalive: true,
-      body: JSON.stringify({
-        items: list.map(it => ({
-          id: it.id,
-          description: it.description,
-          details: it.details,
-          quantity: it.quantity,
-          unit: it.unit,
-          unit_price: it.unit_price,
-          notes: it.notes,
-        })),
-      }),
+      // keepalive survives the tab closing — but browsers refuse bodies > 64KB
+      // on it, so a big table falls back to a normal request.
+      keepalive: ctx.leaving && body.length < 60_000,
+      body,
     })
     if (!res.ok) {
       const j = await res.json().catch(() => ({}))
