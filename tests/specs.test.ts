@@ -74,3 +74,20 @@ test('statedFields: what the row already says is never contradicted by a file', 
   assert.deepEqual([...statedFields('Threshold as per drawings')], [])
   assert.deepEqual([...statedFields('رخام مصقول أبيض')].sort(), ['colour', 'finish', 'material'])
 })
+
+test('statedFields: a form factor is NOT a size, and Arabic matches whole words only', async () => {
+  const { statedFields } = await import('@/lib/boq/router/specs')
+  // "tiles"/"slabs"/"بلاط" describe the shape, not the size — the spec's real
+  // size must still be allowed to fill in.
+  assert.equal(statedFields('Marble tiles for lobby').has('size'), false)
+  assert.equal(statedFields('Granite slabs').has('size'), false)
+  assert.equal(statedFields('بلاط رخام للوبي').has('size'), false)
+  // A real dimension, or an explicit cut-to-size, does pin it.
+  assert.equal(statedFields('Marble 600x600 tiles').has('size'), true)
+  assert.equal(statedFields('رخام مقاس 600×600').has('size'), true)
+  assert.equal(statedFields('Granite cut-to-size').has('size'), true)
+  // "قص" inside "مقصورة" is not a cutting method; standing alone it is.
+  assert.equal(statedFields('رخام مقصورة الاستقبال').has('cut'), false)
+  assert.equal(statedFields('رخام قص حسب المخطط').has('cut'), true)
+  assert.equal(statedFields('رخام معالجة مانع تسرب').has('treatment'), true)
+})

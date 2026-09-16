@@ -24,7 +24,7 @@ import type { Worker } from 'worker_threads'
 // worker_threads is fetched at runtime, NOT imported: the bundler traces every
 // `new Worker(...)` it can see, bundles the worker file and its wasm loader,
 // and the build breaks. Loaded like this, the worker stays a plain file on disk.
-type WorkerCtor = new (file: string) => Worker
+type WorkerCtor = new (file: string, opts?: { resourceLimits?: { maxOldGenerationSizeMb?: number } }) => Worker
 function workerCtor(): WorkerCtor {
   const viaBuiltin = (process as unknown as { getBuiltinModule?: (id: string) => { Worker: WorkerCtor } }).getBuiltinModule?.('worker_threads')
   if (viaBuiltin?.Worker) return viaBuiltin.Worker
@@ -61,7 +61,8 @@ function workerAvailable(): boolean {
 
 function spawn(): Slot {
   const Ctor = workerCtor()
-  const worker = new Ctor(WORKER_FILE)
+  // A bounded heap: a malicious archive kills the WORKER, never the server.
+  const worker = new Ctor(WORKER_FILE, { resourceLimits: { maxOldGenerationSizeMb: 2048 } })
   worker.unref() // never keep the process alive on its own (tests, shutdown)
   const slot: Slot = { worker, busy: null, idleTimer: null }
   worker.on('message', (m: { id: number; ok: boolean; result?: unknown; error?: string }) => {
@@ -88,7 +89,12 @@ function spawn(): Slot {
     pump()
   }
   worker.on('error', (e) => die(`crashed: ${e.message}`))
-  worker.on('exit', (code) => { if (code !== 0) die(`exited (${code})`); else { const i = slots.indexOf(slot); if (i >= 0) slots.splice(i, 1) } })
+  // ANY exit while a job is in flight must reject that job and re-pump — a
+  // clean exit (code 0) used to leak the job and stall the whole pipeline.
+  worker.on('exit', (code) => {
+    if (code !== 0 || slot.busy) die(`exited (${code})`)
+    else { const i = slots.indexOf(slot); if (i >= 0) slots.splice(i, 1) }
+  })
   slots.push(slot)
   return slot
 }
@@ -96,18 +102,34 @@ function spawn(): Slot {
 function pump() {
   while (queue.length > 0) {
     let slot = slots.find((s) => !s.busy)
-    if (!slot && slots.length < POOL_SIZE) slot = spawn()
+    if (!slot && slots.length < POOL_SIZE) {
+      // A failed spawn must not take the queue down with it: the job stays
+      // queued (a later pump retries it) and the caller is told the truth.
+      try { slot = spawn() } catch (e) {
+        const failed = queue.shift()
+        failed?.reject(new Error(`heavy worker could not start: ${e instanceof Error ? e.message : e}`))
+        continue
+      }
+    }
     if (!slot) return
     const job = queue.shift()!
     slot.busy = job
     if (slot.idleTimer) { clearTimeout(slot.idleTimer); slot.idleTimer = null }
     const id = ++seq
     inflight.set(id, { slot, job })
+    const slotRef = slot
     job.timer = setTimeout(() => {
       // A stuck job poisons the worker — replace it rather than wait forever.
+      // The slot is released HERE: waiting for the exit event could leave a
+      // phantom "busy" slot that pump() skips forever.
       inflight.delete(id)
+      slotRef.busy = null
+      slotRef.worker.unref()
+      const i = slots.indexOf(slotRef)
+      if (i >= 0) slots.splice(i, 1)
       job.reject(new Error(`heavy job ${job.op} timed out`))
-      void slot!.worker.terminate()
+      void slotRef.worker.terminate()
+      pump()
     }, JOB_TIMEOUT_MS)
     slot.worker.ref() // a job is in flight — the event loop must wait for it
     // Transfer only when the view covers its whole ArrayBuffer (a slice of a
@@ -148,7 +170,7 @@ async function fallback<T>(op: string, buf: Uint8Array, opts: Record<string, unk
       const { unzipSync } = await import('fflate')
       const cap = Number(opts.entryCap ?? Infinity)
       const files = unzipSync(buf, { filter: (f) => !junk(f.name) && f.originalSize <= cap })
-      return { entries: Object.entries(files).filter(([p, d]) => !junk(p) && d.length > 0).map(([p, d]) => ({ path: p, data: d })) } as T
+      return { entries: Object.entries(files).filter(([p, d]) => !junk(p) && d.length > 0).map(([p, d]) => ({ path: p, data: d })), skipped: [] } as T
     }
     case 'xlsxSheets': {
       const XLSX = await import('xlsx')
@@ -193,29 +215,31 @@ async function fallback<T>(op: string, buf: Uint8Array, opts: Record<string, unk
 let useWorkers: boolean | null = null
 async function call<T>(op: string, buf: Uint8Array, opts: Record<string, unknown> = {}, transfer = false): Promise<T> {
   if (useWorkers === null) useWorkers = workerAvailable()
+  // The in-process fallback is for ONE case only: no worker file on this
+  // deployment, decided before anything is dispatched. It is deliberately NOT
+  // a retry path — after a transfer the caller's buffer is detached (the retry
+  // would silently process zero bytes and report "corrupt archive"), and
+  // re-running the same heavy CPU on the request thread is exactly the freeze
+  // this pool exists to prevent. A dead worker is reported as a dead worker.
   if (!useWorkers) return fallback<T>(op, buf, opts)
-  try {
-    return await run<T>(op, buf, opts, transfer)
-  } catch (e) {
-    // Worker infrastructure failure (not a content error) → do it here rather
-    // than fail the user's request. Content errors are thrown by both paths.
-    if (e instanceof Error && /heavy worker|timed out|Cannot find module|ERR_/.test(e.message)) return fallback<T>(op, buf, opts)
-    throw e
-  }
+  return run<T>(op, buf, opts, transfer)
 }
 
 // ─── public API ─────────────────────────────────────────────────────────────
 
 export interface ZipEntry { path: string; data: Uint8Array }
-export interface RarResult { encrypted: boolean; entries: ZipEntry[]; skipped: Array<{ path: string; why: 'entry-cap' | 'total-cap' | 'max-entries' }> }
+export type SkipReason = 'entry-cap' | 'total-cap' | 'max-entries'
+export interface ZipResult { entries: ZipEntry[]; skipped: Array<{ path: string; why: SkipReason }> }
+export interface RarResult { encrypted: boolean; entries: ZipEntry[]; skipped: Array<{ path: string; why: SkipReason }> }
+export interface ArchiveCaps { entryCap?: number; totalCap?: number; maxEntries?: number }
 
 export const heavy = {
   sha256: (buf: Uint8Array) => call<string>('sha256', buf),
   /** `transfer` moves the bytes to the worker (no copy) — the caller must not touch `buf` afterwards. */
-  unzip: (buf: Uint8Array, entryCap?: number, transfer = false) => call<{ entries: ZipEntry[] }>('unzip', buf, entryCap ? { entryCap } : {}, transfer),
+  unzip: (buf: Uint8Array, caps: ArchiveCaps = {}, transfer = false) => call<ZipResult>('unzip', buf, caps as Record<string, unknown>, transfer),
   xlsxSheets: (buf: Uint8Array, csvCap?: number) => call<{ sheets: Array<{ name: string; csv: string }> }>('xlsxSheets', buf, csvCap ? { csvCap } : {}),
   pdfText: (buf: Uint8Array) => call<{ pages: string[] | null }>('pdfText', buf),
   pdfPageCount: (buf: Uint8Array) => call<number>('pdfPageCount', buf),
   pdfPageRange: (buf: Uint8Array, from: number, to: number) => call<Uint8Array>('pdfPageRange', buf, { from, to }),
-  rarExtract: (buf: Uint8Array, caps: { entryCap?: number; totalCap?: number; maxEntries?: number } = {}, transfer = false) => call<RarResult>('rarExtract', buf, caps, transfer),
+  rarExtract: (buf: Uint8Array, caps: ArchiveCaps = {}, transfer = false) => call<RarResult>('rarExtract', buf, caps as Record<string, unknown>, transfer),
 }

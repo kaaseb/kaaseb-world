@@ -46,9 +46,26 @@ const ops = {
     return { result: createHash('sha256').update(toBuf(buf)).digest('hex'), transfer: [] }
   },
 
-  /** ZIP → entries (junk skipped). Data transferred zero-copy back. */
-  unzip(buf, { entryCap = Infinity } = {}) {
-    const files = zipLib().unzipSync(buf, { filter: (f) => !junk(f.name) && f.originalSize <= entryCap })
+  /** ZIP → entries (junk skipped). Data transferred zero-copy back.
+   *  Every cap is decided INSIDE fflate's filter, i.e. BEFORE the entry is
+   *  decompressed: a zip bomb (thousands of entries each just under the
+   *  per-entry cap) must never be materialised first and rejected after. */
+  unzip(buf, { entryCap = Infinity, totalCap = Infinity, maxEntries = 400 } = {}) {
+    const skipped = []
+    let total = 0
+    let count = 0
+    const files = zipLib().unzipSync(buf, {
+      filter: (f) => {
+        if (junk(f.name)) return false
+        const size = Number(f.originalSize) || 0
+        if (size > entryCap) { skipped.push({ path: f.name, why: 'entry-cap' }); return false }
+        if (count >= maxEntries) { skipped.push({ path: f.name, why: 'max-entries' }); return false }
+        if (total + size > totalCap) { skipped.push({ path: f.name, why: 'total-cap' }); return false }
+        total += size
+        count++
+        return true
+      },
+    })
     const entries = []
     const transfer = []
     for (const p of Object.keys(files)) {
@@ -58,7 +75,7 @@ const ops = {
       entries.push({ path: p, data })
       transfer.push(data.buffer)
     }
-    return { result: { entries }, transfer: [...new Set(transfer)] }
+    return { result: { entries, skipped }, transfer: [...new Set(transfer)] }
   },
 
   /** Excel → [{ name, csv }] per sheet. */

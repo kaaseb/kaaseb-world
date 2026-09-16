@@ -168,8 +168,12 @@ export function ManualQuoteEditor({ initial }: { initial: ManualQuote }) {
     setSaving(true)
     try {
       // Terms first: the print page reads the SAVED override.
-      await termsRef.current?.flush()
+      const termsOk = await termsRef.current?.flush()
       await autosave.flush(true)
+      if (termsOk === false) {
+        toast.error(ar ? 'لم تُحفظ الشروط والأحكام — لم تُفتح الطباعة.' : 'Terms were not saved — printing was cancelled.', { duration: 12000 })
+        return
+      }
       toast.success(ar ? 'تم الحفظ ✓' : 'Saved ✓')
       if (thenPrint) window.open(`/print/manual-quote/${q.id}`, '_blank')
     } catch (e) { toast.error(e instanceof Error ? e.message : 'فشل الحفظ') } finally { setSaving(false) }

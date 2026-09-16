@@ -304,8 +304,23 @@ export function FurnDetail({ project: initialProject, extras, initialItems, init
   }
 
   async function deleteItem(id: string) {
+    // Optimistic, but reverted when the server refuses — a row that still
+    // exists server-side WILL appear on the quotation PDF, so the screen must
+    // never quietly disagree with the database.
+    const before = items
     setItems(prev => prev.filter(it => it.id !== id))
-    await fetch(`/api/furn/projects/${project.id}/items/${id}`, { method: 'DELETE' })
+    let ok = false
+    try {
+      const res = await fetch(`/api/furn/projects/${project.id}/items/${id}`, { method: 'DELETE' })
+      ok = res.ok
+      if (!ok) {
+        const j = await res.json().catch(() => ({}))
+        toast.error(j.error || (isRtl ? 'تعذّر حذف البند' : 'Could not delete the item'))
+      }
+    } catch {
+      toast.error(isRtl ? 'تعذّر حذف البند — تحقق من الاتصال' : 'Could not delete the item')
+    }
+    if (!ok) setItems(before)
   }
 
   async function deleteQuotation(qid: string) {
@@ -359,24 +374,30 @@ export function FurnDetail({ project: initialProject, extras, initialItems, init
       keepalive: ctx.leaving && body.length < 60_000,
       body,
     })
-    if (!res.ok) {
-      const j = await res.json().catch(() => ({}))
-      throw new Error(j.error || 'Save failed')
+    const j = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(j.error || 'Save failed')
+    if (Array.isArray(j.missing) && j.missing.length > 0) {
+      toast.error(isRtl
+        ? `${j.missing.length} بند لم يعد موجوداً (حُذف من جهاز آخر) — حدّث الصفحة قبل المتابعة.`
+        : `${j.missing.length} item(s) no longer exist (deleted elsewhere) — refresh before continuing.`,
+        { duration: 12000 })
     }
-  }, [project.id])
+  }, [project.id, isRtl])
 
   // Autosave: every edit in the table lands on the server ~1.5 s after the last
   // keystroke; leaving the tab flushes at once. The Save button stays as the
   // explicit safety net (and always saves, even when nothing changed).
   const autosave = useAutosave(items, persistItems, { delayMs: 1500, enabled: canEditPrices && !processing })
 
-  async function savePrices() {
+  async function savePrices(): Promise<boolean> {
     setSavingPrices(true)
     try {
       await autosave.flush(true)
       toast.success(t('furn_save_prices'))
+      return true
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Save failed')
+      return false
     } finally {
       setSavingPrices(false)
     }
@@ -387,10 +408,23 @@ export function FurnDetail({ project: initialProject, extras, initialItems, init
   // single render fails (the user can retry).
   async function sendQuotation() {
     setFinalizing(true)
-    await savePrices()
+    // The PDFs are rendered from the DATABASE. If the prices or the terms did
+    // not land, generating now would ship a quotation the pricer never saw —
+    // so a failed save stops the whole thing instead of being a passing toast.
+    const priced = await savePrices()
+    if (!priced) {
+      setFinalizing(false)
+      toast.error(isRtl ? 'لم تُحفظ الأسعار — لم يُنشأ العرض. حاول مرة أخرى.' : 'Prices were not saved — no quotation was created.', { duration: 12000 })
+      return
+    }
     // Terms before the PDF: the print page reads the SAVED override, so any edit
     // still sitting in the box must land first.
-    await termsRef.current?.flush()
+    const termsOk = await termsRef.current?.flush()
+    if (termsOk === false) {
+      setFinalizing(false)
+      toast.error(isRtl ? 'لم تُحفظ الشروط والأحكام — لم يُنشأ العرض.' : 'Terms were not saved — no quotation was created.', { duration: 12000 })
+      return
+    }
     const res = await fetch(`/api/furn/projects/${project.id}/finalize`, { method: 'POST' })
     const j = await res.json()
     setFinalizing(false)
@@ -697,14 +731,14 @@ export function FurnDetail({ project: initialProject, extras, initialItems, init
                               <Input
                                 value={it.description}
                                 onChange={e => patchItem(it.id, { description: e.target.value })}
-                                disabled={!canEditPrices}
+                                disabled={!canEditPrices || processing}
                                 className="h-8 text-xs font-medium"
                                 placeholder={t('furn_item_description')}
                               />
                               <Textarea
                                 value={it.details || ''}
                                 onChange={e => patchItem(it.id, { details: e.target.value })}
-                                disabled={!canEditPrices}
+                                disabled={!canEditPrices || processing}
                                 rows={2}
                                 className="text-[11px] leading-snug text-muted-foreground resize-y min-h-[2.25rem] py-1"
                                 placeholder={t('furn_item_details')}
@@ -738,7 +772,7 @@ export function FurnDetail({ project: initialProject, extras, initialItems, init
                                 type="number" min={0} step={0.01}
                                 value={it.quantity}
                                 onChange={e => patchItem(it.id, { quantity: Number(e.target.value) })}
-                                disabled={!canEditPrices}
+                                disabled={!canEditPrices || processing}
                                 className="h-8 text-xs"
                               />
                             </td>
@@ -746,7 +780,7 @@ export function FurnDetail({ project: initialProject, extras, initialItems, init
                               <Input
                                 value={it.unit}
                                 onChange={e => patchItem(it.id, { unit: e.target.value })}
-                                disabled={!canEditPrices}
+                                disabled={!canEditPrices || processing}
                                 className="h-8 text-xs"
                               />
                             </td>
@@ -755,7 +789,7 @@ export function FurnDetail({ project: initialProject, extras, initialItems, init
                                 type="number" min={0} step={0.01}
                                 value={it.unit_price ?? ''}
                                 onChange={e => patchItem(it.id, { unit_price: e.target.value === '' ? null : Number(e.target.value) })}
-                                disabled={!canEditPrices}
+                                disabled={!canEditPrices || processing}
                                 placeholder="—"
                                 className="h-8 text-xs"
                               />
@@ -778,7 +812,7 @@ export function FurnDetail({ project: initialProject, extras, initialItems, init
                               <Input
                                 value={it.notes || ''}
                                 onChange={e => patchItem(it.id, { notes: e.target.value })}
-                                disabled={!canEditPrices}
+                                disabled={!canEditPrices || processing}
                                 className="h-8 text-xs"
                               />
                             </td>

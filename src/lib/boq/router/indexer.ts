@@ -28,6 +28,8 @@ const cacheKey = (sha: string) => `app-data/boq-index/v${INDEX_VERSION}-${sha}.j
 const PAGE_ANCHOR_CHARS = 110
 const SHEET_TEXT_CAP = 18_000
 const MAX_FILE_BYTES = 80 * 1024 * 1024 // refuse to buffer anything bigger
+// Bounds for expanding a ZIP attachment (enforced before decompression).
+const ZIP_CAPS = { entryCap: MAX_FILE_BYTES, totalCap: 600 * 1024 * 1024, maxEntries: 400 }
 
 // ─── fetching (zip-aware) ───────────────────────────────────────────────────
 
@@ -60,7 +62,7 @@ export async function fetchSources(
   // Unzipped OFF the request thread (a drawing set can be hundreds of MB).
   let entries: Array<{ path: string; data: Uint8Array }>
   try {
-    entries = (await heavy.unzip(new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength))).entries
+    entries = (await heavy.unzip(new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength), ZIP_CAPS)).entries
   } catch {
     throw new Error('ملف ZIP تالف')
   }
@@ -80,7 +82,7 @@ export async function refetchBytes(file: IndexedFile): Promise<Buffer> {
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   let buf: Buffer = Buffer.from(await res.arrayBuffer())
   if (file.source.zipEntry) {
-    const { entries } = await heavy.unzip(new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength))
+    const { entries } = await heavy.unzip(new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength), ZIP_CAPS)
     const hit = entries.find((e) => e.path === file.source.zipEntry)
     if (!hit) throw new Error('اختفى الملف من داخل الـZIP')
     buf = Buffer.from(hit.data.buffer, hit.data.byteOffset, hit.data.byteLength)

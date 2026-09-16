@@ -303,7 +303,13 @@ async function resolveGoFile(u: URL): Promise<Resolution> {
   }
   const files: RemoteFile[] = []
   for (const ch of Object.values(j.data?.children || {})) {
-    if (ch.type === 'file' && ch.link) files.push({ url: ch.link, name: ch.name, jar })
+    if (ch.type === 'file' && ch.link) {
+      // The jar is keyed by EXACT host: a download on store5.gofile.io carries
+      // no token unless it is recorded for that host too (otherwise GoFile
+      // answers with an HTML page and the fetch is reported as "not a file").
+      try { jar.absorb(new URL(ch.link).hostname, `accountToken=${token}`) } catch { /* keep going */ }
+      files.push({ url: ch.link, name: ch.name, jar })
+    }
     if (files.length >= FOLDER_FILE_CAP) break
   }
   if (files.length === 0) return { status: 'notFound', provider, message: 'مجلد GoFile فارغ' }

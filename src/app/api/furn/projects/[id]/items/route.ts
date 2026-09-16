@@ -36,6 +36,10 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   // a time keeps RLS / per-row checks simple and the payload is small (a few
   // hundred items at most per project).
   const errors: string[] = []
+  // Rows the update matched nothing for — deleted by someone else since this
+  // tab loaded. Reporting them is the difference between "autosaved ✓" and the
+  // truth ("that row is gone; your edit was not stored anywhere").
+  const missing: string[] = []
   for (const it of body.items) {
     if (!it.id) continue
     const patch: Record<string, unknown> = { updated_at: new Date().toISOString() }
@@ -48,12 +52,14 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     }
     if (typeof it.notes === 'string' || it.notes === null) patch.notes = it.notes
 
-    const { error } = await supabase.from('furn_items').update(patch).eq('id', it.id).eq('project_id', id)
+    const { data, error } = await supabase
+      .from('furn_items').update(patch).eq('id', it.id).eq('project_id', id).select('id')
     if (error) errors.push(`${it.id}: ${error.message}`)
+    else if (!data || data.length === 0) missing.push(it.id)
   }
 
   if (errors.length > 0) return NextResponse.json({ error: errors.join('; ') }, { status: 500 })
-  return NextResponse.json({ ok: true })
+  return NextResponse.json({ ok: true, missing })
 }
 
 // POST /api/furn/projects/[id]/items — append a manual item (admin override)

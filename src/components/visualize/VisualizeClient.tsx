@@ -182,8 +182,12 @@ export function VisualizeClient({ products, images, topProductIds, isSuperAdmin 
     // per open tab forever.
     const every = processingCountForPoll > 0 ? 5000 : 45_000
     const t = setInterval(() => { if (!document.hidden) void refetch() }, every)
+    // Ticks are skipped while hidden — catch up once on return so a render that
+    // finished in the background shows immediately.
+    const onShow = () => { if (!document.hidden) void refetch() }
+    document.addEventListener('visibilitychange', onShow)
     const models = setTimeout(loadImageModels, 0)
-    return () => { clearTimeout(first); clearInterval(t); clearTimeout(models) }
+    return () => { clearTimeout(first); clearInterval(t); clearTimeout(models); document.removeEventListener('visibilitychange', onShow) }
   }, [refetch, loadImageModels, processingCountForPoll])
 
   function toggleSurface(k: string) {

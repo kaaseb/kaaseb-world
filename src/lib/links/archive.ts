@@ -56,6 +56,11 @@ export async function extractArchive(kind: ArchiveKind, buf: Uint8Array, sink: E
   let total = 0
   let count = 0
   let overflowNoted = false
+  const noteSkip = (s: { path: string; why: string }) => {
+    if (s.why === 'entry-cap') notices.push(`تخطّي «${displayName(s.path)}» — أكبر من ${mb(ENTRY_CAP)}MB`)
+    else if (s.why === 'total-cap') notices.push(`تخطّي «${displayName(s.path)}» — تجاوز الحجم الكلي المسموح`)
+    else if (!overflowNoted) { overflowNoted = true; notices.push(`تجاوز الأرشيف ${MAX_ENTRIES} ملف — تم أخذ الأوائل فقط`) }
+  }
   const take = async (path: string, data: Uint8Array) => {
     if (count >= MAX_ENTRIES) { if (!overflowNoted) { overflowNoted = true; notices.push(`تجاوز الأرشيف ${MAX_ENTRIES} ملف — تم أخذ الأوائل فقط`) } return }
     if (data.length === 0) return
@@ -67,13 +72,15 @@ export async function extractArchive(kind: ArchiveKind, buf: Uint8Array, sink: E
   }
 
   if (kind === 'zip') {
-    let entries: Array<{ path: string; data: Uint8Array }>
+    let z
     try {
-      entries = (await heavy.unzip(buf, ENTRY_CAP, true)).entries // bytes moved, not copied
+      // Caps are enforced inside the worker, before anything is decompressed.
+      z = await heavy.unzip(buf, { entryCap: ENTRY_CAP, totalCap: TOTAL_CAP, maxEntries: MAX_ENTRIES }, true) // bytes moved, not copied
     } catch (e) {
       throw new Error(`تعذّر فتح ملف ZIP — ${e instanceof Error ? e.message : 'تالف أو مشفّر'}`)
     }
-    for (const en of entries) await take(en.path, en.data)
+    for (const s of z.skipped || []) noteSkip(s)
+    for (const en of z.entries) await take(en.path, en.data)
     return { count, notices }
   }
 
@@ -85,11 +92,7 @@ export async function extractArchive(kind: ArchiveKind, buf: Uint8Array, sink: E
       throw new Error(`تعذّر فتح ملف RAR — ${e instanceof Error ? e.message : 'تالف'}`)
     }
     if (r.encrypted) throw new Error('ملف RAR محمي بكلمة مرور — افتحه وحمّل الملفات ثم ارفعها')
-    for (const s of r.skipped) {
-      if (s.why === 'entry-cap') notices.push(`تخطّي «${displayName(s.path)}» — أكبر من ${mb(ENTRY_CAP)}MB`)
-      else if (s.why === 'total-cap') notices.push(`تخطّي «${displayName(s.path)}» — تجاوز الحجم الكلي المسموح`)
-      else if (!overflowNoted) { overflowNoted = true; notices.push(`تجاوز الأرشيف ${MAX_ENTRIES} ملف — تم أخذ الأوائل فقط`) }
-    }
+    for (const s of r.skipped) noteSkip(s)
     for (const en of r.entries) await take(en.path, en.data)
     return { count, notices }
   }

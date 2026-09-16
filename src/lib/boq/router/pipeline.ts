@@ -526,7 +526,8 @@ export async function runBoqRouter(input: RouterInput): Promise<RouterResult> {
 
   let specEntries: SpecEntry[] = []
   let specPagesRead = 0
-  const specJob = readable.length > 0 || input.projectNotes
+  // No rows → nothing to fill; the harvest would be pure cost.
+  const specJob = boq.rows.length > 0 && (readable.length > 0 || input.projectNotes)
     ? harvestSpecs(readable, input.projectNotes ?? null, log)
         .then((r) => { specEntries = r.entries; specPagesRead = r.pagesRead; log(`phase2½: ${r.entries.length} spec entries (${r.pagesRead} pages read, ${r.pagesFromCache} cached)`) })
         .catch((e) => log(`spec harvest failed: ${e instanceof Error ? e.message : e}`))
@@ -718,7 +719,10 @@ export async function runBoqRouter(input: RouterInput): Promise<RouterResult> {
       }
       // A field the row's own text already states is left alone — a file may
       // fill a GAP, never contradict "polished" with "honed" on the same line.
-      const stated = statedFields(`${row.description} ${details || ''}`)
+      // The ROW's own words — not `details`, which by now carries our own
+      // appended values and ⚠ warning lines (a warning naming "A-301" would
+      // otherwise look like the row citing code A-301).
+      const stated = statedFields(`${row.description} ${row.details || ''}`)
       const already = (w: string | null) => !!w && normalizeText(details || '').includes(normalizeText(w))
       if (a.finish && !stated.has('finish') && !already(a.finish)) parts.push(a.finish)
       if (a.size && !stated.has('size') && !already(a.size)) parts.push(a.size)
@@ -737,11 +741,11 @@ export async function runBoqRouter(input: RouterInput): Promise<RouterResult> {
     // A blanket clause is an ASSUMPTION: it's cited as such and caps confidence,
     // so the pricer sees "20mm per spec §9.3 (general)" and knows to confirm.
     const have = attrs?.attrs ?? EMPTY_ATTRS
-    const statedByRow = statedFields(`${row.description} ${details || ''}`)
+    const statedByRow = statedFields(`${row.description} ${row.details || ''}`)
     const stillMissing = missingAttrs(have)
       .filter((k) => (k === 'thickness_mm' ? thicknessFromText(details) === null : !statedByRow.has(k)))
     if (stillMissing.length > 0 && specEntries.length > 0) {
-      const m = matchSpec({ description: row.description, details, section: row.section, department_match: row.department_match }, specEntries)
+      const m = matchSpec({ description: row.description, details: row.details, section: row.section, department_match: row.department_match }, specEntries)
       if (m) {
         const already = (w: string | null) => !!w && normalizeText(details || '').includes(normalizeText(w))
         const parts: string[] = []

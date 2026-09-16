@@ -9,12 +9,16 @@ let _browser: Promise<Browser> | null = null
 let _stopTimer: NodeJS.Timeout | null = null
 
 async function getBrowser(): Promise<Browser> {
+  if (_stopTimer) { clearTimeout(_stopTimer); _stopTimer = null } // a render is starting
   if (_browser) return _browser
   const puppeteer = (await import('puppeteer')).default
   _browser = puppeteer.launch({
     headless: true,
     args: ['--no-sandbox', '--disable-setuid-sandbox', '--font-render-hinting=none'],
   })
+  // A failed launch must NOT be cached: the next call would keep replaying the
+  // same error (out of memory once = no PDFs ever again until a restart).
+  _browser.catch(() => { _browser = null })
   return _browser
 }
 

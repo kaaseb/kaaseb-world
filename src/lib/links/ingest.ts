@@ -17,7 +17,12 @@ import { resolveLink, driveConfirmUrl, looksLikeLogin, type RemoteFile, type Res
 import { archiveKind, extractArchive } from './archive'
 
 export const MAX_DOWNLOAD_BYTES = 300 * 1024 * 1024
+// One budget for the WHOLE link: a folder of 200 files each just under the
+// per-file cap would otherwise pull ~60GB through the server and into S3.
+const MAX_TOTAL_BYTES = 600 * 1024 * 1024
 const MAX_FILES_PER_LINK = 250
+// Never stored, whatever the remote server calls them.
+const BLOCKED_EXT = /\.(exe|dll|scr|bat|cmd|com|msi|jar|apk|sh|ps1|vbs|hta|lnk|reg|iso)$/i
 
 export interface IngestedFile { url: string; key: string; bytes: number; name: string }
 export interface IngestResult {
@@ -33,18 +38,28 @@ const MIME_BY_EXT: Record<string, string> = {
   xls: 'application/vnd.ms-excel', csv: 'text/csv', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   doc: 'application/msword', txt: 'text/plain', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif',
 }
-function mimeFor(name: string, declared?: string): string {
+/** The type we SERVE this file as. Only types we recognise by extension are
+ *  honoured; anything else is stored opaquely instead of under a content type
+ *  the remote server chose — a public bucket must never serve, say,
+ *  `application/x-msdownload` on the company's own domain. */
+function mimeFor(name: string): string {
   const ext = (name.split('.').pop() || '').toLowerCase()
-  return MIME_BY_EXT[ext] || (declared && !/octet-stream|binary/.test(declared) ? declared : 'application/octet-stream')
+  return MIME_BY_EXT[ext] || 'application/octet-stream'
 }
 
-async function download(f: RemoteFile): Promise<{ ok: true; name: string; buf: Buffer; contentType: string } | { ok: false; error: string }> {
+async function download(f: RemoteFile, cap: number): Promise<{ ok: true; name: string; buf: Buffer; contentType: string } | { ok: false; error: string }> {
   let r = await safeFetch(f.url, { jar: f.jar, headers: f.headers })
   if (!r.ok) return { ok: false, error: r.error }
   let status = r.res.statusCode || 0
   let ctype = String(r.res.headers['content-type'] || '').toLowerCase()
   // Google Drive's virus-scan interstitial for big files: submit its form once.
-  if (status === 200 && isHtml(ctype) && /google\.com/.test(f.url)) {
+  // Host-matched, not substring-matched: "https://attacker.example/?x=google.com"
+  // used to enter this branch, and the branch follows a form action out of the
+  // page it was handed.
+  let host = ''
+  try { host = new URL(f.url).hostname.toLowerCase() } catch { /* handled below */ }
+  const isGoogle = host === 'google.com' || host.endsWith('.google.com')
+  if (status === 200 && isHtml(ctype) && isGoogle) {
     const html = (await readCapped(r.res, 2 * 1024 * 1024))?.toString('utf8') || ''
     const next = driveConfirmUrl(html)
     if (!next) return { ok: false, error: looksLikeLogin(r.hops, html) ? 'يطلب تسجيل دخول Google (الملف غير عام)' : 'Google Drive رد بصفحة بدل الملف' }
@@ -59,9 +74,9 @@ async function download(f: RemoteFile): Promise<{ ok: true; name: string; buf: B
     return { ok: false, error: looksLikeLogin(r.hops, html) ? 'يطلب تسجيل دخول' : 'الرابط صفحة ويب لا ملف مباشر' }
   }
   const declared = Number(r.res.headers['content-length'] || 0)
-  if (declared > MAX_DOWNLOAD_BYTES) { r.res.destroy(); return { ok: false, error: `أكبر من الحد (${Math.round(MAX_DOWNLOAD_BYTES / 1048576)}MB)` } }
-  const buf = await readCapped(r.res, MAX_DOWNLOAD_BYTES)
-  if (buf === null) return { ok: false, error: `أكبر من الحد (${Math.round(MAX_DOWNLOAD_BYTES / 1048576)}MB)` }
+  if (declared > cap) { r.res.destroy(); return { ok: false, error: `أكبر من الحد المتاح (${Math.round(cap / 1048576)}MB)` } }
+  const buf = await readCapped(r.res, cap)
+  if (buf === null) return { ok: false, error: `أكبر من الحد المتاح (${Math.round(cap / 1048576)}MB)` }
   if (buf.byteLength === 0) return { ok: false, error: 'الملف فارغ' }
   const name = f.name || filenameFrom(r.res.headers, r.finalUrl)
   return { ok: true, name, buf, contentType: ctype.split(';')[0] }
@@ -84,14 +99,17 @@ export async function ingestLink(o: IngestOptions): Promise<IngestResult> {
 
   const files: IngestedFile[] = []
   const notices: string[] = []
-  const folder = (o.folder || o.userId).replace(/[^a-zA-Z0-9._-]/g, '').slice(0, 64) || o.userId
+  // Dots are dropped, not kept: a folder of ".." produced a key like
+  // "furn/../link-…pdf" — stored, billed, and unreachable through any client.
+  const folder = (o.folder || o.userId).replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64) || o.userId
   const seenKeys = new Set<string>()
 
-  const store = async (name: string, data: Uint8Array, declaredType?: string) => {
+  const store = async (name: string, data: Uint8Array) => {
     if (files.length >= MAX_FILES_PER_LINK) { notices.push(`تجاوز الرابط ${MAX_FILES_PER_LINK} ملف — أُخذت الأوائل`); return }
-    const contentType = mimeFor(name, declaredType)
+    const contentType = mimeFor(name)
     // A web page is never a project file — and the bucket must never host HTML.
-    if (/html|xhtml|javascript|svg/.test(contentType) || /\.(html?|xhtml|js|mjs|svg)$/i.test(name)) { notices.push(`تخطّي «${name}» — صفحة ويب لا ملف`); return }
+    if (/\.(html?|xhtml|js|mjs|svg)$/i.test(name)) { notices.push(`تخطّي «${name}» — صفحة ويب لا ملف`); return }
+    if (BLOCKED_EXT.test(name)) { notices.push(`تخطّي «${name}» — ملف تنفيذي`); return }
     if (!mimeAllowed(policy, contentType) && !mimeAllowed(policy, 'application/octet-stream')) { notices.push(`تخطّي «${name}» — نوع غير مسموح`); return }
     const buffer = Buffer.from(data.buffer, data.byteOffset, data.byteLength)
     const key = `${o.kind}/${folder}/link-${o.userId.slice(0, 6)}-${safeNameStem(name)}-${buffer.byteLength}.${safeExtension(name)}`
@@ -117,11 +135,14 @@ export async function ingestLink(o: IngestOptions): Promise<IngestResult> {
     return true
   }
 
+  let remaining = MAX_TOTAL_BYTES
   for (const rf of res.files) {
-    const d = await download(rf)
+    if (remaining <= 0) { notices.push(`تجاوز الرابط الحد الكلي (${Math.round(MAX_TOTAL_BYTES / 1048576)}MB) — أُخذت الملفات الأولى`); break }
+    const d = await download(rf, Math.min(MAX_DOWNLOAD_BYTES, remaining))
     if (!d.ok) { notices.push(`${rf.name || rf.url.split('/').pop() || 'ملف'}: ${d.error}`); continue }
+    remaining -= d.buf.byteLength
     const opened = await unpack(d.name, d.buf, 1)
-    if (!opened) await store(d.name, d.buf, d.contentType)
+    if (!opened) await store(d.name, d.buf)
   }
 
   if (files.length === 0) {

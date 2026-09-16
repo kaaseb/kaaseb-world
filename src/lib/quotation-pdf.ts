@@ -21,6 +21,7 @@ let _browser: Promise<Browser> | null = null
 let _stopTimer: NodeJS.Timeout | null = null
 
 async function getBrowser(): Promise<Browser> {
+  if (_stopTimer) { clearTimeout(_stopTimer); _stopTimer = null } // a render is starting
   if (_browser) return _browser
   // Lazy-import so this module doesn't pull Puppeteer into bundles that
   // never call it (e.g. anything that imports `@/lib/s3` for upload only).
@@ -41,6 +42,9 @@ async function getBrowser(): Promise<Browser> {
       '--font-render-hinting=none', // crisper Arabic glyphs
     ],
   })
+  // A failed launch must NOT be cached: the next call would keep replaying the
+  // same error (out of memory once = no PDFs ever again until a restart).
+  _browser.catch(() => { _browser = null })
   return _browser
 }
 
@@ -70,8 +74,15 @@ export interface RenderQuotationInput {
 // Renders are serialised: two Chromium page loads at once double the CPU
 // spike on a small VPS and make every other request lag. AR then EN is fine.
 let _chain: Promise<unknown> = Promise.resolve()
+const RENDER_TIMEOUT_MS = 120_000
 function serialized<T>(fn: () => Promise<T>): Promise<T> {
-  const next = _chain.then(fn, fn)
+  // A render that never settles (OOM-killed Chromium keeping its CDP socket
+  // open) would otherwise wedge EVERY later quotation behind it, process-wide.
+  const guarded = () => new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('تعذّر توليد الـPDF — تجاوز المهلة')), RENDER_TIMEOUT_MS)
+    fn().then(resolve, reject).finally(() => clearTimeout(timer))
+  })
+  const next = _chain.then(guarded, guarded)
   _chain = next.catch(() => {})
   return next
 }

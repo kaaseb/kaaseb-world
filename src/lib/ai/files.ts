@@ -29,6 +29,9 @@ const EXCEL_MIMES = new Set([
 
 const VIDEO_EXTS = new Set(['mp4', 'mov', 'avi', 'mkv', 'webm', 'flv', 'wmv', 'm4v', '3gp'])
 
+// Bounds for expanding an uploaded ZIP (a zip bomb must die in the worker).
+const ZIP_CAPS = { entryCap: 120 * 1024 * 1024, totalCap: 600 * 1024 * 1024, maxEntries: 400 }
+
 // Below this much extracted text we treat a PDF as scanned/image-only and send
 // it for vision instead of as (near-empty) text.
 // A page with less than this is furniture — a title block, a stamp, a page
@@ -167,7 +170,8 @@ export async function fetchAiFiles(url: string, label: string, opts: FetchOpts =
     const out: AiFile[] = []
     let entries: Array<{ path: string; data: Uint8Array }>
     try {
-      entries = (await heavy.unzip(new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength))).entries // junk entries already skipped
+      // Capped: an uploaded ZIP is client input like any other.
+      entries = (await heavy.unzip(new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength), ZIP_CAPS)).entries
     } catch {
       return [] // corrupt / unsupported zip — skip rather than crash the run
     }

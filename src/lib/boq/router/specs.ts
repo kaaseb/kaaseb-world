@@ -196,14 +196,22 @@ async function harvestVisualPage(file: IndexedFile, page: number): Promise<Store
     ? { data: (await extractPdfPageRange(buf, page, page)).toString('base64'), mimeType: 'application/pdf', label: `${file.name} — صفحة ${page}` }
     : { data: buf.toString('base64'), mimeType: mime, label: file.name }
   const provider = await getProvider()
-  const once = (tag: string) => withTimeout(
+  // The two reads must be genuinely DIFFERENT questions, not the same request
+  // sent twice: an identical prompt at temperature 0 mostly re-approves its own
+  // first answer, which is not verification. Different framing + a little
+  // entropy makes the agreement gate mean something.
+  const once = (tag: 'أ' | 'ب') => withTimeout(
     provider.generateStructured<RawSpec>({
-      systemInstruction: SYSTEM + ' الصفحة صورة: اقرأ فقط ما هو مكتوب فعلاً (جداول الرموز والمواد والملاحظات المكتوبة)؛ ممنوع القياس من الرسم.',
+      systemInstruction: SYSTEM + (tag === 'أ'
+        ? ' الصفحة صورة: اقرأ فقط ما هو مكتوب فعلاً (جداول الرموز والمواد والملاحظات المكتوبة)؛ ممنوع القياس من الرسم.'
+        : ' الصفحة صورة. اقرأها من جديد صفاً صفاً من الأسفل إلى الأعلى، وتحقّق من كل رقم حرفاً حرفاً قبل كتابته (٣٠ ليست ٨٠، و20 ليست 200). لا تكتب إلا ما تراه مكتوباً بوضوح؛ ما كان غير واضح اتركه فارغاً. ممنوع القياس من الرسم.'),
       files: [aiFile],
-      userText: 'استخرج تعريفات المواد الحجرية المكتوبة في هذه الصفحة. JSON فقط.',
+      userText: tag === 'أ'
+        ? 'استخرج تعريفات المواد الحجرية المكتوبة في هذه الصفحة. JSON فقط.'
+        : 'اقرأ هذه الصفحة من جديد واكتب تعريفات المواد الحجرية كما هي مكتوبة، مع التدقيق في الأرقام. JSON فقط.',
       schema: SPEC_SCHEMA,
       schemaName: 'spec_entries_visual',
-      temperature: 0,
+      temperature: tag === 'أ' ? 0 : 0.2,
     }),
     AI_CALL_TIMEOUT_MS,
     `مواصفات بصرية ${tag} ${file.name} ص${page}`,
@@ -212,7 +220,9 @@ async function harvestVisualPage(file: IndexedFile, page: number): Promise<Store
   const a = parseEntries(await once('أ')).map((x) => x.entry)
   if (a.length === 0) return []
   const b = parseEntries(await once('ب')).map((x) => x.entry)
-  const key = (e: { code: string | null; name: string | null }) => normalizeText(e.code || e.name || '')
+  // Pair on the same normalisation the matcher uses, and fall back to the name
+  // when one read transcribed the code column and the other did not.
+  const key = (e: { code: string | null; name: string | null }) => normCode(e.code) || normalizeText(e.name || '')
   const out: StoredEntry[] = []
   for (const ea of a) {
     const k = key(ea)
@@ -260,7 +270,10 @@ export async function harvestSpecs(
             ? await harvestVisualPage(file, pk.page)
             : await harvestTextPage(pageObj?.text || '', `${file.name} ص${pk.page}`)
           stored = stored.map((e) => ({ ...e, page: pk.page }))
-          fresh[k] = stored
+          // A text page that yielded nothing really has nothing (same input,
+          // same model) — cache it. A VISUAL page may have yielded nothing only
+          // because the two reads disagreed, so never freeze that as "empty".
+          if (!pk.visual || stored.length > 0) fresh[k] = stored
           pagesRead++
           log(`مواصفات ${file.name} ص${pk.page}: ${stored.length} تعريف`)
         } catch (e) {
@@ -294,25 +307,49 @@ export async function harvestSpecs(
 
 // ─── what a row already states (never contradicted by a file) ───────────────
 
-const FINISH_RE = /\b(polished|honed|flamed|bush[- ]?hammered|sand[- ]?blast(?:ed)?|leather(?:ed)?|tumbled|brushed|antiqued|matt?e?|glossy|riven|split[- ]face)\b|مصقول|مطفي|ملمع|محروق|مفرش|مطرق|مجلّد|مجلد|لامع/i
-const SIZE_RE = /\d+\s*[x×*]\s*\d+|\b(slabs?|tiles?|cut[- ]to[- ]size|random|free[- ]length)\b|مقاس|شرائح|بلاط|قطع حسب/i
+// English phrasings that genuinely pin a field. Arabic is matched as WHOLE
+// TOKENS, never as a substring: a bare "قص" inside "مقصورة" is not a cutting
+// method, and "بلاط" ("tiles") is a form factor, not a size.
+const FINISH_EN = /\b(polished|honed|flamed|bush[- ]?hammered|sand[- ]?blast(?:ed)?|leather(?:ed)?|tumbled|brushed|antiqued|matte?|glossy|riven|split[- ]face)\b/i
+// Only a REAL dimension (or an explicit "cut to size" / "random") pins the size.
+// "tiles" / "slabs" / "بلاط" say what SHAPE the stone comes in, not what size —
+// treating them as a stated size stopped the spec's 600x600 from ever being
+// filled in, which is exactly what this feature exists to do.
+const SIZE_EN = /\d+\s*[x×*]\s*\d+|\b(cut[- ]to[- ]size|random sizes?|free[- ]length)\b/i
 // Colour words + the trade names that ARE the colour in this industry (Crema
 // Marfil, Nero Marquina, Calacatta…): a row naming one has its colour pinned.
-const COLOUR_RE = /\b(white|black|grey|gray|beige|cream|brown|green|red|blue|gold|golden|yellow|pink|ivory|silver|crema|marfil|carrara|calacatta|statuario|botticino|emperador|marquina|galaxy|kashmir|absolute|nero|bianco|rosso|verde|giallo|grigio|perlato|travertino|thassos|volakas|pietra|jura|moca|arabescato)\b|أبيض|ابيض|أسود|اسود|رمادي|بيج|كريمي|بني|أخضر|اخضر|أحمر|احمر|أزرق|ازرق|ذهبي|أصفر|اصفر|وردي|عاجي|فضي/i
-const TREATMENT_RE = /\b(seal(?:ed|er|ant)?|impregnat\w*|anti[- ]?slip|non[- ]?slip|wax(?:ed)?|crystalli[sz]\w*|coat(?:ed|ing)?|epoxy)\b|مانع|انزلاق|معالج|شمع|طلاء|ايبوكسي|إيبوكسي/i
-const CUT_RE = /\b(water[- ]?jet|bullnose|bevel(?:led)?|mitred?|mitered?|chamfer(?:ed)?|eased edge|pencil edge|ogee|half[- ]?bullnose|book[- ]?match(?:ed)?)\b|حافة|حواف|قص|ووتر ?جت|شطف/i
+const COLOUR_EN = /\b(white|black|grey|gray|beige|cream|brown|green|red|blue|gold|golden|yellow|pink|ivory|silver|crema|marfil|carrara|calacatta|statuario|botticino|emperador|marquina|galaxy|kashmir|absolute|nero|bianco|rosso|verde|giallo|grigio|perlato|travertino|thassos|volakas|pietra|jura|moca|arabescato)\b/i
+const TREATMENT_EN = /\b(seal(?:ed|er|ant)?|impregnat\w*|anti[- ]?slip|non[- ]?slip|wax(?:ed)?|crystalli[sz]\w*|coat(?:ed|ing)?|epoxy)\b/i
+const CUT_EN = /\b(water[- ]?jet|bullnose|bevel(?:led)?|mitred?|mitered?|chamfer(?:ed)?|eased edge|pencil edge|ogee|half[- ]?bullnose|book[- ]?match(?:ed)?)\b/i
+
+// Pre-normalised so they compare against normalizeText's output (ة→ه, أ→ا…).
+const arSet = (list: string[]) => new Set(list.map((w) => normalizeText(w)).filter(Boolean))
+const AR_FINISH = arSet(['مصقول', 'مطفي', 'ملمع', 'محروق', 'مفرش', 'مطرق', 'مجلد', 'لامع', 'منعم'])
+const AR_SIZE = arSet(['مقاس', 'مقاسات', 'أبعاد', 'ابعاد'])
+const AR_COLOUR = arSet(['أبيض', 'أسود', 'رمادي', 'بيج', 'كريمي', 'بني', 'أخضر', 'أحمر', 'أزرق', 'ذهبي', 'أصفر', 'وردي', 'عاجي', 'فضي'])
+const AR_TREATMENT = arSet(['معالجة', 'معالج', 'شمع', 'طلاء', 'إيبوكسي', 'مانع', 'انزلاق'])
+const AR_CUT = arSet(['قص', 'قصة', 'حافة', 'حواف', 'شطف'])
+
+function tokensOf(text: string): Set<string> {
+  return new Set(normalizeText(text).split(/[\s.]+/).filter(Boolean))
+}
+function hasAny(toks: Set<string>, words: Set<string>): boolean {
+  for (const w of words) if (toks.has(w)) return true
+  return false
+}
 
 /** Attribute fields the row's own text already pins down. Used so a file
  *  never appends "honed" under a row the BOQ says is "polished". */
 export function statedFields(text: string | null | undefined): Set<typeof ATTR_KEYS[number]> {
   const t = text || ''
+  const toks = tokensOf(t)
   const out = new Set<typeof ATTR_KEYS[number]>()
-  if (FINISH_RE.test(t)) out.add('finish')
-  if (SIZE_RE.test(t)) out.add('size')
-  if (COLOUR_RE.test(t)) out.add('colour')
+  if (FINISH_EN.test(t) || hasAny(toks, AR_FINISH)) out.add('finish')
+  if (SIZE_EN.test(t) || hasAny(toks, AR_SIZE)) out.add('size')
+  if (COLOUR_EN.test(t) || hasAny(toks, AR_COLOUR)) out.add('colour')
   if (materialOf(t)) out.add('material')
-  if (TREATMENT_RE.test(t)) out.add('treatment')
-  if (CUT_RE.test(t)) out.add('cut')
+  if (TREATMENT_EN.test(t) || hasAny(toks, AR_TREATMENT)) out.add('treatment')
+  if (CUT_EN.test(t) || hasAny(toks, AR_CUT)) out.add('cut')
   return out
 }
 
@@ -349,6 +386,36 @@ const STOP = new Set(['and', 'the', 'for', 'all', 'with', 'from', 'this', 'that'
 function words(s: string): Set<string> {
   return new Set(normalizeText(s).split(/[\s.]+/).filter((w) => w.length >= 3 && !STOP.has(w)))
 }
+function tokenList(s: string): string[] {
+  return normalizeText(s).split(/[\s.]+/).filter(Boolean)
+}
+/** Whole-token containment: "Jura Beige" must NOT match "Jurassic Grey", and
+ *  the colour "Gold" must not match "Golden Beige". Substring matching did. */
+function hasPhrase(rowTokens: Set<string>, phrase: string): boolean {
+  const parts = tokenList(phrase).filter((w) => w.length >= 3)
+  return parts.length > 0 && parts.every((w) => rowTokens.has(w))
+}
+// Generic colour words are weak evidence ("grey veins" is not a colour match);
+// a trade name ("Crema Marfil") is strong.
+const GENERIC_COLOUR = new Set(['white', 'black', 'grey', 'gray', 'beige', 'cream', 'brown', 'green', 'red', 'blue', 'gold', 'golden', 'yellow', 'pink', 'ivory', 'silver'])
+
+interface Derived { material: Material | null; code: string; name: string; colour: string; applies: Set<string> }
+const derivedCache = new WeakMap<SpecEntry, Derived>()
+function derive(e: SpecEntry): Derived {
+  let d = derivedCache.get(e)
+  if (d) return d
+  d = {
+    // NOT inferred from the quote: a "MARBLE & GRANITE SCHEDULE" heading would
+    // type every entry on the page as marble and cross-wire both materials.
+    material: materialOf(e.attrs.material) || materialOf(e.name),
+    code: normCode(e.code),
+    name: e.name ? normalizeText(e.name) : '',
+    colour: e.attrs.colour ? normalizeText(e.attrs.colour) : '',
+    applies: e.appliesTo ? words(e.appliesTo) : new Set<string>(),
+  }
+  derivedCache.set(e, d)
+  return d
+}
 
 export interface SpecMatch {
   attrs: ResolvedAttrs
@@ -365,37 +432,39 @@ export interface MatchRow { description: string; details: string | null; section
 export function matchSpec(row: MatchRow, entries: SpecEntry[]): SpecMatch | null {
   if (entries.length === 0) return null
   const rawText = [row.description, row.details || '', row.section || ''].join(' ')
-  const rowText = normalizeText(rawText)
+  const rowTokens = new Set(tokenList(rawText))
   const rowWords = words(rawText)
   const rowCodes = codesIn(rawText)
   const rowMaterial = materialOf(rawText) || materialOf(row.department_match)
 
-  const scored: Array<{ e: SpecEntry; score: number; generic: boolean }> = []
+  // A hit must be STRONG to count as a fact about this row; anything weaker is
+  // still offered, but flagged as an assumption (capped confidence, and the
+  // source line says so). One shared word like "floor" is not a fact.
+  const STRONG = 30
+  const scored: Array<{ e: SpecEntry; score: number }> = []
   for (const e of entries) {
-    const entryMaterial = materialOf(e.attrs.material) || materialOf(e.name) || materialOf(e.quote)
-    if (rowMaterial && entryMaterial && rowMaterial !== entryMaterial) continue // granite spec ≠ marble row
+    const d = derive(e)
+    if (rowMaterial && d.material && rowMaterial !== d.material) continue // granite spec ≠ marble row
     let score = 0
-    let generic = false
-    const code = normCode(e.code)
-    if (code && rowCodes.has(code)) score += 100
-    const name = e.name ? normalizeText(e.name) : ''
-    if (name.length >= 4 && rowText.includes(name)) score += 60
-    const colour = e.attrs.colour ? normalizeText(e.attrs.colour) : ''
-    if (colour.length >= 4 && colour !== name && rowText.includes(colour)) score += 50
-    if (e.appliesTo) {
-      let overlap = 0
-      for (const w of words(e.appliesTo)) if (rowWords.has(w)) overlap++
-      score += Math.min(overlap, 3) * 15
+    if (d.code && rowCodes.has(d.code)) score += 100
+    if (hasPhrase(rowTokens, d.name)) score += 60
+    if (d.colour && d.colour !== d.name && hasPhrase(rowTokens, d.colour)) {
+      score += GENERIC_COLOUR.has(d.colour) ? 15 : 50
     }
-    if (score === 0 && e.scope === 'general' && rowMaterial && entryMaterial === rowMaterial) { score = 10; generic = true }
-    if (!entryMaterial) score -= 5
-    if (score > 0) scored.push({ e, score, generic })
+    if (d.applies.size > 0) {
+      let overlap = 0
+      for (const w of d.applies) if (rowWords.has(w)) overlap++
+      score += overlap >= 3 ? 40 : overlap === 2 ? 25 : overlap === 1 ? 10 : 0
+    }
+    if (score === 0 && e.scope === 'general' && rowMaterial && d.material === rowMaterial) score = 10
+    if (!d.material) score -= 5
+    if (score > 0) scored.push({ e, score })
   }
   if (scored.length === 0) return null
   scored.sort((a, b) => b.score - a.score)
-  const specific = scored.filter((s) => s.score >= 15)
-  const use = specific.length > 0 ? specific.slice(0, 3) : scored.filter((s) => s.generic).slice(0, 2)
-  if (use.length === 0) return null
+  const strong = scored.filter((s) => s.score >= STRONG)
+  const use = strong.length > 0 ? strong.slice(0, 3) : scored.slice(0, 2)
+  const generic = strong.length === 0
 
   let attrs: ResolvedAttrs = { ...EMPTY_ATTRS }
   const cites: string[] = []
@@ -408,5 +477,5 @@ export function matchSpec(row: MatchRow, entries: SpecEntry[]): SpecMatch | null
     }
   }
   if (!hasAnyAttr(attrs)) return null
-  return { attrs, cites, generic: specific.length === 0, score: use[0].score }
+  return { attrs, cites, generic, score: use[0].score }
 }

@@ -60,6 +60,13 @@ export function isPrivateIp(ip: string): boolean {
     if (/^fe[89ab]/.test(low)) return true
     const mapped = low.match(/(?:::ffff:)(\d+\.\d+\.\d+\.\d+)$/)
     if (mapped) return isPrivateIpv4(mapped[1])
+    // The same address can be written in hex: ::ffff:7f00:1 is 127.0.0.1.
+    const hex = low.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/)
+    if (hex) {
+      const a = parseInt(hex[1], 16)
+      const b = parseInt(hex[2], 16)
+      return isPrivateIpv4([a >> 8, a & 0xff, b >> 8, b & 0xff].join('.'))
+    }
     return false
   }
   return true
@@ -80,6 +87,21 @@ const safeLookup: LookupFunction = (hostname, options, callback) => {
     if (opts.all) { (callback as unknown as (e: null, a: dns.LookupAddress[]) => void)(null, publics); return }
     callback(null, publics[0].address, publics[0].family)
   })
+}
+
+/**
+ * The literal IP behind a URL hostname, or null when it is a real name.
+ *
+ * THIS IS THE WHOLE GUARD for literal addresses: a WHATWG URL keeps IPv6
+ * brackets ("[::1]"), `net.isIP("[::1]")` returns 0, and Node skips a custom
+ * `lookup` entirely for IP literals — so before this, `http://[::1]/` and
+ * `http://[::ffff:a9fe:a9fe]/` (the cloud metadata service) passed BOTH the
+ * literal check and the DNS pin, and their responses were stored in the public
+ * bucket. Strip the brackets, then classify.
+ */
+function literalIp(hostname: string): string | null {
+  const h = hostname.startsWith('[') && hostname.endsWith(']') ? hostname.slice(1, -1) : hostname
+  return net.isIP(h) ? h : null
 }
 
 // ─── Cookie jar (per host, per call) ─────────────────────────────────────────
@@ -142,16 +164,18 @@ export async function safeFetch(startUrl: string, o: FetchOptions = {}): Promise
   let url = startUrl
   let method = o.method || 'GET'
   let body = o.body
+  let headers = o.headers
   const hops: string[] = []
   for (let hop = 0; hop < MAX_HOPS; hop++) {
     let u: URL
     try { u = new URL(url) } catch { return { ok: false, error: 'رابط غير صالح', status: 400 } }
     if (u.protocol !== 'http:' && u.protocol !== 'https:') return { ok: false, error: 'يُسمح بروابط http/https فقط', status: 400 }
-    if (net.isIP(u.hostname) && isPrivateIp(u.hostname)) return { ok: false, error: 'هذا العنوان غير مسموح', status: 400 }
+    const literal = literalIp(u.hostname)
+    if (literal && isPrivateIp(literal)) return { ok: false, error: 'هذا العنوان غير مسموح', status: 400 }
 
     let res: http.IncomingMessage
     try {
-      res = await requestOnce(u, { ...o, method, body })
+      res = await requestOnce(u, { ...o, method, body, headers })
     } catch (e) {
       return { ok: false, error: `تعذّر الوصول للرابط: ${e instanceof Error ? e.message : 'فشل'}`, status: 502 }
     }
@@ -161,7 +185,12 @@ export async function safeFetch(startUrl: string, o: FetchOptions = {}): Promise
     const status = res.statusCode || 0
     if (status >= 300 && status < 400 && res.headers.location && o.follow !== false) {
       res.resume()
-      try { url = new URL(res.headers.location, u).toString() } catch { return { ok: false, error: 'وجهة إعادة التوجيه غير صالحة', status: 502 } }
+      let next: URL
+      try { next = new URL(res.headers.location, u) } catch { return { ok: false, error: 'وجهة إعادة التوجيه غير صالحة', status: 502 } }
+      // A hop to another host must not carry the caller's headers (they may
+      // hold an Authorization token meant for the first host) or its body.
+      if (next.hostname !== u.hostname) { headers = undefined; body = undefined; method = 'GET' }
+      url = next.toString()
       if (status === 303 || ((status === 301 || status === 302) && method === 'POST')) { method = 'GET'; body = undefined }
       continue
     }

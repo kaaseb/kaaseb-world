@@ -266,10 +266,13 @@ export function attrsVerify(pageText: string, quote: string, attrs: ResolvedAttr
   if (!pieces.every((p) => page.includes(normalizeText(p)))) return false
   if (attrs.thickness_mm !== null) {
     const near = (n: number) => Math.abs(n - (attrs.thickness_mm as number)) < NUM_EPS
-    // The number may be written in cm on the page ("3 cm" for 30 mm) — accept either.
+    // The number may be written in cm ("3 cm" for 30 mm) — accept either form.
     const cmForm = (attrs.thickness_mm as number) / 10
-    const pageNums = numbersIn(pageText)
-    if (!pageNums.some(near) && !pageNums.some((n) => Math.abs(n - cmForm) < NUM_EPS)) return false
+    // It must appear in the QUOTED fragment, not just somewhere on the page:
+    // checking the whole page let a neighbouring row's thickness (ST-02's 40 mm
+    // sitting under ST-01's line) pass as verified evidence for this item.
+    const quoteNums = numbersIn(quote)
+    if (!quoteNums.some(near) && !quoteNums.some((n) => Math.abs(n - cmForm) < NUM_EPS)) return false
   }
   return true
 }
