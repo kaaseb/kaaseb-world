@@ -38,6 +38,7 @@ import { fetchSources, indexSource, type RawSource } from './indexer'
 import { readTextPage, readVisualPage, resolveExplicitHint, routeRows, type ReadGroup } from './resolve'
 import { harvestSpecs, matchSpec, statedFields, type SpecEntry } from './specs'
 import { headerHints, buildBrief, briefBlock, missingDrawingRefs, SCENARIOS, type PackageBrief, type HeaderHints } from './brief'
+import { ELEMENT_PLAYBOOK } from './elements'
 
 const log = (msg: string) => console.log(`[راوتر] ${msg}`)
 
@@ -254,6 +255,7 @@ COVERED DEPARTMENTS:
 ${coveredList}
 ${briefText}
 ${SCENARIOS}
+${ELEMENT_PLAYBOOK}
 
 PROJECT: ${input.projectName} — ${input.companyName}${input.projectNotes ? `
 

@@ -1,3 +1,5 @@
+import { isStoneByDefinition } from './router/elements'
+
 // The compound-name guard — SHARED by Furn and Tannoor.
 //
 // THE FAILURE IT EXISTS TO STOP (AGENTS.md calls it "a real failure mode from
@@ -221,9 +223,11 @@ export function allowsSubstitute(text: string): boolean {
   return SUBSTITUTE_RE.test(text || '')
 }
 
-/** Does the row's own text carry a stone anchor beyond the material words? */
+/** Does the row's own text carry a stone anchor beyond the material words?
+ *  A stone code, a counter/vanity top, or any element that is stone by
+ *  definition in the taxonomy (tread, coping, threshold, sill, mosaic…). */
 function hasCodeOrTopAnchor(text: string): boolean {
-  return STONE_CODE_RE.test(text || '') || STONE_TOP_RE.test(text || '')
+  return STONE_CODE_RE.test(text || '') || STONE_TOP_RE.test(text || '') || isStoneByDefinition(text)
 }
 
 /**

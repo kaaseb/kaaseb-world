@@ -12,6 +12,8 @@
 //
 // Pure and dependency-free; covered by tests/validate.test.ts.
 
+import { unitSanity } from './elements'
+
 export interface ValidatableRow {
   description: string
   details: string | null | undefined
@@ -112,5 +114,8 @@ export function validateRow(row: ValidatableRow, coveredNames: string[]): RowVal
   }
   const bd = breakdownMismatch(row.details, row.quantity)
   if (bd) marks.push(`تفصيل الغرف/المناطق يجمع ${bd.sum} لكن الكمية ${row.quantity} — تحقّق من الإجمالي`)
+  // A unit that cannot be right for the element (a counter top in m³).
+  const us = unitSanity(`${row.description} ${row.details || ''}`, row.unit)
+  if (us) marks.push(us)
   return { drop: false, dropReason: null, marks }
 }
