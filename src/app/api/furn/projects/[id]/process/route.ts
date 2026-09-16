@@ -24,7 +24,7 @@ import { hasPermission } from '@/lib/permissions'
 import { setProjectItemSources } from '@/lib/furn/item-sources'
 import { setProjectItemSections } from '@/lib/furn/item-sections'
 import { setProjectItemFlags, type ItemFlag } from '@/lib/furn/item-flags'
-import { guardItem, guardDepartmentAnchor, isClearlyOutOfScope, isCodeOnlyStone, stoneContextAnchor } from '@/lib/boq/department-guard'
+import { guardItem, guardDepartmentAnchor, isClearlyOutOfScope, isCodeOnlyStone, stoneContextAnchor, allowsSubstitute } from '@/lib/boq/department-guard'
 import { validateRow } from '@/lib/boq/router/validate'
 import { friendlyAiError } from '@/lib/ai/friendly-error'
 import { runBoqRouter, type RouterInput, type RouterResult } from '@/lib/boq/router/pipeline'
@@ -256,7 +256,11 @@ async function runProcessJob(
       const codeOnly = isCodeOnlyStone(text, coveredNames)
       if (problem.disqualified) {
         if (problem.realDepartment) extraDepartments.add(problem.realDepartment)
-        if (codeOnly && !verdict.disqualified) {
+        if (allowsSubstitute(text)) {
+          // A manufactured product the client will accept a substitute for:
+          // a sales opportunity to flag, not a line to lose.
+          marks.push(`منتج ${problem.realDepartment || 'غير حجري'} لكن الـBOQ يقبل بديلاً مماثلاً (or similar approved) — يمكن عرض بديل حجري، اعتمده أو ارفضه`)
+        } else if (codeOnly && !verdict.disqualified) {
           // Only the MODEL's label says "other department", and the row carries
           // a stone code: a doubt, not a verdict — amber, with the real question.
           marks.push(`الذكاء صنّفه "${problem.realDepartment}" لكن البند يحمل كود حجر — تأكد من المادة من جدول الرموز/المخططات`)

@@ -100,3 +100,14 @@ test('vanity-top package: a stone code or a stone package keeps the row (flagged
   assert.equal(stoneContextAnchor(['MEP Package.xlsx', 'supply HVAC units']), false)
   assert.equal(stoneContextAnchor(['أعمال رخام الفلل']), true)
 })
+
+test('"or similar approved" on a manufactured product keeps the row (substitute opportunity)', async () => {
+  const { allowsSubstitute } = await import('@/lib/boq/department-guard')
+  const covered = ['Marble', 'Granite', 'Limestone']
+  const tobermore = 'Tobermore Braemar (or similar approved), ground finish, jura grey colour, laid in herringbone – Size 100 x 200 x 80mm thick'
+  assert.equal(allowsSubstitute(tobermore), true)
+  assert.equal(isClearlyOutOfScope(tobermore, 'Concrete', covered), false, 'kept + flagged, not dropped')
+  assert.equal(isClearlyOutOfScope('Tobermore Braemar block paving 80mm', 'Concrete', covered), true, 'no substitute clause → still out')
+  assert.equal(allowsSubstitute('بلاط خرساني أو ما يعادله'), true)
+  assert.equal(allowsSubstitute('Chedworth Limestone, sawn finish'), false)
+})

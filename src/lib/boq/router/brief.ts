@@ -228,6 +228,7 @@ PACKAGING
 - Package title tells the scope ("Vanity Top", "Stone Cladding", "Marble Works", "External Paving"): rows inside are candidates for that scope.
 - Mixed package (stone + tiles + joinery): keep ours, list the rest in detected_departments.
 - Alternates / options ("Option B: granite instead of marble", "Alt.", "or equal"): emit the stated item once; mention the alternate in details; never both as separate quantities.
+- "or similar approved" / "or equal" on a MANUFACTURED product (Tobermore concrete block paving "or similar approved"): the client will accept a substitute — for a stone supplier that is an opportunity. Emit the row, department_match = its real department (Concrete), and write in details "يقبل بديلاً — يمكن عرض بديل حجري". Never silently drop it.
 - Provisional sums, prime cost (PC) sums, dayworks, contingencies, preliminaries, attendance, testing, mock-ups, samples: NOT items. Mention in notes if they touch stone (a PC sum for stone supply is worth telling the team).
 - Supply-only vs supply-and-install: read the wording ("supply", "supply and fix", "S&I", "توريد", "توريد وتركيب") and put it in details — the price differs.
 

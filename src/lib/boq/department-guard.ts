@@ -210,6 +210,17 @@ const STONE_CODE_RE = /\b(?:ST|STN|NS|MRB|MAR|GR|GRN|GRA|LS|TR)-?\d{1,3}[A-Z]?\b
 // say nothing about the substance.
 const STONE_TOP_RE = /\b(?:counter|work|vanity|table|bench)[- ]?tops?\b|سطح\s*(?:مغسل|مغاسل|كاونتر|رخام|جرانيت)|كاونتر\s*تو?ب/i
 
+// "or similar approved" / "or equal" / "أو ما يعادله" on a MANUFACTURED product
+// is not a closed door — it is the client saying a substitute may be offered.
+// For a stone supplier that is a sales opportunity (a granite sett instead of a
+// concrete block paver), so such a row is kept and flagged, never dropped. The
+// real case: three "Tobermore Braemar (or similar approved)" paving lines in a
+// 15-line limestone package vanished as "Concrete".
+const SUBSTITUTE_RE = /\bor\s+(?:similar|equal|equivalent|approved\s+equal)(?:\s+approved)?\b|\bequivalent\s+approved\b|أو\s*(?:ما\s*يعادله|ما\s*يماثله|مماثل|مكافئ|بديل\s*معتمد|المعادل)/i
+export function allowsSubstitute(text: string): boolean {
+  return SUBSTITUTE_RE.test(text || '')
+}
+
 /** Does the row's own text carry a stone anchor beyond the material words? */
 function hasCodeOrTopAnchor(text: string): boolean {
   return STONE_CODE_RE.test(text || '') || STONE_TOP_RE.test(text || '')
@@ -310,6 +321,9 @@ export function isClearlyOutOfScope(
 ): boolean {
   // Evidence in the row's OWN words — a manufactured word as the product, or an
   // explicit look-alike phrasing — is conclusive.
+  // A row that invites a substitute is never "clearly out": we may offer stone.
+  if (allowsSubstitute(text)) return false
+
   const byDesc = guardDescription(text)
   if (byDesc.disqualified) return !!byDesc.realDepartment && isNonStoneDepartment(byDesc.realDepartment)
 
