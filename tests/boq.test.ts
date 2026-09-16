@@ -2,7 +2,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { thicknessFromText, detailsStateThickness, readingVerifies, attrsVerify, mergeAttrs, numbersIn, EMPTY_ATTRS } from '@/lib/boq/router/core'
-import { isClearlyOutOfScope, guardDescription } from '@/lib/boq/department-guard'
+import { isClearlyOutOfScope, guardDescription, stoneContextAnchor, isCodeOnlyStone } from '@/lib/boq/department-guard'
 
 test('thicknessFromText: real BOQ phrases (sizes/widths/joints are NOT thickness)', () => {
   const cases: Array<[string, number | null]> = [
@@ -81,4 +81,22 @@ test('isClearlyOutOfScope: drop the obvious, flag the doubtful (owner rule)', ()
   for (const [text, dept, expected] of cases) assert.equal(isClearlyOutOfScope(text, dept, covered), expected, text)
   assert.equal(guardDescription('Marble tile on concrete screed').disqualified, false)
   assert.equal(guardDescription('ألواح تشبه الرخام').disqualified, true)
+})
+
+test('vanity-top package: a stone code or a stone package keeps the row (flagged), never drops it', () => {
+  const covered = ['Marble', 'Granite', 'رخام', 'جرانيت']
+  const vanity = 'Vanity counter unit with bottom self; type ST-02+WD-01; dimesion 1425 x 600 x 525mm; to fit to 1 basin; as Drg. AID-00-8022'
+  // The model said "Joinery" (WOOD WORK heading) — the ST code is a stone anchor.
+  assert.equal(isClearlyOutOfScope(vanity, 'Joinery', covered), false)
+  assert.equal(isCodeOnlyStone(vanity, covered), true, 'material unknown → must be flagged for the legend')
+  // Joinery ONLY (no stone code) in a plain package is still out.
+  assert.equal(isClearlyOutOfScope('Wardrobe unit; type WD-01; 2400 x 600 x 2100mm', 'Joinery', covered), true)
+  // …but inside a stone package the model's label alone never drops it.
+  assert.equal(isClearlyOutOfScope('Wardrobe unit; type WD-01; 2400 x 600 x 2100mm', 'Joinery', covered, { contextAnchored: true }), false)
+  // Evidence in the row's own words still wins even in a stone package.
+  assert.equal(isClearlyOutOfScope('Precast concrete coping', 'Precast Concrete', covered, { contextAnchored: true }), true)
+  assert.equal(stoneContextAnchor(['Vanity Top BOQ.xlsx']), true)
+  assert.equal(stoneContextAnchor(['Vanity-Top-BOQ-oegbcf.xlsx', 'supply vanity counter units']), true)
+  assert.equal(stoneContextAnchor(['MEP Package.xlsx', 'supply HVAC units']), false)
+  assert.equal(stoneContextAnchor(['أعمال رخام الفلل']), true)
 })

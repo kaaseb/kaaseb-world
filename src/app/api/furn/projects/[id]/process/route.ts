@@ -24,7 +24,7 @@ import { hasPermission } from '@/lib/permissions'
 import { setProjectItemSources } from '@/lib/furn/item-sources'
 import { setProjectItemSections } from '@/lib/furn/item-sections'
 import { setProjectItemFlags, type ItemFlag } from '@/lib/furn/item-flags'
-import { guardItem, guardDepartmentAnchor, isClearlyOutOfScope } from '@/lib/boq/department-guard'
+import { guardItem, guardDepartmentAnchor, isClearlyOutOfScope, isCodeOnlyStone, stoneContextAnchor } from '@/lib/boq/department-guard'
 import { validateRow } from '@/lib/boq/router/validate'
 import { friendlyAiError } from '@/lib/ai/friendly-error'
 import { runBoqRouter, type RouterInput, type RouterResult } from '@/lib/boq/router/pipeline'
@@ -216,6 +216,12 @@ async function runProcessJob(
     // flagged for the team to approve or reject.
     const flaggedItems: typeof result.items = []
     const dropped: Array<{ description: string; department: string }> = []
+    // Is this PACKAGE about stone (file names, subject, project, client notes)?
+    // Then a row is dropped only on evidence in its own words — never because
+    // the model labelled it "Joinery" under a WOOD WORK heading.
+    const contextAnchored = stoneContextAnchor([
+      ...input.boqFiles?.map((f) => f.name) ?? [], input.boqFilename, result.subject, project.project_name, input.projectNotes,
+    ])
     // Section/bill headings the model emitted as items — not customer lines.
     const headings: string[] = []
     for (const it of result.items) {
@@ -229,7 +235,7 @@ async function runProcessJob(
       const verdict = guardItem(text, it.department_match, coveredNames)
       const problem = verdict.disqualified ? verdict : guardDepartmentAnchor(text, coveredNames, it.department_match)
 
-      if (isClearlyOutOfScope(text, it.department_match, coveredNames)) {
+      if (isClearlyOutOfScope(text, it.department_match, coveredNames, { contextAnchored })) {
         if (problem.realDepartment) extraDepartments.add(problem.realDepartment)
         dropped.push({ description: it.description, department: problem.realDepartment || '—' })
         continue
@@ -245,9 +251,21 @@ async function runProcessJob(
       // RED = the guard named a department outside ours (a natural stone we
       // don't list). Ambiguous-but-maybe-ours and duplicates are amber, not red.
       let red = false
+      // A stone CODE (ST-02) with no material word: the row is ours to look at,
+      // but its material lives in a legend/drawing the team must check.
+      const codeOnly = isCodeOnlyStone(text, coveredNames)
       if (problem.disqualified) {
-        if (problem.realDepartment) { extraDepartments.add(problem.realDepartment); red = true }
-        marks.push(problem.reason || 'مادة غير مؤكدة')
+        if (problem.realDepartment) extraDepartments.add(problem.realDepartment)
+        if (codeOnly && !verdict.disqualified) {
+          // Only the MODEL's label says "other department", and the row carries
+          // a stone code: a doubt, not a verdict — amber, with the real question.
+          marks.push(`الذكاء صنّفه "${problem.realDepartment}" لكن البند يحمل كود حجر — تأكد من المادة من جدول الرموز/المخططات`)
+        } else {
+          red = !!problem.realDepartment
+          marks.push(problem.reason || 'مادة غير مؤكدة')
+        }
+      } else if (codeOnly) {
+        marks.push('المادة غير محددة (كود بلا جدول رموز) — تأكد من المخططات')
       }
       if (isDuplicate) marks.push('مكرر محتمل — راجعه')
       marks.push(...structural.marks)

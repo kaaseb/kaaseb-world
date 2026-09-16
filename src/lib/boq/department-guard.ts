@@ -197,6 +197,39 @@ const STONE_MATERIALS = [
 // terrazzo/quartz appear here for ANCHORING only (the text talks about stone at
 // all); the DISQUALIFYING pass above still drops engineered-quartz/terrazzo rows.
 
+// A reference code whose PREFIX is the industry's stone shorthand: ST-02 (stone),
+// STN-, NS- (natural stone), MRB-/MAR- (marble), GR-/GRN-/GRA- (granite), LS-
+// (limestone), TR- (travertine). A "Vanity counter unit; type ST-02+WD-01" row
+// carries its stone in that code and nowhere else — the whole 25-row package
+// the team lost was exactly this shape, classified "Joinery" because the sheet
+// was titled WOOD WORK and no legend was attached. A code is a REASON TO KEEP
+// AND FLAG (the material still needs the legend), never a reason to drop.
+const STONE_CODE_RE = /\b(?:ST|STN|NS|MRB|MAR|GR|GRN|GRA|LS|TR)-?\d{1,3}[A-Z]?\b/
+// Stone-slab PRODUCTS: a counter/vanity/work top is a slab by definition. Other
+// product nouns (cladding, panel, counter, vanity alone) stay non-anchors — they
+// say nothing about the substance.
+const STONE_TOP_RE = /\b(?:counter|work|vanity|table|bench)[- ]?tops?\b|سطح\s*(?:مغسل|مغاسل|كاونتر|رخام|جرانيت)|كاونتر\s*تو?ب/i
+
+/** Does the row's own text carry a stone anchor beyond the material words? */
+function hasCodeOrTopAnchor(text: string): boolean {
+  return STONE_CODE_RE.test(text || '') || STONE_TOP_RE.test(text || '')
+}
+
+/**
+ * Is this whole PACKAGE about stone? Decided from what surrounds the rows — the
+ * BOQ file name ("Vanity Top BOQ.xlsx"), the package/subject line, the client's
+ * notes. A client that sends a package to a stone supplier is asking for the
+ * stone in it; inside such a package the model's "Joinery"/"Carpentry" label is
+ * a doubt to flag, never grounds to delete 25 lines.
+ */
+export function stoneContextAnchor(texts: Array<string | null | undefined>): boolean {
+  const hay = texts.filter(Boolean).join(' \n ').toLowerCase()
+  if (!hay.trim()) return false
+  if (STONE_MATERIALS.some((m) => hay.includes(m))) return true
+  if (STONE_TOP_RE.test(hay)) return true
+  return /\bstone\b|\bحجر\b|\bرخام|\bجرانيت/.test(hay)
+}
+
 /**
  * Positive-anchor gate. A row survives only if it names a covered department
  * (from /settings, either language) OR a natural-stone material in its OWN text.
@@ -222,6 +255,10 @@ export function guardDepartmentAnchor(
   for (const m of STONE_MATERIALS) {
     if (hay.includes(m)) return CLEAN
   }
+  // A stone-prefixed code (ST-02) or a stone-top product is an anchor on its
+  // own: the material lives in a legend we may not have, but the row is ours to
+  // look at — keep it (flagged when the material is unresolved), never drop it.
+  if (hasCodeOrTopAnchor(text || '')) return CLEAN
   // Code-titled rows (title IS the SKU code, e.g. "MA-003" / "K-RL21B") carry
   // their spec in the code, not a material word. If extraction already matched
   // the row to a COVERED department, a code-like token is a valid anchor — don't
@@ -269,6 +306,7 @@ export function isClearlyOutOfScope(
   text: string,
   departmentMatch: string | null | undefined,
   coveredDepartments: string[],
+  opts: { contextAnchored?: boolean } = {},
 ): boolean {
   // Evidence in the row's OWN words — a manufactured word as the product, or an
   // explicit look-alike phrasing — is conclusive.
@@ -281,9 +319,21 @@ export function isClearlyOutOfScope(
   // dropped on the model's word: dropping a real sale is the worse failure.
   const byMatch = guardDepartmentMatch(departmentMatch, coveredDepartments)
   if (!byMatch.disqualified || !byMatch.realDepartment) return false
+  // Inside a stone package (file/subject/notes say stone), the model's label
+  // alone is never conclusive either — the row is kept and flagged.
+  if (opts.contextAnchored) return false
   const anchored = !guardDepartmentAnchor(text, coveredDepartments, null).disqualified
   if (anchored) return false
   return isNonStoneDepartment(byMatch.realDepartment)
+}
+
+/** Rows whose only stone evidence is a code (ST-02) with no material word: kept,
+ *  but the team must confirm the material from the legend/drawings. */
+export function isCodeOnlyStone(text: string, coveredDepartments: string[]): boolean {
+  const hay = (text || '').toLowerCase()
+  if (!STONE_CODE_RE.test(text || '')) return false
+  if (STONE_MATERIALS.some((m) => hay.includes(m))) return false
+  return !coveredDepartments.some((d) => { const t = (d || '').trim().toLowerCase(); return t.length >= 3 && hay.includes(t) })
 }
 
 /** Both gates. A row survives only if neither fires. */
