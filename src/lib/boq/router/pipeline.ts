@@ -156,16 +156,22 @@ async function extractBoqRows(input: RouterInput): Promise<{
   type Source = { label: string; files: AiFile[] }
   const sources: Source[] = []
   if (!drawingsMode) {
+    // Every failure is kept BY NAME AND REASON: "could not read the BOQ files"
+    // with the cause hidden in a server log is not an error message anyone can
+    // act on. The user sees exactly which file failed and why.
+    const failures: string[] = []
     for (const b of boqList) {
       try {
         const fs = await fetchAiFiles(b.url, `BOQ: ${b.name}`)
         if (fs.length > 0) sources.push({ label: b.name, files: fs })
-        else log(`BOQ "${b.name}": لا محتوى مقروء`)
+        else { failures.push(`${b.name}: لا محتوى مقروء (صيغة غير مدعومة أو ملف فارغ)`); log(`BOQ "${b.name}": لا محتوى مقروء`) }
       } catch (e) {
-        log(`تعذّرت قراءة BOQ "${b.name}": ${e instanceof Error ? e.message : e}`)
+        const why = e instanceof Error ? e.message : String(e)
+        failures.push(`${b.name}: ${why}`)
+        log(`تعذّرت قراءة BOQ "${b.name}": ${why}`)
       }
     }
-    if (sources.length === 0) throw new Error('تعذّرت قراءة ملفات الـBOQ')
+    if (sources.length === 0) throw new Error(`تعذّرت قراءة ملفات الـBOQ — ${failures.join(' | ').slice(0, 600)}`)
   } else {
     // No BOQ → extract the items from the drawings/specs themselves (capped).
     const src = [...input.drawingFiles, ...input.specFiles, ...input.otherFiles].slice(0, DRAWINGS_FOR_EXTRACTION)

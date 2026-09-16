@@ -213,16 +213,44 @@ async function fallback<T>(op: string, buf: Uint8Array, opts: Record<string, unk
 }
 
 let useWorkers: boolean | null = null
+let disabledWhy: string | null = null
+/** An INFRASTRUCTURE failure of the pool (could not start, crashed while
+ *  loading, timed out) — as opposed to a content error the worker reported. */
+const INFRA_RE = /heavy worker|could not start|timed out|Cannot find module|ERR_WORKER|ERR_MODULE|ERR_REQUIRE|ENOENT|EACCES/i
+
+function disableWorkers(why: string) {
+  if (useWorkers === false) return
+  useWorkers = false
+  disabledWhy = why
+  // Loud, once: the server keeps working (in-process), but someone must see this.
+  console.error(`[heavy] worker pool DISABLED for this process — falling back in-process. Reason: ${why}`)
+}
+
 async function call<T>(op: string, buf: Uint8Array, opts: Record<string, unknown> = {}, transfer = false): Promise<T> {
-  if (useWorkers === null) useWorkers = workerAvailable()
-  // The in-process fallback is for ONE case only: no worker file on this
-  // deployment, decided before anything is dispatched. It is deliberately NOT
-  // a retry path — after a transfer the caller's buffer is detached (the retry
-  // would silently process zero bytes and report "corrupt archive"), and
-  // re-running the same heavy CPU on the request thread is exactly the freeze
-  // this pool exists to prevent. A dead worker is reported as a dead worker.
+  if (useWorkers === null) {
+    useWorkers = workerAvailable()
+    if (!useWorkers) disableWorkers(`worker file missing at ${WORKER_FILE}`)
+  }
   if (!useWorkers) return fallback<T>(op, buf, opts)
-  return run<T>(op, buf, opts, transfer)
+  try {
+    return await run<T>(op, buf, opts, transfer)
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    if (!INFRA_RE.test(msg)) throw e // a real content error (corrupt file…) — report it
+    // The pool itself is broken on this deployment (a Node without the API,
+    // a missing package next to the worker, a sandbox that forbids threads…).
+    // A BOQ must still be readable: switch this process to in-process work
+    // and say why in the log. The one thing that cannot be retried is a
+    // TRANSFERRED buffer (it is detached) — that caller gets the truth.
+    disableWorkers(msg)
+    if (transfer) throw new Error(`تعذّر فك الأرشيف — عامل المعالجة على الخادم لا يعمل (${msg}). أعد المحاولة؛ راجع سجل الخادم.`)
+    return fallback<T>(op, buf, opts)
+  }
+}
+
+/** Why the pool is off (null while it is on) — for health/diagnostics. */
+export function heavyPoolStatus(): { workers: boolean; reason: string | null } {
+  return { workers: useWorkers !== false, reason: disabledWhy }
 }
 
 // ─── public API ─────────────────────────────────────────────────────────────
