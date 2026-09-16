@@ -242,3 +242,27 @@ every user's request for seconds — the "النظام يهنق" reports. They n
 small worker-thread pool (1–2 workers, FIFO, per-job timeout, crash-replaced)
 with an in-process fallback if the worker file is missing. Nothing about the
 results changed; only where the CPU burns.
+
+## Addendum — phase 0: understand the package first (`brief.ts`)
+
+Reading a BOQ row by row is how 25 stone counter tops filed under "WOOD WORK"
+with the stone only in a code (ST-02+WD-01) were all thrown away. An estimator
+never reads that way. Phase 0 now runs before phase 1:
+
+1. `headerHints()` — deterministic, free: "SUBCONTRACT PACKAGE:" / trade /
+   section lines, code families with counts (ST×25, WD×20), drawing references
+   cited by rows.
+2. `buildBrief()` — ONE small text-only model call over the hints + the first
+   pages of each BOQ: what the package is, what the client buys from us, how
+   each code family reads (with confidence), whether rows are ours by default,
+   the row pattern, the open questions to ask before pricing, and what is not
+   ours. It is context only — it never sets a quantity or a material.
+3. The brief and the estimator's playbook (`SCENARIOS`: packaging shapes,
+   quantity conventions, codes & legends, table shapes, out-of-scope rules,
+   when in doubt) are injected into the phase-1 prompt, so every row is read
+   in the light of the package.
+
+Downstream: `ours_by_default` feeds the deterministic gate's context anchor
+(a row is then dropped only on evidence in its own words); drawings cited but
+not attached are listed by name in the summary; the brief and its open
+questions are the first lines of `ai_summary`.

@@ -37,6 +37,7 @@ import {
 import { fetchSources, indexSource, type RawSource } from './indexer'
 import { readTextPage, readVisualPage, resolveExplicitHint, routeRows, type ReadGroup } from './resolve'
 import { harvestSpecs, matchSpec, statedFields, type SpecEntry } from './specs'
+import { headerHints, buildBrief, briefBlock, missingDrawingRefs, SCENARIOS, type PackageBrief, type HeaderHints } from './brief'
 
 const log = (msg: string) => console.log(`[راوتر] ${msg}`)
 
@@ -84,7 +85,13 @@ export interface RouterCoverage {
   rowsSpecFilled: number
 }
 
-export type RouterResult = BoqAnalysisResult & { coverage: RouterCoverage }
+export type RouterResult = BoqAnalysisResult & {
+  coverage: RouterCoverage
+  /** Phase 0: how the package was understood before the rows were read. */
+  brief: PackageBrief | null
+  /** Drawings the rows cite that were NOT attached — the first thing to ask for. */
+  missingRefs: string[]
+}
 
 // ─── phase 1: the BOQ alone ─────────────────────────────────────────────────
 
@@ -136,6 +143,8 @@ async function extractBoqRows(input: RouterInput): Promise<{
   detectedDepartments: string[]
   rows: RouterRow[]
   notes: string | null
+  brief: PackageBrief | null
+  hints: HeaderHints
 }> {
   // EVERY BOQ file is read — a client package often ships one workbook per
   // trade plus a combined one. Each is its own source (a ZIP may expand to
@@ -168,6 +177,24 @@ async function extractBoqRows(input: RouterInput): Promise<{
     sources.push({ label: 'drawings', files })
   }
   const multiBoq = !drawingsMode && sources.length > 1
+
+  // Phase 0 — understand the PACKAGE before reading rows. Deterministic hints
+  // (package lines, code families, drawing refs) plus one small text-only call
+  // that forms the estimator's brief. Skipped in drawings-only mode.
+  const isTextFile = (f: AiFile) => f.mimeType === 'text/csv' || f.mimeType === 'text/plain'
+  const boqTexts = drawingsMode ? [] : sources.map((s) => s.files.filter(isTextFile).map((f) => decodeTextFile(f.data)).join('\n'))
+  const hints = headerHints([...boqTexts, input.projectNotes || ''])
+  const brief = drawingsMode ? null : await buildBrief({
+    fileNames: sources.map((s) => s.label),
+    boqTexts,
+    hints,
+    projectName: input.projectName,
+    companyName: input.companyName,
+    notes: input.projectNotes ?? null,
+    covered: input.coveredDepartments,
+    log,
+  })
+  const briefText = brief ? briefBlock(brief, hints) : ''
 
   const coveredList = input.coveredDepartments.map((d) => `- ${d.name_en} (${d.name_ar})`).join('\n')
 
@@ -219,6 +246,8 @@ TABLE STRUCTURE — real BOQs are never one-row-per-item. Every company lays its
 
 COVERED DEPARTMENTS:
 ${coveredList}
+${briefText}
+${SCENARIOS}
 
 PROJECT: ${input.projectName} — ${input.companyName}${input.projectNotes ? `
 
@@ -312,6 +341,8 @@ ${input.projectNotes.slice(0, 1500)}` : ''}`
     detectedDepartments: parsed.detected_departments,
     rows,
     notes: noteBits.length ? noteBits.join(' • ') : null,
+    brief,
+    hints,
   }
 }
 
@@ -512,6 +543,10 @@ export async function runBoqRouter(input: RouterInput): Promise<RouterResult> {
 
   const readable = indexed.filter((f) => f.kind !== 'unreadable')
   log(`phase2: indexed ${indexed.length} (cache ${filesFromCache}, failed ${filesFailed})`)
+  // Drawings the rows cite that nobody attached: say it, by name.
+  const attachedNames = [...indexed.map((f) => f.name), ...indexed.map((f) => f.docNumber || '').filter(Boolean), ...indexed.map((f) => f.title || '').filter(Boolean)]
+  const missingRefs = missingDrawingRefs(boq.hints.drawingRefs, attachedNames)
+  if (missingRefs.length > 0) log(`phase2: ${missingRefs.length} drawing refs cited but not attached: ${missingRefs.slice(0, 8).join(', ')}`)
 
   // Phase 2½ — the spec knowledge base (runs alongside routing: independent).
   // Phase 3 — routing. Explicit citations first (deterministic, rank 2), then
@@ -793,6 +828,7 @@ export async function runBoqRouter(input: RouterInput): Promise<RouterResult> {
     rowsConflict > 0 ? `${rowsConflict} بند فيه تعارض/تحقّق يدوي — راجع الملاحظات.` : null,
     specEntries.length > 0 ? `قاعدة مواصفات المشروع: ${specEntries.length} تعريف مادة من ${new Set(specEntries.map((e) => e.fileName)).size} ملف — أكملت مواصفات ${rowsSpecFilled} بند.` : null,
     rowsUnsearched > 0 ? `${rowsUnsearched} بند لم تُقرأ مصادره (بلا كمية موثّقة) — يحتاج مراجعة يدوية.` : null,
+    missingRefs.length > 0 ? `مخططات مذكورة في البنود وغير مرفقة: ${missingRefs.slice(0, 10).join('، ')}${missingRefs.length > 10 ? ` … و${missingRefs.length - 10} غيرها` : ''} — ارفعها وأعد المحاولة لتُقرأ المواد والمقاسات منها.` : null,
     entryCapHit ? `عدد الملفات تجاوز حد الفهرسة (${MAX_INDEXED_ENTRIES}) — بعضها لم يُفهرس.` : null,
     catalogTruncated ? 'فهرس التوجيه اختُصر لكبر عدد الملفات — بعض المرشحين لم يُعرض.' : null,
     budget.groups <= 0 ? 'وُقفت القراءة عند حد الصفحات — بعض البنود لم تُقرأ صفحاتها المرشحة.' : null,
@@ -821,5 +857,7 @@ export async function runBoqRouter(input: RouterInput): Promise<RouterResult> {
       specPagesRead,
       rowsSpecFilled,
     },
+    brief: boq.brief,
+    missingRefs,
   }
 }

@@ -221,7 +221,7 @@ async function runProcessJob(
     // the model labelled it "Joinery" under a WOOD WORK heading.
     const contextAnchored = stoneContextAnchor([
       ...input.boqFiles?.map((f) => f.name) ?? [], input.boqFilename, result.subject, project.project_name, input.projectNotes,
-    ])
+    ]) || result.brief?.ours_by_default === true
     // Section/bill headings the model emitted as items — not customer lines.
     const headings: string[] = []
     for (const it of result.items) {
@@ -347,9 +347,19 @@ async function runProcessJob(
       ? `ℹ️ تُجوهل ${headings.length} عنوان قسم غير قابل للتسعير: ${headings.slice(0, 6).join('؛ ')}${headings.length > 6 ? ' …' : ''}`
       : null
 
+    // The estimator's brief and its open questions — what a senior colleague
+    // would say before anyone prices a line.
+    const b = result.brief
+    const briefNote = b && (b.package_summary || b.what_we_supply)
+      ? `🧭 فهم الحزمة: ${b.package_summary}${b.what_we_supply ? ` — المطلوب منا: ${b.what_we_supply}` : ''}${b.code_families.length ? ` — الأكواد: ${b.code_families.map((f) => `${f.prefix}=${f.meaning}${f.ours ? ' (لنا)' : ''}`).join('، ')}` : ''}`
+      : null
+    const questionsNote = b && b.open_questions.length > 0
+      ? `❓ أسئلة قبل التسعير: ${b.open_questions.join(' • ')}`
+      : null
+
     await supabase.from('furn_projects').update({
       subject: result.subject,
-      ai_summary: [warnNote, droppedNote, headingsNote, result.notes].filter(Boolean).join('\n'),
+      ai_summary: [briefNote, questionsNote, warnNote, droppedNote, headingsNote, result.notes].filter(Boolean).join('\n'),
       ai_detected_departments: departmentsOut,
       ai_error: null,
       stage: 'pricing',
