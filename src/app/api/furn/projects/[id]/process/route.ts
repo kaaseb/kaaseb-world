@@ -235,10 +235,14 @@ async function runProcessJob(
       const verdict = guardItem(text, it.department_match, coveredNames)
       const problem = verdict.disqualified ? verdict : guardDepartmentAnchor(text, coveredNames, it.department_match)
 
-      if (isClearlyOutOfScope(text, it.department_match, coveredNames, { contextAnchored })) {
+      // The owner's rule (2026-09-17): NOTHING is dropped. A row that is clearly
+      // another trade stays in the table, RED, for the team to reject with one
+      // click — a rejected row never reaches the total or the PDF. The old
+      // "drop and list in the summary" lost real sales twice.
+      const clearlyOut = isClearlyOutOfScope(text, it.department_match, coveredNames, { contextAnchored })
+      if (clearlyOut) {
         if (problem.realDepartment) extraDepartments.add(problem.realDepartment)
         dropped.push({ description: it.description, department: problem.realDepartment || '—' })
-        continue
       }
 
       // Duplicate: same description already seen this run → flag the repeat.
@@ -254,7 +258,10 @@ async function runProcessJob(
       // A stone CODE (ST-02) with no material word: the row is ours to look at,
       // but its material lives in a legend/drawing the team must check.
       const codeOnly = isCodeOnlyStone(text, coveredNames)
-      if (problem.disqualified) {
+      if (clearlyOut) {
+        red = true
+        marks.push(`خارج نطاقكم (${problem.realDepartment || 'قسم آخر'}) — ارفضه إن لم يكن لكم`)
+      } else if (problem.disqualified) {
         if (problem.realDepartment) extraDepartments.add(problem.realDepartment)
         if (allowsSubstitute(text)) {
           // A manufactured product the client will accept a substitute for:
@@ -345,7 +352,7 @@ async function runProcessJob(
     // The excluded lines are listed by name — the owner asked for them not to be
     // counted, not for them to disappear without a trace.
     const droppedNote = dropped.length > 0
-      ? `⛔ استُبعد ${dropped.length} بند واضح خارج النطاق (${Array.from(new Set(dropped.map((d) => d.department))).join('، ')}): ${dropped.slice(0, 10).map((d) => d.description).join('؛ ')}${dropped.length > 10 ? ` … و${dropped.length - 10} غيرها` : ''}`
+      ? `⛔ ${dropped.length} بند خارج النطاق (${Array.from(new Set(dropped.map((d) => d.department))).join('، ')}) ظاهرة في الجدول بعلامة حمراء — ارفض ما لا يخصكم: ${dropped.slice(0, 10).map((d) => d.description).join('؛ ')}${dropped.length > 10 ? ` … و${dropped.length - 10} غيرها` : ''}`
       : null
     const headingsNote = headings.length > 0
       ? `ℹ️ تُجوهل ${headings.length} عنوان قسم غير قابل للتسعير: ${headings.slice(0, 6).join('؛ ')}${headings.length > 6 ? ' …' : ''}`

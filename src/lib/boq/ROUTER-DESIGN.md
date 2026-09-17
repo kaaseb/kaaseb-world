@@ -266,3 +266,19 @@ Downstream: `ours_by_default` feeds the deterministic gate's context anchor
 (a row is then dropped only on evidence in its own words); drawings cited but
 not attached are listed by name in the summary; the brief and its open
 questions are the first lines of `ai_summary`.
+
+## Addendum — nothing is dropped; every row is accounted for (`coverage.ts`)
+
+Owner's rule (2026-09-17): every priceable row of the file becomes an item —
+ours, a stone we don't list, or another trade entirely. Out-of-scope rows are
+kept RED for the team to reject with one click (a rejected row never reaches
+the total or the PDF). No deterministic gate deletes a customer line any more.
+
+Accountability, not more rules: phase 1 must return a ROW LEDGER — every row
+that is not an item, with its reason (header, total, provisional sum…). A
+free deterministic counter (`candidateRows`: a unit cell next to a quantity,
+with a description) is the second witness. Rows the model neither emitted nor
+explained go back to it in one targeted second pass; whatever is still
+unaccounted for is listed BY TEXT in the summary ("12 of 16 — missing: …").
+Matching is one-to-one, so a skipped size variant cannot hide behind its
+sibling.

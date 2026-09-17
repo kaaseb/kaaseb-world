@@ -20,13 +20,18 @@ export interface Phase1Part {
   detected_departments?: unknown
   items?: Array<Record<string, unknown>>
   notes?: unknown
+  /** The row LEDGER: every file row that is NOT an item, with the reason. */
+  skipped?: unknown
 }
+
+export interface SkippedRow { text: string; reason: string; file: string }
 
 export interface MergedPhase1 {
   subject: string
   detected_departments: string[]
   items: Array<Record<string, unknown>>
   notes: string
+  skipped: SkippedRow[]
 }
 
 export function fileStem(name: string): string {
@@ -38,7 +43,13 @@ export function mergePhase1Parts(parts: Phase1Part[], multiFile: boolean): Merge
   const depts = new Map<string, string>()
   const items: Array<Record<string, unknown>> = []
   const notes: string[] = []
+  const skipped: SkippedRow[] = []
   for (const p of parts) {
+    for (const s of Array.isArray(p.skipped) ? p.skipped : []) {
+      const text = String((s as { text?: unknown })?.text || '').trim().slice(0, 200)
+      const reason = String((s as { reason?: unknown })?.reason || '').trim().slice(0, 160)
+      if (text) skipped.push({ text, reason, file: p.fileName })
+    }
     if (!subject && typeof p.subject === 'string' && p.subject.trim()) subject = p.subject.trim()
     for (const d of Array.isArray(p.detected_departments) ? p.detected_departments : []) {
       const s = String(d || '').trim()
@@ -52,7 +63,7 @@ export function mergePhase1Parts(parts: Phase1Part[], multiFile: boolean): Merge
     }
     if (typeof p.notes === 'string' && p.notes.trim()) notes.push(multiFile ? `${stem}: ${p.notes.trim()}` : p.notes.trim())
   }
-  return { subject, detected_departments: Array.from(depts.values()), items, notes: notes.join(' • ') }
+  return { subject, detected_departments: Array.from(depts.values()), items, notes: notes.join(' • '), skipped }
 }
 
 const AR_DIGITS: Record<string, string> = { '٠': '0', '١': '1', '٢': '2', '٣': '3', '٤': '4', '٥': '5', '٦': '6', '٧': '7', '٨': '8', '٩': '9' }

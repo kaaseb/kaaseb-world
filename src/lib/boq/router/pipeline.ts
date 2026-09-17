@@ -39,6 +39,7 @@ import { readTextPage, readVisualPage, resolveExplicitHint, routeRows, type Read
 import { harvestSpecs, matchSpec, statedFields, type SpecEntry } from './specs'
 import { headerHints, buildBrief, briefBlock, missingDrawingRefs, SCENARIOS, type PackageBrief, type HeaderHints } from './brief'
 import { ELEMENT_PLAYBOOK } from './elements'
+import { candidateRows, unmatchedRows, rowMatchScore, MATCH_THRESHOLD } from './coverage'
 
 const log = (msg: string) => console.log(`[راوتر] ${msg}`)
 
@@ -99,7 +100,7 @@ export type RouterResult = BoqAnalysisResult & {
 const PHASE1_SCHEMA: JsonSchema = {
   type: 'object',
   additionalProperties: false,
-  required: ['subject', 'detected_departments', 'items', 'notes'],
+  required: ['subject', 'detected_departments', 'items', 'skipped', 'notes'],
   properties: {
     subject: { type: 'string', description: 'Short professional Subject line in English: "supply <core product>". Under 60 chars.' },
     detected_departments: {
@@ -126,6 +127,18 @@ const PHASE1_SCHEMA: JsonSchema = {
         },
       },
     },
+    skipped: {
+      type: 'array',
+      description: 'THE ROW LEDGER. Every row of the file that you did NOT emit as an item — section headers, page markers, totals/carried-forward lines, provisional sums, notes — each with the exact reason. A priceable row must NEVER appear here: if a customer asked for it, it is an item (ours or not). Empty array only when every row became an item.',
+      items: {
+        type: 'object', additionalProperties: false,
+        required: ['text', 'reason'],
+        properties: {
+          text: { type: 'string', description: 'The row text as written (first ~120 chars).' },
+          reason: { type: 'string', description: 'Why it is not an item: "section header", "page marker", "total line", "provisional sum", "note", …' },
+        },
+      },
+    },
     notes: { type: 'string', description: 'General flags (ambiguous units, unreadable rows). Empty string if none.' },
   },
 }
@@ -134,6 +147,7 @@ interface RawPhase1 {
   subject?: unknown
   detected_departments?: unknown
   items?: Array<Record<string, unknown>>
+  skipped?: unknown
   notes?: unknown
 }
 
@@ -233,8 +247,8 @@ BUT the stone may legitimately sit ON such a material: "Marble tile on concrete 
 For a NOT-ours row: STILL include it (never silently omit), set its real department, and add that department to detected_departments[] — a deterministic gate marks it for the team to reject.
 
 RULES:
-1. Items array = covered-department rows only. detected_departments = every department seen, covered and not, deduplicated, canonical English.
-1b. NEVER DROP A REQUESTED LINE. Include EVERY BOQ line in items[] — never silently omit anything the customer asked for (a missing line is the worst failure). If a row's material is unclear, or it looks like a manufactured look-alike (concrete / GRC / porcelain / terrazzo / engineered quartz…), STILL include it and be honest in details about what's uncertain — a deterministic gate marks doubtful rows "needs review" for the team to approve or reject. The ONLY thing forbidden is INVENTING a material/finish/size that the row doesn't state. When a row clearly isn't ours, include it AND record its real department in detected_departments.
+1. items[] = EVERY PRICEABLE ROW of the file — ours or not. Nothing the customer asked for is ever left out: a row of our stone, a row of a natural stone we don't list, a row of concrete/porcelain/joinery — ALL are items. department_match = the real department for each (a covered one from the list when it is ours; the true other department otherwise). The team, not you, rejects what is not theirs — the screen marks non-covered rows for that. detected_departments = every department seen, deduplicated, canonical English.
+1b. ACCOUNT FOR EVERY ROW. A row that is NOT an item (section header, page marker, total/carried-forward, provisional sum, note) goes in skipped[] with its reason. Between items[] and skipped[] every row of the file must appear exactly once — a deterministic counter checks this and sends you back anything unaccounted for. When in doubt whether a row is an item, it IS an item (say what is uncertain in details). The ONLY thing forbidden is INVENTING a material/finish/size the row doesn't state.
 2. Ranges: "150-200" → 200. "approx 200" → 200.
 3. Units normalized to {m, m2, m3, pcs, kg, ton, set, lot, lm}.
 4. description = SHORT catalog title (3-8 words) — or the CODE if the row is identified by one (MA-003…). details = one line in THIS ORDER, only what's stated: السماكة – نوع المعالجة/الفنش – المقاس – النوع – اللون (thickness – finish – size – type – colour). Omit any part the row doesn't state. The team's notes column is not yours.
@@ -312,6 +326,55 @@ ${input.projectNotes.slice(0, 1500)}` : ''}`
   }
   const parsed = mergePhase1Parts(parts, multiBoq)
 
+  // ROW COVERAGE — the file's own priceable rows, counted deterministically,
+  // against what came back. Anything unaccounted for goes back to the model in
+  // a targeted second pass; whatever is STILL missing is reported by text. This
+  // is what makes "12 items out of 16 rows" impossible to miss.
+  let coverageNote: string | null = null
+  if (!drawingsMode && boqTexts.some(Boolean)) {
+    const cands = boqTexts.flatMap((t) => candidateRows(t))
+    const asItems = () => parsed.items.map((it) => ({
+      description: String(it.description || ''), details: it.details ? String(it.details) : null,
+      quantity: Number(it.quantity) || 0, unit: String(it.unit || ''),
+    }))
+    // Rows the model consciously set aside (ledger) count as accounted for.
+    const ledgerLike = () => parsed.skipped.map((s) => ({ description: s.text, details: s.reason, quantity: 0, unit: '' }))
+    let missing = cands.length > 0 ? unmatchedRows(unmatchedRows(cands, asItems()), ledgerLike()) : []
+    if (missing.length > 0) {
+      log(`phase1: coverage ${cands.length - missing.length}/${cands.length} — ${missing.length} rows unaccounted for, second pass`)
+      const csv = `${CONTEXT_PREFIX} rows of the same BOQ that the first extraction did not account for\nDESCRIPTION,UNIT,QUANTITY\n${missing.map((m) => `"${m.text.replace(/"/g, '""')}",${m.unit},${m.qty}`).join('\n')}`
+      const part: AiFile = { data: Buffer.from(csv, 'utf8').toString('base64'), mimeType: 'text/csv', label: 'الصفوف غير المستخرجة' }
+      const note = `\n\nSECOND PASS: a deterministic row counter found these ${missing.length} rows in the BOQ that your first extraction did not account for. For EACH row either extract it as an item — every rule applies: a manufactured product is still emitted with its real department, a stone code with no material is emitted with "كود: …", a composite unit is emitted for its stone part — or, only if it is genuinely not a priceable line (a total, a provisional sum, a header that carried a stray number), name it in notes with the reason. Do not repeat rows already extracted.`
+      try {
+        const p2 = await callPhase1([part], note, 'قراءة ثانية للصفوف الناقصة')
+        const before = parsed.items.length
+        for (const it of p2.items || []) {
+          const like = { description: String(it.description || ''), details: it.details ? String(it.details) : null, quantity: Number(it.quantity) || 0, unit: String(it.unit || '') }
+          // Accept only items that account for a missing row — never duplicates.
+          if (!like.description || !missing.some((m) => rowMatchScore(m, like) >= MATCH_THRESHOLD)) continue
+          parsed.items.push({ ...it, section: String(it.section || '').trim(), _boqFile: sources[0]?.label || '' })
+        }
+        for (const s of Array.isArray(p2.skipped) ? p2.skipped : []) {
+          const text = String((s as { text?: unknown })?.text || '').trim().slice(0, 200)
+          const reason = String((s as { reason?: unknown })?.reason || '').trim().slice(0, 160)
+          if (text) parsed.skipped.push({ text, reason, file: sources[0]?.label || '' })
+        }
+        if (typeof p2.notes === 'string' && p2.notes.trim()) parsed.notes = [parsed.notes, `قراءة ثانية: ${p2.notes.trim()}`].filter(Boolean).join(' • ')
+        log(`phase1: second pass recovered ${parsed.items.length - before} item(s)`)
+        missing = unmatchedRows(unmatchedRows(cands, asItems()), ledgerLike())
+      } catch (e) {
+        log(`phase1: second pass failed: ${e instanceof Error ? e.message : e}`)
+      }
+    }
+    if (cands.length > 0) {
+      coverageNote = missing.length > 0
+        ? `⚠️ تغطية الصفوف: استُخرج ${cands.length - missing.length} من ${cands.length} صف مرشّح. صفوف في الملف لم تُستخرج (${missing.length}): ${missing.slice(0, 8).map((m) => `«${m.text.slice(0, 70)}» (${m.qty} ${m.unit})`).join('؛ ')}${missing.length > 8 ? ' …' : ''} — راجعها وأضف ما ينقص يدوياً.`
+        : `تغطية الصفوف: ${cands.length}/${cands.length} صف مرشّح مُستخرج ✓`
+      const nonItems = parsed.skipped.filter((s) => s.reason)
+      if (nonItems.length > 0) coverageNote += ` • سجل الصفوف غير البنود (${nonItems.length}): ${nonItems.slice(0, 6).map((s) => `«${s.text.slice(0, 40)}» — ${s.reason}`).join('؛ ')}${nonItems.length > 6 ? ' …' : ''}`
+    }
+  }
+
   const rawRows: RouterRow[] = parsed.items
     .map((it, i) => ({
       position: i + 1,
@@ -339,6 +402,7 @@ ${input.projectNotes.slice(0, 1500)}` : ''}`
   if (folded.length > 0) log(`phase1: ${folded.length} بند مكرر بين ملفات الـBOQ — أُبقيت نسخة واحدة`)
 
   const noteBits = [
+    coverageNote,
     parsed.notes,
     multiBoq ? `قُرئت ${sources.length} ملفات BOQ: ${sources.map((x) => x.label).join('، ')}` : null,
     folded.length > 0 ? `${folded.length} بند مكرر بين ملفات الـBOQ (نفس الوصف والكمية والوحدة) — أُبقيت نسخة واحدة لكل بند.` : null,
