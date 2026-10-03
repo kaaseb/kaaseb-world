@@ -132,7 +132,7 @@ export async function analyzeBoq(input: BoqAnalysisInput): Promise<BoqAnalysisRe
   // Gather files. BOQ is required; specs/drawings are optional. ZIPs expand to
   // their contents; the global MAX_FILES ceiling bounds the whole request.
   const files: AiFile[] = []
-  files.push(...await fetchAiFiles(input.boqUrl, `BOQ: ${input.boqFilename}`))
+  files.push(...await fetchAiFiles(input.boqUrl, `BOQ: ${input.boqFilename}`, { name: input.boqFilename }))
 
   const supporting = [
     ...input.specFiles.slice(0, SPEC_CAP).map(f => ({ url: f.url, label: `SPEC: ${f.name}`, name: f.name, visual: false })),

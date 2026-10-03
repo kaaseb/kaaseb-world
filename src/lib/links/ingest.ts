@@ -91,12 +91,10 @@ export interface IngestOptions {
   folder?: string
 }
 
-export async function ingestLink(o: IngestOptions): Promise<IngestResult> {
-  const policy = policyFor(o.kind)
-  if (!policy) return { status: 'unsupported', provider: '—', message: 'Invalid kind', files: [], notices: [] }
-  const res = await resolveLink(o.url)
-  if (res.status !== 'files') return { status: res.status, provider: res.provider, message: res.message, files: [], notices: [] }
-
+/** Stores files (and opens archives) under one project folder. Shared by link
+ *  ingestion and by archives the team uploads from their computer. */
+function makeSink(o: { kind: string; userId: string; folder?: string }) {
+  const policy = policyFor(o.kind)!
   const files: IngestedFile[] = []
   const notices: string[] = []
   // Dots are dropped, not kept: a folder of ".." produced a key like
@@ -105,7 +103,7 @@ export async function ingestLink(o: IngestOptions): Promise<IngestResult> {
   const seenKeys = new Set<string>()
 
   const store = async (name: string, data: Uint8Array) => {
-    if (files.length >= MAX_FILES_PER_LINK) { notices.push(`تجاوز الرابط ${MAX_FILES_PER_LINK} ملف — أُخذت الأوائل`); return }
+    if (files.length >= MAX_FILES_PER_LINK) { notices.push(`تجاوز العدد ${MAX_FILES_PER_LINK} ملف — أُخذت الأوائل`); return }
     const contentType = mimeFor(name)
     // A web page is never a project file — and the bucket must never host HTML.
     if (/\.(html?|xhtml|js|mjs|svg)$/i.test(name)) { notices.push(`تخطّي «${name}» — صفحة ويب لا ملف`); return }
@@ -134,6 +132,29 @@ export async function ingestLink(o: IngestOptions): Promise<IngestResult> {
     if (out.count === 0) notices.push(`«${name}» أرشيف فارغ`)
     return true
   }
+  return { files, notices, store, unpack }
+}
+
+/**
+ * An archive that is ALREADY in our storage (uploaded by the team): open it and
+ * store every member as its own file. Returns null when the bytes are not an
+ * archive — the caller then keeps the original file as it is.
+ */
+export async function expandStoredArchive(o: { name: string; buf: Buffer; kind: string; userId: string; folder?: string }): Promise<{ files: IngestedFile[]; notices: string[] } | null> {
+  if (!policyFor(o.kind)) return null
+  if (!archiveKind(o.name, o.buf)) return null
+  const sink = makeSink(o)
+  await sink.unpack(o.name, o.buf, 1)
+  return { files: sink.files, notices: sink.notices }
+}
+
+export async function ingestLink(o: IngestOptions): Promise<IngestResult> {
+  const policy = policyFor(o.kind)
+  if (!policy) return { status: 'unsupported', provider: '—', message: 'Invalid kind', files: [], notices: [] }
+  const res = await resolveLink(o.url)
+  if (res.status !== 'files') return { status: res.status, provider: res.provider, message: res.message, files: [], notices: [] }
+
+  const { files, notices, store, unpack } = makeSink(o)
 
   let remaining = MAX_TOTAL_BYTES
   for (const rf of res.files) {

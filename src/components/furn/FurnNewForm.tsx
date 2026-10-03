@@ -17,6 +17,7 @@ import {
 import { useLanguage } from '@/contexts/LanguageContext'
 import type { ClientProject } from '@/types'
 import { bucketForFile } from '@/lib/links/discover'
+import { PROJECT_FILE_ACCEPT } from '@/lib/files/accept'
 
 interface UploadedFile {
   url: string
@@ -499,7 +500,7 @@ export function FurnNewForm() {
           title={t('furn_form_boq')}
           hint={isRtl ? 'كل ملفات جداول الكميات — Excel أو CSV أو PDF أو صورة. يمكن إضافة أكثر من ملف؛ تُقرأ كلها.' : 'All BOQ files — Excel, CSV, PDF or image. Add as many as the client sent; every one is read.'}
           icon={<FileSpreadsheet className="w-4 h-4 text-emerald-600" />}
-          accept=".xlsx,.xls,.csv,.png,.jpg,.jpeg,.webp,.pdf"
+          accept={PROJECT_FILE_ACCEPT}
           multiple
           files={boqFiles}
           pending={pending.boq}
@@ -514,7 +515,7 @@ export function FurnNewForm() {
           title={t('furn_form_specs')}
           hint={t('furn_form_specs_hint')}
           icon={<FileText className="w-4 h-4 text-blue-600" />}
-          accept=".pdf,.doc,.docx"
+          accept={PROJECT_FILE_ACCEPT}
           multiple
           files={specFiles}
           pending={pending.spec}
@@ -529,7 +530,7 @@ export function FurnNewForm() {
           title={t('furn_form_drawings')}
           hint={t('furn_form_drawings_hint')}
           icon={<ImageIcon className="w-4 h-4 text-purple-600" />}
-          accept=".pdf,.doc,.docx,.png,.jpg,.jpeg"
+          accept={PROJECT_FILE_ACCEPT}
           multiple
           files={drawingFiles}
           pending={pending.drawing}
@@ -544,7 +545,7 @@ export function FurnNewForm() {
           title={t('furn_form_other')}
           hint={t('furn_form_other_hint')}
           icon={<Paperclip className="w-4 h-4 text-amber-600" />}
-          accept=".pdf,.doc,.docx,.png,.jpg,.jpeg,.xlsx,.xls,.csv,.txt"
+          accept={PROJECT_FILE_ACCEPT}
           multiple
           files={otherFiles}
           pending={pending.other}

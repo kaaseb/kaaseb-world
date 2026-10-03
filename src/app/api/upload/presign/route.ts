@@ -34,7 +34,7 @@ export async function POST(request: Request) {
 
   const kind = typeof body.kind === 'string' && body.kind ? body.kind : 'projects'
   const filename = typeof body.filename === 'string' && body.filename ? body.filename : 'file'
-  const contentType = typeof body.contentType === 'string' ? body.contentType : ''
+  const contentType = (typeof body.contentType === 'string' && body.contentType) || 'application/octet-stream'
 
   const policy = policyFor(kind)
   if (!policy) return NextResponse.json({ error: 'Invalid kind' }, { status: 400 })

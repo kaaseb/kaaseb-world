@@ -29,6 +29,7 @@ import { useLanguage } from '@/contexts/LanguageContext'
 import { QuoteTermsControl, type QuoteTermsHandle } from '@/components/quote-terms/QuoteTermsControl'
 import { computeTotals } from '@/lib/quotation/totals'
 import { FurnFileActions, type LinkFetch } from '@/components/furn/FurnFileActions'
+import { FurnEditInfo } from '@/components/furn/FurnEditInfo'
 
 // A SUGGESTED price for one item — shown next to the price box with its basis,
 // applied only when the team clicks. Never written by itself.
@@ -46,7 +47,7 @@ import type { FurnProject, FurnItem, FurnQuotation } from '@/types'
 interface Props {
   project: FurnProject
   /** All BOQ files + imported notes/keywords (S3 extras; the row holds one BOQ). */
-  extras?: { boqFiles: Array<{ url: string; name: string }>; notes: string | null; keywords: string | null; linkFetches?: Record<string, LinkFetch> }
+  extras?: { boqFiles: Array<{ url: string; name: string }>; notes: string | null; keywords: string | null; linkFetches?: Record<string, LinkFetch>; excluded?: string[] }
   initialItems: FurnItem[]
   initialQuotations: FurnQuotation[]
   canEditPrices: boolean
@@ -74,6 +75,30 @@ export function FurnDetail({ project: initialProject, extras, initialItems, init
   const [suggesting, setSuggesting] = useState(false)
   // All BOQ files + imported notes/keywords — replaced in place by "re-import".
   const [extrasState, setExtrasState] = useState<NonNullable<Props['extras']>>(extras ?? { boqFiles: [], notes: null, keywords: null, linkFetches: {} })
+  // Which files the NEXT run reads — each file has its own switch.
+  const excludedSet = new Set(extrasState.excluded || [])
+  const [togglingFiles, setTogglingFiles] = useState(false)
+  async function setFilesIncluded(urls: string[], include: boolean) {
+    if (urls.length === 0 || togglingFiles) return
+    const before = extrasState.excluded || []
+    const next = new Set(before)
+    for (const u of urls) { if (include) next.delete(u); else next.add(u) }
+    setExtrasState((x) => ({ ...x, excluded: Array.from(next) })) // optimistic
+    setTogglingFiles(true)
+    try {
+      const res = await fetch(`/api/furn/projects/${project.id}/files`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ urls, include }),
+      })
+      const j = await res.json().catch(() => ({}))
+      if (!res.ok || !Array.isArray(j.excluded)) throw new Error(j.error || 'failed')
+      setExtrasState((x) => ({ ...x, excluded: j.excluded }))
+    } catch (e) {
+      setExtrasState((x) => ({ ...x, excluded: before }))
+      toast.error(e instanceof Error && e.message !== 'failed' ? e.message : (isRtl ? 'تعذّر حفظ الاختيار' : 'Could not save the selection'))
+    } finally {
+      setTogglingFiles(false)
+    }
+  }
   const [reimporting, setReimporting] = useState(false)
   async function reimportFromClient() {
     if (reimporting) return
@@ -543,6 +568,8 @@ export function FurnDetail({ project: initialProject, extras, initialItems, init
             )}
           </div>
         </div>
+        {/* Client data (Arabic + English) is editable any time before sending. */}
+        <FurnEditInfo projectId={project.id} isRtl={isRtl} onSaved={(p) => setProject(p)} />
       </div>
 
       {/* Tabs strip */}
@@ -591,6 +618,7 @@ export function FurnDetail({ project: initialProject, extras, initialItems, init
               </div>
             )}
             <FilesSection project={project} boqFiles={boqFilesAll} notes={extrasState.notes} keywords={extrasState.keywords} isRtl={isRtl} t={t}
+              excluded={excludedSet} onToggle={setFilesIncluded} locked={processing || togglingFiles}
               actions={
                 /* Links found in the email + add files to this project in place —
                    above the BOQ list, no new project, same workflow, then «Retry». */
@@ -1111,7 +1139,7 @@ function Linkified({ text }: { text: string }) {
   )
 }
 
-function FilesSection({ project, boqFiles, notes, keywords, isRtl, t, actions }: {
+function FilesSection({ project, boqFiles, notes, keywords, isRtl, t, actions, excluded, onToggle, locked }: {
   project: FurnProject
   boqFiles: Array<{ url: string; name: string }>
   notes: string | null
@@ -1120,7 +1148,14 @@ function FilesSection({ project, boqFiles, notes, keywords, isRtl, t, actions }:
   t: (k: Parameters<ReturnType<typeof useLanguage>['t']>[0]) => string
   /** Link-fetch + add-files controls, rendered right above the BOQ files. */
   actions?: React.ReactNode
+  /** Files switched off for processing, and the switch itself. */
+  excluded: Set<string>
+  onToggle: (urls: string[], include: boolean) => void
+  locked: boolean
 }) {
+  const all = [...boqFiles, ...(project.spec_files || []), ...(project.drawing_files || []), ...(project.other_files || [])]
+  const offCount = all.filter((f) => excluded.has(f.url)).length
+  const sel = { excluded, onToggle, locked, isRtl }
   return (
     <div className="space-y-3">
       {/* Imported notes (links included) + keywords — exactly as the client
@@ -1139,56 +1174,92 @@ function FilesSection({ project, boqFiles, notes, keywords, isRtl, t, actions }:
         </div>
       )}
       {actions}
+      {all.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+          <span>
+            {isRtl
+              ? `الملفات المحددة للمعالجة: ${all.length - offCount} من ${all.length} — أزل علامة ✓ عن أي ملف لا تريد قراءته الآن.`
+              : `Files selected for processing: ${all.length - offCount} of ${all.length} — untick any file you don't want read now.`}
+          </span>
+          {offCount > 0 && (
+            <button type="button" disabled={locked} onClick={() => onToggle(all.map((f) => f.url), true)} className="text-sky-700 hover:underline disabled:opacity-50">
+              {isRtl ? 'تحديد الكل' : 'Select all'}
+            </button>
+          )}
+        </div>
+      )}
       <FilesGroup
         title={`${t('furn_form_boq')}${boqFiles.length > 1 ? ` (${boqFiles.length})` : ''}`}
         icon={<FileSpreadsheet className="w-4 h-4 text-emerald-600" />}
         files={boqFiles}
+        {...sel}
       />
       <FilesGroup
         title={t('furn_form_specs')}
         icon={<FileTextIcon className="w-4 h-4 text-blue-600" />}
         files={project.spec_files || []}
+        {...sel}
       />
       <FilesGroup
         title={t('furn_form_drawings')}
         icon={<ImageIcon className="w-4 h-4 text-purple-600" />}
         files={project.drawing_files || []}
+        {...sel}
       />
       <FilesGroup
         title={t('furn_form_other')}
         icon={<Paperclip className="w-4 h-4 text-amber-600" />}
         files={project.other_files || []}
+        {...sel}
       />
     </div>
   )
 }
 
-function FilesGroup({ title, icon, files }: {
+function FilesGroup({ title, icon, files, excluded, onToggle, locked, isRtl }: {
   title: string
   icon: React.ReactNode
   files: Array<{ url: string; name: string }>
+  excluded: Set<string>
+  onToggle: (urls: string[], include: boolean) => void
+  locked: boolean
+  isRtl: boolean
 }) {
   if (files.length === 0) return null
+  const on = files.filter((f) => !excluded.has(f.url)).length
   return (
     <div className="space-y-1.5">
       <p className="text-xs font-medium text-muted-foreground flex items-center gap-1.5">
         {icon}
         {title}
-        <span className="text-[10px] bg-muted/60 px-1 rounded">{files.length}</span>
+        <span className="text-[10px] bg-muted/60 px-1 rounded">{on}/{files.length}</span>
+        {files.length > 1 && (
+          <button type="button" disabled={locked} onClick={() => onToggle(files.map((f) => f.url), on !== files.length)}
+            className="text-[11px] text-sky-700 hover:underline disabled:opacity-50 ms-1">
+            {on === files.length ? (isRtl ? 'إلغاء تحديد الكل' : 'Untick all') : (isRtl ? 'تحديد الكل' : 'Tick all')}
+          </button>
+        )}
       </p>
       <div className="space-y-1.5">
-        {files.map((f, i) => (
-          <a
-            key={`${f.url}-${i}`}
-            href={f.url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-center gap-2 p-2 rounded border bg-muted/30 hover:bg-muted/60 transition text-sm"
-          >
-            <FileTextIcon className="w-4 h-4 text-muted-foreground" />
-            <span className="truncate flex-1">{f.name}</span>
-          </a>
-        ))}
+        {files.map((f, i) => {
+          const included = !excluded.has(f.url)
+          return (
+            <div key={`${f.url}-${i}`} className={`flex items-center gap-2 p-2 rounded border text-sm transition ${included ? 'bg-muted/30' : 'bg-transparent opacity-55'}`}>
+              <input
+                type="checkbox"
+                checked={included}
+                disabled={locked}
+                onChange={(e) => onToggle([f.url], e.target.checked)}
+                className="w-4 h-4 accent-orange-600 flex-shrink-0 cursor-pointer"
+                title={isRtl ? 'يُقرأ في المعالجة' : 'Read when processing'}
+                aria-label={f.name}
+              />
+              <FileTextIcon className="w-4 h-4 text-muted-foreground flex-shrink-0" />
+              <a href={f.url} target="_blank" rel="noopener noreferrer" className={`truncate flex-1 hover:underline ${included ? '' : 'line-through'}`}>{f.name}</a>
+              {!included && <span className="text-[10px] text-muted-foreground flex-shrink-0">{isRtl ? 'غير محدد' : 'off'}</span>}
+            </div>
+          )
+        })}
       </div>
     </div>
   )

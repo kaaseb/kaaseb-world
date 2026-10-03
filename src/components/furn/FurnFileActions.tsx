@@ -24,6 +24,7 @@ import { toast } from 'sonner'
 import { Download, ExternalLink, Link2, Loader2, LockKeyhole, Upload, CheckCircle2, AlertTriangle, RefreshCw } from 'lucide-react'
 import { uploadFile } from '@/lib/upload-client'
 import { discoverFileLinks, isEmailBodyPlaceholder, type DiscoveredLink } from '@/lib/links/discover'
+import { PROJECT_FILE_ACCEPT } from '@/lib/files/accept'
 import type { FurnProject } from '@/types'
 
 type Bucket = 'boq' | 'spec' | 'drawing' | 'other'
@@ -147,8 +148,10 @@ export function FurnFileActions({ project, notes, boqFiles, fetched, isRtl, disa
         if (!res.ok || !j.project) throw new Error(j.error || (isRtl ? 'فشل الإضافة' : 'Attach failed'))
         onAttached(j.project as FurnProject, (j.boqFiles || []) as FileRef[])
         toast.success(isRtl
-          ? `أُضيف ${j.added} ملف إلى ${BUCKET_LABEL[pickBucket].ar}${j.demoted ? ' — ونُقل نص الإيميل إلى «أخرى»' : ''}. اضغط «إعادة المحاولة» لقراءتها.`
-          : `Added ${j.added} file(s) to ${BUCKET_LABEL[pickBucket].en}${j.demoted ? ' — email text moved to “Other”' : ''}. Press “Retry” to read them.`)
+          ? `${j.expanded ? `فُتح الأرشيف: ${summary(j.addedByBucket, j.demoted, true)}` : `أُضيف ${j.added} ملف إلى ${BUCKET_LABEL[pickBucket].ar}${j.demoted ? ' — ونُقل نص الإيميل إلى «أخرى»' : ''}`}. حدّد الملفات المطلوبة ثم اضغط «إعادة المحاولة».`
+          : `${j.expanded ? `Archive opened: ${summary(j.addedByBucket, j.demoted, false)}` : `Added ${j.added} file(s) to ${BUCKET_LABEL[pickBucket].en}${j.demoted ? ' — email text moved to “Other”' : ''}`}. Tick the files you want, then press “Retry”.`,
+          { duration: 10000 })
+        if (Array.isArray(j.notices) && j.notices.length > 0) toast.message(j.notices.slice(0, 4).join('\n'), { duration: 12000 })
       }
       if (failed.length > 0) toast.error(failed.join('\n'), { duration: 12000 })
     } catch (e) {
@@ -274,7 +277,7 @@ export function FurnFileActions({ project, notes, boqFiles, fetched, isRtl, disa
           </Button>
         ))}
         <input ref={fileInput} type="file" multiple className="hidden" onChange={onPicked}
-          accept=".xlsx,.xls,.csv,.pdf,.doc,.docx,.dwg,.dxf,.png,.jpg,.jpeg,.webp,.zip,.rar" />
+          accept={PROJECT_FILE_ACCEPT} />
       </div>
     </div>
   )

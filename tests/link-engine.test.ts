@@ -35,7 +35,9 @@ test('driveConfirmUrl: submits the virus-scan form with its hidden inputs', () =
 test('archiveKind: magic bytes + name, xlsx is not a zip', () => {
   const pk = new Uint8Array([0x50, 0x4b, 3, 4, 0, 0])
   assert.equal(archiveKind('Stone & Marble.zip', pk), 'zip')
-  assert.equal(archiveKind('BOQ.xlsx', pk), null)
+  const realXlsx = zipSync({ '[Content_Types].xml': strToU8('<Types/>'), 'xl/workbook.xml': strToU8('<workbook/>') })
+  assert.equal(archiveKind('BOQ.xlsx', realXlsx), null, 'an Office file is a ZIP container, not an archive')
+  assert.equal(archiveKind('upload.bin', pk), 'zip', 'a ZIP stored as .bin is still an archive')
   assert.equal(archiveKind('transfer', pk), 'zip')
   assert.equal(archiveKind('x.rar', new Uint8Array([0x52, 0x61, 0x72, 0x21, 0x1a, 7, 1, 0])), 'rar')
   assert.equal(archiveKind('a.pdf', new Uint8Array([0x25, 0x50, 0x44, 0x46])), null)

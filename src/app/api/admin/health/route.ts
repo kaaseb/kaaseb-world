@@ -8,6 +8,8 @@ import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { getProfileOrFallback } from '@/lib/profile'
 import { heavy, heavyPoolStatus } from '@/lib/heavy'
+import { renderHtmlToPdf } from '@/lib/html-pdf'
+import { resolveMailer } from '@/lib/outreach/transport'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -28,7 +30,29 @@ export async function GET() {
   } catch (e) {
     probe = { ok: false, ms: Date.now() - t0, error: e instanceof Error ? e.message : String(e) }
   }
+  // Can this server render a PDF at all? (Chromium + its shared libraries.)
+  const t1 = Date.now()
+  let pdf: { ok: boolean; ms: number; error?: string }
+  try {
+    const out = await renderHtmlToPdf('<html><body><p>health</p></body></html>')
+    pdf = { ok: out.byteLength > 500, ms: Date.now() - t1 }
+  } catch (e) {
+    pdf = { ok: false, ms: Date.now() - t1, error: (e instanceof Error ? e.message : String(e)).slice(0, 400) }
+  }
+  // Is an outgoing mail account configured and reachable?
+  const t2 = Date.now()
+  let mail: { ok: boolean; ms: number; from?: string; error?: string }
+  try {
+    const m = await resolveMailer()
+    await m.transport.verify()
+    mail = { ok: true, ms: Date.now() - t2, from: String(m.from || '') }
+  } catch (e) {
+    mail = { ok: false, ms: Date.now() - t2, error: (e instanceof Error ? e.message : String(e)).slice(0, 300) }
+  }
+
   return NextResponse.json({
+    pdf,
+    mail,
     node: process.version,
     cwd: process.cwd(),
     pool: heavyPoolStatus(),

@@ -57,7 +57,9 @@ export async function POST(request: Request) {
     const policy = policyFor(kind)
     if (!policy) return NextResponse.json({ error: 'Invalid kind' }, { status: 400 })
 
-    const mime = file.type || ''
+    // Browsers send an EMPTY type for files the OS has no association for (.csv
+    // without Excel, .dwg, .rar, …). Empty is "unknown binary", not "forbidden".
+    const mime = file.type || 'application/octet-stream'
     if (!mimeAllowed(policy, mime)) {
       return NextResponse.json({ error: 'Unsupported file type' }, { status: 415 })
     }

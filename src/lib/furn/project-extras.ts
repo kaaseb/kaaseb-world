@@ -22,6 +22,13 @@ export interface LinkFetch {
   message?: string
 }
 
+/** The team's own Arabic/English names for the quotation header. */
+export interface ProjectNames {
+  project_ar?: string; project_en?: string
+  company_ar?: string; company_en?: string
+  engineer_ar?: string; engineer_en?: string
+}
+
 export interface FurnProjectExtras {
   boqFiles: FurnBoqFile[]
   notes: string | null
@@ -30,11 +37,25 @@ export interface FurnProjectExtras {
   importedFrom: string | null
   /** Per share link (url → last fetch outcome). */
   linkFetches: Record<string, LinkFetch>
+  /** File URLs the team switched OFF for processing (still kept on the project). */
+  excluded: string[]
+  /** Names per language, edited by the team (see lib/furn/names). */
+  names: ProjectNames
 }
 
 type Store = Record<string, Partial<FurnProjectExtras>>
 
-const EMPTY: FurnProjectExtras = { boqFiles: [], notes: null, keywords: null, importedFrom: null, linkFetches: {} }
+const EMPTY: FurnProjectExtras = { boqFiles: [], notes: null, keywords: null, importedFrom: null, linkFetches: {}, excluded: [], names: {} }
+
+function cleanNames(v: unknown): ProjectNames {
+  const out: ProjectNames = {}
+  if (!v || typeof v !== 'object') return out
+  for (const k of ['project_ar', 'project_en', 'company_ar', 'company_en', 'engineer_ar', 'engineer_en'] as const) {
+    const s = (v as Record<string, unknown>)[k]
+    if (typeof s === 'string' && s.trim()) out[k] = s.trim().slice(0, 200)
+  }
+  return out
+}
 const LINK_STATUSES = new Set<LinkFetch['status']>(['files', 'needsLogin', 'password', 'expired', 'notFound', 'page', 'unsupported'])
 const MAX_LINKS = 100
 
@@ -64,6 +85,8 @@ function clean(e: Partial<FurnProjectExtras> | undefined): FurnProjectExtras {
     keywords: typeof e?.keywords === 'string' && e.keywords.trim() ? e.keywords : null,
     importedFrom: typeof e?.importedFrom === 'string' && e.importedFrom ? e.importedFrom : null,
     linkFetches: cleanLinkFetches(e?.linkFetches),
+    excluded: Array.isArray(e?.excluded) ? Array.from(new Set(e!.excluded.filter((u) => typeof u === 'string' && u))).slice(0, 1000) : [],
+    names: cleanNames(e?.names),
   }
 }
 
@@ -74,6 +97,19 @@ export async function getFurnExtras(projectId: string): Promise<FurnProjectExtra
 
 export async function setFurnExtras(projectId: string, patch: Partial<FurnProjectExtras>): Promise<void> {
   await mutateJson<Store>(KEY, {}, (s) => ({ ...s, [projectId]: clean({ ...EMPTY, ...(s[projectId] || {}), ...patch }) }))
+}
+
+/** Switch one or more files on/off for processing (atomic). Returns the new list. */
+export async function setFilesIncluded(projectId: string, urls: string[], include: boolean): Promise<string[]> {
+  let result: string[] = []
+  await mutateJson<Store>(KEY, {}, (s) => {
+    const cur = clean({ ...EMPTY, ...(s[projectId] || {}) })
+    const set = new Set(cur.excluded)
+    for (const u of urls) { if (include) set.delete(u); else set.add(u) }
+    result = Array.from(set)
+    return { ...s, [projectId]: { ...cur, excluded: result } }
+  })
+  return result
 }
 
 /** Record one link's fetch outcome atomically (read-modify-write inside mutateJson). */

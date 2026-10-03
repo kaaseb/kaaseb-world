@@ -177,9 +177,10 @@ async function extractBoqRows(input: RouterInput): Promise<{
     const failures: string[] = []
     for (const b of boqList) {
       try {
-        const fs = await fetchAiFiles(b.url, `BOQ: ${b.name}`)
+        const why: string[] = []
+        const fs = await fetchAiFiles(b.url, `BOQ: ${b.name}`, { name: b.name, notes: why })
         if (fs.length > 0) sources.push({ label: b.name, files: fs })
-        else { failures.push(`${b.name}: لا محتوى مقروء (صيغة غير مدعومة أو ملف فارغ)`); log(`BOQ "${b.name}": لا محتوى مقروء`) }
+        else { failures.push(why.length ? why.join(' | ') : `${b.name}: لا محتوى مقروء`); log(`BOQ "${b.name}": ${why.join(' | ') || 'لا محتوى مقروء'}`) }
       } catch (e) {
         const why = e instanceof Error ? e.message : String(e)
         failures.push(`${b.name}: ${why}`)
@@ -192,7 +193,7 @@ async function extractBoqRows(input: RouterInput): Promise<{
     const src = [...input.drawingFiles, ...input.specFiles, ...input.otherFiles].slice(0, DRAWINGS_FOR_EXTRACTION)
     const files: AiFile[] = []
     for (const f of src) {
-      try { files.push(...(await fetchAiFiles(f.url, `Drawing: ${f.name}`))) } catch { /* skip a bad file */ }
+      try { files.push(...(await fetchAiFiles(f.url, `Drawing: ${f.name}`, { name: f.name }))) } catch { /* skip a bad file */ }
     }
     if (files.length === 0) throw new Error('لا توجد رسومات لاستخراج البنود')
     sources.push({ label: 'drawings', files })

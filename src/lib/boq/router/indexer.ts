@@ -16,7 +16,8 @@ import { heavy } from '@/lib/heavy'
 import { readJson, writeJson, fetchAppOwned } from '@/lib/s3'
 import { getProvider } from '@/lib/ai'
 import type { AiFile, JsonSchema } from '@/lib/ai/provider'
-import { extOf, mimeFromName } from '@/lib/ai/files'
+import { sniff, decodeText, unreadableReason } from '@/lib/files/sniff'
+import { archiveFiles, memberName, docxText } from '@/lib/files/read'
 import {
   INDEX_VERSION, VISION_TOC_MAX_PAGES, MIN_PAGE_TEXT_CHARS, AI_CALL_TIMEOUT_MS,
   withTimeout,
@@ -28,8 +29,6 @@ const cacheKey = (sha: string) => `app-data/boq-index/v${INDEX_VERSION}-${sha}.j
 const PAGE_ANCHOR_CHARS = 110
 const SHEET_TEXT_CAP = 18_000
 const MAX_FILE_BYTES = 80 * 1024 * 1024 // refuse to buffer anything bigger
-// Bounds for expanding a ZIP attachment (enforced before decompression).
-const ZIP_CAPS = { entryCap: MAX_FILE_BYTES, totalCap: 600 * 1024 * 1024, maxEntries: 400 }
 
 // ─── fetching (zip-aware) ───────────────────────────────────────────────────
 
@@ -55,23 +54,15 @@ export async function fetchSources(
   const buf = Buffer.from(await res.arrayBuffer())
   if (buf.byteLength > MAX_FILE_BYTES) throw new Error(`الملف أكبر من الحد (${Math.round(MAX_FILE_BYTES / 1024 / 1024)}MB)`)
 
-  if (mimeFromName(name) !== 'application/zip') {
+  const kind = sniff(buf, name).kind
+  if (kind !== 'zip' && kind !== 'rar') {
     return [{ ref: { url, name, bucket }, buf }]
   }
 
-  // Unzipped OFF the request thread (a drawing set can be hundreds of MB).
-  let entries: Array<{ path: string; data: Uint8Array }>
-  try {
-    entries = (await heavy.unzip(new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength), ZIP_CAPS)).entries
-  } catch {
-    throw new Error('ملف ZIP تالف')
-  }
-  const out: RawSource[] = []
-  for (const { path: entryPath, data } of entries) {
-    const base = entryPath.split('/').pop() || entryPath
-    out.push({ ref: { url, name: base, bucket, zipEntry: entryPath }, buf: Buffer.from(data.buffer, data.byteOffset, data.byteLength) })
-  }
-  return out
+  // An archive (ZIP / RAR, one nested level) — opened OFF the request thread.
+  const { files, notes } = await archiveFiles(buf, name)
+  if (files.length === 0) throw new Error(notes[0] || 'أرشيف فارغ أو تالف')
+  return files.map((f) => ({ ref: { url, name: memberName(f.path), bucket, zipEntry: f.path }, buf: f.data }))
 }
 
 /** Re-fetch the bytes behind an already-indexed file (read phase needs them for
@@ -82,10 +73,10 @@ export async function refetchBytes(file: IndexedFile): Promise<Buffer> {
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   let buf: Buffer = Buffer.from(await res.arrayBuffer())
   if (file.source.zipEntry) {
-    const { entries } = await heavy.unzip(new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength), ZIP_CAPS)
-    const hit = entries.find((e) => e.path === file.source.zipEntry)
-    if (!hit) throw new Error('اختفى الملف من داخل الـZIP')
-    buf = Buffer.from(hit.data.buffer, hit.data.byteOffset, hit.data.byteLength)
+    const { files } = await archiveFiles(buf, file.source.url.split('/').pop() || 'archive')
+    const hit = files.find((e) => e.path === file.source.zipEntry)
+    if (!hit) throw new Error('اختفى الملف من داخل الأرشيف')
+    buf = hit.data
   }
   if ((await heavy.sha256(buf)) !== file.sha) {
     throw new Error('تغيّر محتوى الملف منذ الفهرسة — أعد المعالجة')
@@ -232,11 +223,12 @@ export async function indexSource(raw: RawSource): Promise<{ file: IndexedFile; 
     error: null,
   }
 
-  const ext = extOf(raw.ref.name)
-  const mime = mimeFromName(raw.ref.name)
+  // Decided from the BYTES, with the name as a hint only.
+  const sn = sniff(raw.buf, raw.ref.name)
+  const mime = sn.mime
 
   // Excel / CSV / TXT → sheets & text are "pages", free.
-  if (ext === 'xlsx' || ext === 'xls') {
+  if (sn.kind === 'spreadsheet') {
     try {
       const { sheets } = await heavy.xlsxSheets(raw.buf, SHEET_TEXT_CAP)
       const pages: IndexedPage[] = sheets.map(({ name: sheet, csv }, i) => {
@@ -251,8 +243,17 @@ export async function indexSource(raw: RawSource): Promise<{ file: IndexedFile; 
     }
   }
 
-  if (mime === 'text/csv' || mime === 'text/plain') {
-    const text = raw.buf.toString('utf8').slice(0, SHEET_TEXT_CAP)
+  if (sn.kind === 'docx') {
+    const t = await docxText(raw.buf)
+    if (!t) return { file: { ...base, error: 'ملف Word فارغ أو غير مقروء' }, cached: false }
+    const text = t.slice(0, SHEET_TEXT_CAP * 4)
+    const file: IndexedFile = { ...base, kind: 'text', pageCount: 1, pages: [{ page: 1, text, anchor: anchorOf(text) }] }
+    await writeJson(cacheKey(sha), file)
+    return { file, cached: false }
+  }
+
+  if (sn.kind === 'delimited' || sn.kind === 'text') {
+    const text = decodeText(raw.buf).slice(0, SHEET_TEXT_CAP)
     const file: IndexedFile = {
       ...base, kind: 'text', pageCount: 1,
       pages: [{ page: 1, text, anchor: anchorOf(text) }],
@@ -262,7 +263,7 @@ export async function indexSource(raw: RawSource): Promise<{ file: IndexedFile; 
   }
 
   // Images → single visual "page" + one TOC line via vision.
-  if (mime.startsWith('image/')) {
+  if (sn.kind === 'image' && ['image/png', 'image/jpeg', 'image/webp', 'image/gif'].includes(mime)) {
     try {
       const toc = await visionToc(raw.buf, mime, raw.ref.name)
       const summary = toc.pages.get(1) || toc.title || '(صورة — تُقرأ بصرياً)'
@@ -287,7 +288,7 @@ export async function indexSource(raw: RawSource): Promise<{ file: IndexedFile; 
     }
   }
 
-  if (mime === 'application/pdf') {
+  if (sn.kind === 'pdf') {
     const extracted = await extractPdfPages(raw.buf)
     const pageCount = extracted?.pageCount || (await pdfPageCount(raw.buf))
     if (pageCount === 0) return { file: { ...base, error: 'PDF غير قابل للقراءة' }, cached: false }
@@ -343,5 +344,5 @@ export async function indexSource(raw: RawSource): Promise<{ file: IndexedFile; 
   }
 
   // docx & friends — honestly unreadable.
-  return { file: { ...base, error: `صيغة غير مقروءة (${ext || 'غير معروفة'})` }, cached: false }
+  return { file: { ...base, error: unreadableReason(sn.kind) || 'صيغة غير مقروءة' }, cached: false }
 }

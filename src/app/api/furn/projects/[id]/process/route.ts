@@ -71,7 +71,14 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   // ALL the project's BOQ files (the row holds only the first; the rest live in
   // the S3 extras store) + the client project's notes/keywords as AI context.
   const extras = await getFurnExtras(id)
-  const boqFiles = resolveBoqFiles(project, extras)
+  // The team chooses which files this run reads (each file has its own switch);
+  // a switched-off file stays on the project, it is just not read now.
+  const off = new Set(extras.excluded)
+  const on = <T extends { url: string }>(list: unknown): T[] => (Array.isArray(list) ? (list as T[]) : []).filter((f) => f && typeof f.url === 'string' && !off.has(f.url))
+  const boqFiles = resolveBoqFiles(project, extras).filter((f) => !off.has(f.url))
+  project.spec_files = on(project.spec_files)
+  project.drawing_files = on(project.drawing_files)
+  project.other_files = on(project.other_files)
   const projectNotes = [extras.notes, extras.keywords ? `كلمات مفتاحية: ${extras.keywords}` : null].filter(Boolean).join('\n') || null
 
   // BOQ is optional now: a project may be drawings-only. Require SOMETHING to
@@ -81,7 +88,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     || (Array.isArray(project.drawing_files) && project.drawing_files.length > 0)
     || (Array.isArray(project.other_files) && project.other_files.length > 0)
   if (!hasFiles) {
-    return NextResponse.json({ error: 'ارفع ملف BOQ أو رسومات أولاً' }, { status: 400 })
+    return NextResponse.json({ error: off.size > 0 ? 'كل الملفات غير محددة — حدّد ملفاً واحداً على الأقل للمعالجة' : 'ارفع ملف BOQ أو رسومات أولاً' }, { status: 400 })
   }
 
   // Pull only enabled departments. The AI uses these as the allow-list.

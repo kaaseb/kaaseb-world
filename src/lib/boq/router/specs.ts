@@ -28,7 +28,7 @@
 
 import { getProvider } from '@/lib/ai'
 import type { AiFile, JsonSchema } from '@/lib/ai/provider'
-import { mimeFromName } from '@/lib/ai/files'
+import { sniff } from '@/lib/files/sniff'
 import { readJson, mutateJson } from '@/lib/s3'
 import {
   AI_CALL_TIMEOUT_MS, ATTR_KEYS, EMPTY_ATTRS, PAGE_TEXT_CAP, READ_CONCURRENCY,
@@ -191,7 +191,7 @@ async function harvestTextPage(text: string, label: string): Promise<StoredEntry
 
 async function harvestVisualPage(file: IndexedFile, page: number): Promise<StoredEntry[]> {
   const buf = await refetchBytes(file)
-  const mime = mimeFromName(file.name)
+  const mime = sniff(buf, file.name).mime
   const aiFile: AiFile = mime === 'application/pdf'
     ? { data: (await extractPdfPageRange(buf, page, page)).toString('base64'), mimeType: 'application/pdf', label: `${file.name} — صفحة ${page}` }
     : { data: buf.toString('base64'), mimeType: mime, label: file.name }

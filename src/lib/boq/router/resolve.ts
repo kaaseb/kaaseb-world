@@ -19,7 +19,7 @@
 
 import { getProvider } from '@/lib/ai'
 import type { AiFile, JsonSchema } from '@/lib/ai/provider'
-import { mimeFromName } from '@/lib/ai/files'
+import { sniff } from '@/lib/files/sniff'
 import {
   AI_CALL_TIMEOUT_MS, CATALOG_CHAR_CAP, MAX_CANDIDATES_PER_ROW, PAGE_TEXT_CAP,
   attrsAgree, attrsVerify, detailsStateThickness, hasAnyAttr,
@@ -433,7 +433,7 @@ async function visualReadOnce(
  *  agree; two blind reads that must match is a real check. Same call count. */
 export async function readVisualPage(group: ReadGroup): Promise<PageReadResult> {
   const buf = await refetchBytes(group.file)
-  const mime = mimeFromName(group.file.name)
+  const mime = sniff(buf, group.file.name).mime
 
   let aiFile: AiFile
   let pageLabel: number | null = group.page

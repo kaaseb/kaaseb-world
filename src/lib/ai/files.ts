@@ -20,17 +20,10 @@
 
 import { heavy } from '@/lib/heavy'
 import { fetchAppOwned } from '@/lib/s3'
+import { sniff, decodeText, unreadableReason } from '@/lib/files/sniff'
+import { archiveFiles, memberName, docxText } from '@/lib/files/read'
 import type { AiFile } from './provider'
 
-const EXCEL_MIMES = new Set([
-  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  'application/vnd.ms-excel',
-])
-
-const VIDEO_EXTS = new Set(['mp4', 'mov', 'avi', 'mkv', 'webm', 'flv', 'wmv', 'm4v', '3gp'])
-
-// Bounds for expanding an uploaded ZIP (a zip bomb must die in the worker).
-const ZIP_CAPS = { entryCap: 120 * 1024 * 1024, totalCap: 600 * 1024 * 1024, maxEntries: 400 }
 
 // Below this much extracted text we treat a PDF as scanned/image-only and send
 // it for vision instead of as (near-empty) text.
@@ -57,9 +50,13 @@ export function extOf(name: string): string {
 export function mimeFromName(name: string): string {
   switch (extOf(name)) {
     case 'pdf': return 'application/pdf'
-    case 'xlsx': return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    case 'xlsx':
+    case 'xlsm':
+    case 'xlsb':
+    case 'ods': return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     case 'xls': return 'application/vnd.ms-excel'
-    case 'csv': return 'text/csv'
+    case 'csv':
+    case 'tsv': return 'text/csv'
     case 'txt': return 'text/plain'
     case 'zip': return 'application/zip'
     case 'png': return 'image/png'
@@ -119,65 +116,84 @@ export interface FetchOpts {
   // Force the visual representation (send the PDF/image as-is, never text).
   // Use for drawings/plans where geometry carries the meaning.
   visual?: boolean
+  /** The file's ORIGINAL name. The S3 key cannot be trusted for this: anything
+   *  outside a short extension list is stored as ".bin" (xlsm, zip, rar…). */
+  name?: string
+  /** Collects, per file, WHY something could not be read — shown to the user. */
+  notes?: string[]
 }
 
-// Convert one file's bytes into an AiFile, or null when the format isn't
-// something the model can read (video / unknown binary).
+// Image types the vision models accept as-is.
+const VISION_IMAGE = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
+
+// Convert one file's bytes into an AiFile, or null when it cannot be read — in
+// which case the reason is pushed to opts.notes. The type is decided from the
+// BYTES (see lib/files/sniff): a CSV named .txt, an HTML table named .xls, an
+// .xlsm stored as .bin are all read for what they are.
 async function bytesToAiFile(buf: Buffer, name: string, label: string, opts: FetchOpts): Promise<AiFile | null> {
-  if (VIDEO_EXTS.has(extOf(name))) return null
+  const s = sniff(buf, name)
+  const text = (t: string, mimeType: string): AiFile => ({ data: Buffer.from(t, 'utf8').toString('base64'), mimeType, label })
 
-  const mime = mimeFromName(name)
-
-  if (EXCEL_MIMES.has(mime)) {
-    const csv = await excelBufferToCsv(buf, name)
-    return { data: Buffer.from(csv, 'utf8').toString('base64'), mimeType: 'text/csv', label }
-  }
-
-  if (mime === 'application/pdf') {
-    if (!opts.visual) {
-      const text = await extractPdfText(buf)
-      if (text) return { data: Buffer.from(text, 'utf8').toString('base64'), mimeType: 'text/plain', label }
+  switch (s.kind) {
+    case 'spreadsheet': {
+      try {
+        return text(await excelBufferToCsv(buf, name), 'text/csv')
+      } catch (e) {
+        const m = e instanceof Error ? e.message : ''
+        opts.notes?.push(`${name}: ${/password|encrypt/i.test(m) ? 'محمي بكلمة مرور — احفظه بدون كلمة مرور ثم ارفعه' : `تعذّر فتح ملف الإكسل (${m || 'تالف'})`}`)
+        return null
+      }
     }
-    return { data: buf.toString('base64'), mimeType: 'application/pdf', label }
+    case 'delimited':
+      // Decoded here (UTF-8 / UTF-16 / Windows-1256) so Arabic survives.
+      return text(decodeText(buf), 'text/csv')
+    case 'text':
+      return text(decodeText(buf), 'text/plain')
+    case 'pdf': {
+      if (!opts.visual) {
+        const t = await extractPdfText(buf)
+        if (t) return text(t, 'text/plain')
+      }
+      return { data: buf.toString('base64'), mimeType: 'application/pdf', label }
+    }
+    case 'image':
+      if (VISION_IMAGE.has(s.mime)) return { data: buf.toString('base64'), mimeType: s.mime, label }
+      opts.notes?.push(`${name}: صيغة صورة غير مدعومة (${s.mime}) — احفظها PNG أو JPG`)
+      return null
+    case 'docx': {
+      const t = await docxText(buf)
+      if (t) return text(`# Document: ${name}\n\n${t}`, 'text/plain')
+      opts.notes?.push(`${name}: ملف Word فارغ أو غير مقروء`)
+      return null
+    }
+    default:
+      opts.notes?.push(`${name}: ${unreadableReason(s.kind) || 'لا يُقرأ'}`)
+      return null
   }
-
-  if (mime.startsWith('image/')) {
-    return { data: buf.toString('base64'), mimeType: mime, label }
-  }
-
-  if (mime === 'text/csv' || mime === 'text/plain') {
-    return { data: buf.toString('base64'), mimeType: mime, label }
-  }
-
-  // docx / unknown binary → can't read reliably; skip rather than send garbage.
-  return null
 }
 
-// Fetch one URL and return 1..N AiFiles. A ZIP expands into many; an unreadable
-// file yields []. `label` is the caption the model sees before each file.
+// Fetch one URL and return 1..N AiFiles. An archive (ZIP / RAR, one nested
+// level) expands into many; an unreadable file yields [] with the reason in
+// opts.notes. `label` is the caption the model sees before each file.
 export async function fetchAiFiles(url: string, label: string, opts: FetchOpts = {}): Promise<AiFile[]> {
   // SSRF guard: boq_url / spec / drawing / other URLs arrive from a request body.
   // Only our own S3/CDN uploads may be fetched server-side — never an arbitrary
   // or internal URL. Protects both the router (phase 1 BOQ) and the old Tannoor
   // engine, which share this loader.
   const res = await fetchAppOwned(url)
-  if (!res.ok) throw new Error(`Failed to fetch file: ${res.status} ${url}`)
+  if (!res.ok) throw new Error(`تعذّر تحميل الملف من التخزين (HTTP ${res.status})`)
   const buf = Buffer.from(await res.arrayBuffer())
-  const name = fileNameFromUrl(url)
+  if (buf.byteLength === 0) { opts.notes?.push(`${opts.name || 'ملف'}: الملف فارغ (0 بايت) — أعد رفعه`); return [] }
+  const name = opts.name || fileNameFromUrl(url)
 
-  // ZIP → unzip and process each entry.
-  if (mimeFromName(name) === 'application/zip') {
+  const kind = sniff(buf, name).kind
+  if (kind === 'zip' || kind === 'rar') {
+    const { files, notes } = await archiveFiles(buf, name)
+    opts.notes?.push(...notes)
     const out: AiFile[] = []
-    let entries: Array<{ path: string; data: Uint8Array }>
-    try {
-      // Capped: an uploaded ZIP is client input like any other.
-      entries = (await heavy.unzip(new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength), ZIP_CAPS)).entries
-    } catch {
-      return [] // corrupt / unsupported zip — skip rather than crash the run
-    }
-    for (const { path: entryPath, data } of entries) {
-      const base = entryPath.split('/').pop() || entryPath
-      const af = await bytesToAiFile(Buffer.from(data.buffer, data.byteOffset, data.byteLength), base, `${label} › ${base}`, opts)
+    for (const f of files) {
+      const base = memberName(f.path)
+      const af = await bytesToAiFile(f.data, base, `${label} › ${base}`, opts)
       if (af) out.push(af)
     }
     return out

@@ -152,7 +152,7 @@ PROJECT CONTEXT
   // ZIPs expand to their contents; the global cap bounds the whole request.
   const MAX_FILES = 100
   const files: AiFile[] = []
-  files.push(...await fetchAiFiles(input.boqUrl, `BOQ: ${input.boqFilename}`))
+  files.push(...await fetchAiFiles(input.boqUrl, `BOQ: ${input.boqFilename}`, { name: input.boqFilename }))
 
   const supporting = [
     ...input.specFiles.slice(0, 60).map(f => ({ url: f.url, label: `SPEC: ${f.name}`, visual: false })),

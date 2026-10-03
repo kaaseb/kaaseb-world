@@ -10,6 +10,7 @@
 // memory; encrypted archives are reported, never guessed at.
 
 import { heavy } from '@/lib/heavy'
+import { sniff } from '@/lib/files/sniff'
 
 export interface ArchiveEntry { name: string; data: Uint8Array }
 export interface ArchiveResult {
@@ -27,17 +28,15 @@ const MAX_ENTRIES = 400
 
 export type ArchiveKind = 'zip' | 'rar' | null
 
+/** ZIP or RAR — decided from the bytes (an .xlsx/.docx is a ZIP container but
+ *  NOT an archive; a ZIP stored as ".bin" still is one). Name-only when no
+ *  bytes are given. */
 export function archiveKind(name: string, buf?: Uint8Array): ArchiveKind {
-  const n = (name || '').toLowerCase()
   if (buf && buf.length >= 4) {
-    if (buf[0] === 0x50 && buf[1] === 0x4b && (buf[2] === 3 || buf[2] === 5 || buf[2] === 7)) {
-      // PK: a zip — but xlsx/docx are zips too; only treat as archive by name.
-      if (/\.zip$/.test(n)) return 'zip'
-      if (!/\.(xlsx|xlsm|docx|pptx|odt|ods)$/.test(n) && !/\.[a-z0-9]{2,5}$/.test(n)) return 'zip'
-      return null
-    }
-    if (buf[0] === 0x52 && buf[1] === 0x61 && buf[2] === 0x72 && buf[3] === 0x21) return 'rar'
+    const k = sniff(buf, name).kind
+    return k === 'zip' || k === 'rar' ? k : null
   }
+  const n = (name || '').toLowerCase()
   if (/\.zip$/.test(n)) return 'zip'
   if (/\.rar$/.test(n)) return 'rar'
   return null

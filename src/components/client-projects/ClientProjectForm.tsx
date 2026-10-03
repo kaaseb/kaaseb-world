@@ -20,6 +20,7 @@ import type {
 } from '@/types'
 import type { TranslationKey } from '@/lib/i18n/translations'
 import { STATUS_OPTIONS, STAGE_OPTIONS } from './constants'
+import { PROJECT_FILE_ACCEPT } from '@/lib/files/accept'
 
 type Mode = 'create' | 'edit'
 
@@ -390,7 +391,7 @@ export function ClientProjectForm({ mode, initial, initialEmail = '', profiles =
           title={`${t('cp_form_boq')} *`}
           hint={t('cp_form_boq_hint')}
           icon={<FileSpreadsheet className="w-4 h-4 text-emerald-600" />}
-          accept=".xlsx,.xls,.csv,.png,.jpg,.jpeg"
+          accept={PROJECT_FILE_ACCEPT}
           multiple
           files={boqFiles}
           pending={pending.boq}
@@ -406,7 +407,7 @@ export function ClientProjectForm({ mode, initial, initialEmail = '', profiles =
           title={t('cp_form_specs')}
           hint={t('cp_form_specs_hint')}
           icon={<FileText className="w-4 h-4 text-blue-600" />}
-          accept=".pdf,.doc,.docx"
+          accept={PROJECT_FILE_ACCEPT}
           multiple
           files={filesByBucket('spec')}
           pending={pending.spec}
@@ -422,7 +423,7 @@ export function ClientProjectForm({ mode, initial, initialEmail = '', profiles =
           title={t('cp_form_drawings')}
           hint={t('cp_form_drawings_hint')}
           icon={<ImageIcon className="w-4 h-4 text-purple-600" />}
-          accept=".pdf,.doc,.docx,.png,.jpg,.jpeg"
+          accept={PROJECT_FILE_ACCEPT}
           multiple
           files={filesByBucket('drawing')}
           pending={pending.drawing}
@@ -438,7 +439,7 @@ export function ClientProjectForm({ mode, initial, initialEmail = '', profiles =
           title={t('cp_form_other')}
           hint={t('cp_form_other_hint')}
           icon={<Paperclip className="w-4 h-4 text-amber-600" />}
-          accept=".pdf,.doc,.docx,.png,.jpg,.jpeg,.xlsx,.xls,.csv,.txt"
+          accept={PROJECT_FILE_ACCEPT}
           multiple
           files={filesByBucket('other')}
           pending={pending.other}

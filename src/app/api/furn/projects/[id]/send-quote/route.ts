@@ -15,7 +15,9 @@ import { denyUnlessPermitted } from '@/lib/api-guard'
 import { getProfileOrFallback, getEffectivePermissions } from '@/lib/profile'
 import { hasPermission } from '@/lib/permissions'
 import { serverAudit } from '@/lib/audit-server'
-import { fetchAppOwned } from '@/lib/s3'
+import { fetchAppOwned, uploadBufferToS3 } from '@/lib/s3'
+import { renderQuotationPdf } from '@/lib/quotation-pdf'
+import { createAdminClient } from '@/lib/supabase/admin'
 import { resolveMailer } from '@/lib/outreach/transport'
 import { textToHtml, isEmail } from '@/lib/outreach/send'
 import { getQuoteMessage } from '@/lib/furn/quote-message'
@@ -56,8 +58,31 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     .eq('project_id', id).eq('language', language)
     .order('quotation_number', { ascending: false })
     .limit(1).maybeSingle()
-  if (!quotation?.pdf_url) {
-    return NextResponse.json({ error: 'ما فيه PDF لهذا العرض — أنشئ/أصدر العرض السعري أولاً.' }, { status: 400 })
+  if (!quotation) {
+    return NextResponse.json({ error: 'لا يوجد عرض سعر بهذه اللغة — اضغط «إرسال (إنشاء العرض)» في تبويب التسعير أولاً.' }, { status: 400 })
+  }
+  // The stored PDF may be missing (its render failed when the quotation was
+  // issued). Render it NOW rather than dead-ending — and if the server truly
+  // cannot make PDFs, say exactly why so it can be fixed.
+  let pdfBuffer: Buffer | null = null
+  if (!quotation.pdf_url) {
+    try {
+      pdfBuffer = await renderQuotationPdf({
+        origin: request.headers.get('origin') || new URL(request.url).origin,
+        projectId: id,
+        quotationId: quotation.id,
+        cookieHeader: request.headers.get('cookie') || '',
+      })
+      const key = `furn/quotations/${id}/Kaaseb_${quotation.quotation_number}-${language}.pdf`
+      const up = await uploadBufferToS3({ buffer: pdfBuffer, key, contentType: 'application/pdf' })
+      await createAdminClient().from('furn_quotations').update({ pdf_url: up.url }).eq('id', quotation.id)
+      quotation.pdf_url = up.url
+    } catch (e) {
+      const why = e instanceof Error ? e.message : String(e)
+      return NextResponse.json({
+        error: `تعذّر توليد ملف الـPDF على الخادم، لذلك لا يمكن إرفاقه بالإيميل. السبب: ${why.slice(0, 300)}${/libnspr|shared librar|Failed to launch|Could not find Chrome|ENOENT/i.test(why) ? ' — متصفح Chromium غير مثبت/مكتمل على الخادم (افتح /api/admin/health للتفاصيل).' : ''}`,
+      }, { status: 502 })
+    }
   }
 
   // Recipient + subject come from the linked client project (email in S3, the
@@ -82,12 +107,13 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   // Attach the stored PDF.
   const attachments: Array<{ filename: string; content: Buffer }> = []
   try {
-    const res = await fetchAppOwned(quotation.pdf_url)
-    if (res.ok) {
-      const buf = Buffer.from(await res.arrayBuffer())
-      if (buf.byteLength > 0) {
-        attachments.push({ filename: `Quotation-${quotation.quotation_number}-${language}.pdf`, content: buf })
-      }
+    let buf = pdfBuffer
+    if (!buf) {
+      const res = await fetchAppOwned(quotation.pdf_url)
+      if (res.ok) buf = Buffer.from(await res.arrayBuffer())
+    }
+    if (buf && buf.byteLength > 0) {
+      attachments.push({ filename: `Kaaseb_${quotation.quotation_number}-${language}.pdf`, content: buf })
     }
   } catch { /* fall through — surfaced below */ }
   if (attachments.length === 0) {
@@ -109,7 +135,11 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       attachments,
     })
   } catch (e) {
-    return NextResponse.json({ error: `تعذّر الإرسال: ${e instanceof Error ? e.message : 'فشل'}` }, { status: 502 })
+    const why = e instanceof Error ? e.message : 'فشل'
+    const hint = /auth|535|credentials|login/i.test(why) ? ' — بيانات حساب البريد غير صحيحة (الإعدادات ← البريد).'
+      : /ENOTFOUND|ECONNREFUSED|ETIMEDOUT|timeout/i.test(why) ? ' — تعذّر الاتصال بخادم البريد.'
+      : /not configured|missing|غير مهيأ/i.test(why) ? ' — حساب الإرسال غير مهيأ (الإعدادات ← البريد).' : ''
+    return NextResponse.json({ error: `تعذّر إرسال الإيميل: ${why}${hint}` }, { status: 502 })
   }
 
   await serverAudit({

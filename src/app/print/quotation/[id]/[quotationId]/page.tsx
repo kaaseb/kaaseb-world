@@ -4,6 +4,8 @@ import { QuotationPrint } from '@/components/furn/QuotationPrint'
 import { resolveDeliveryNote, resolveShipping } from '@/lib/furn/delivery-store'
 import { getProjectItemFlags } from '@/lib/furn/item-flags'
 import { resolveQuoteTerms } from '@/lib/quote-terms/store'
+import { getFurnExtras } from '@/lib/furn/project-extras'
+import { resolveProjectNames } from '@/lib/furn/names'
 import type { FurnProject, FurnItem, FurnQuotation, FurnSettings } from '@/types'
 
 export const dynamic = 'force-dynamic'
@@ -28,6 +30,15 @@ export default async function QuotationPrintPage({
   if (!project || !quotation || !settings) notFound()
 
   const lang = (quotation as FurnQuotation).language
+  // Client data in the QUOTATION'S language — the English PDF must not carry
+  // the Arabic company/engineer names (the row stores a single value).
+  const names = await resolveProjectNames(supabase, project, await getFurnExtras(id))
+  const printProject = {
+    ...project,
+    project_name: names.project[lang] || project.project_name,
+    company_name: names.company[lang] || project.company_name,
+    engineer_name: names.engineer[lang] || project.engineer_name,
+  }
   // "Delivery included" sentence (only when the project is marked included).
   const deliveryNote = await resolveDeliveryNote(id, lang)
   // "Not included" → a priced shipping line appended to the items so it shows
@@ -58,7 +69,7 @@ export default async function QuotationPrintPage({
 
   return (
     <QuotationPrint
-      project={project as FurnProject}
+      project={printProject as FurnProject}
       items={printItems}
       quotation={quotation as FurnQuotation}
       settings={settings as FurnSettings}
