@@ -11,6 +11,7 @@ import { hasPermission } from '@/lib/permissions'
 import { getEmail, getThreadEmails, setThreadReplied } from '@/lib/inbox/store'
 import { inboxUnlocked } from '@/lib/inbox/lock'
 import { sendReply, messageIdHeader } from '@/lib/inbox/reply'
+import { explainMailError } from '@/lib/outreach/transport'
 
 export const runtime = 'nodejs'
 export const maxDuration = 60
@@ -62,7 +63,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       dir: language === 'ar' ? 'rtl' : 'ltr',
     })
   } catch (e) {
-    return NextResponse.json({ error: `تعذّر الإرسال: ${e instanceof Error ? e.message : 'فشل'}` }, { status: 502 })
+    return NextResponse.json({ error: `تعذّر الإرسال: ${explainMailError(e)}` }, { status: 502 })
   }
 
   const now = new Date().toISOString()

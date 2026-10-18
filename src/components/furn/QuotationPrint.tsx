@@ -46,6 +46,10 @@ interface Props {
   // Resolved Terms & Conditions bullet lines (already language-picked). Empty →
   // no T&C section.
   terms?: string[]
+  // Manual quotes only: the PRINTED columns in the team's order (standard keys
+  // + "c:<id>"). Internal/hidden columns are already removed. Absent → the
+  // fixed Furn/Tannoor layout, unchanged.
+  layout?: string[]
 }
 
 const STR = {
@@ -214,7 +218,7 @@ function pickTerm(
   return (langValue || legacy || fallback || '').trim() || null
 }
 
-export function QuotationPrint({ project, items, quotation, settings, deliveryNote, currency, extraColumns = [], terms = [] }: Props) {
+export function QuotationPrint({ project, items, quotation, settings, deliveryNote, currency, extraColumns = [], terms = [], layout }: Props) {
   const lang = quotation.language === 'en' ? 'en' : 'ar'
   const isRtl = lang === 'ar'
   const S = STR[lang]
@@ -316,6 +320,60 @@ export function QuotationPrint({ project, items, quotation, settings, deliveryNo
         </div>
 
         {/* Items table */}
+        {layout ? (() => {
+          // Team-ordered columns (manual quotes). Details print under the
+          // description when both are shown — the established look — and get
+          // their own column only when the description itself is hidden.
+          const showDesc = layout.includes('description')
+          const cols = layout.filter((k) => !(k === 'details' && showDesc) && !(k === 'image' && !showImages) && !(k === 'notes' && !showNotes))
+          const extraName = new Map(extraColumns.map((c) => [c.id, c.name]))
+          const head = (k: string) => {
+            switch (k) {
+              case 'image': return <th key={k} className="col-img"></th>
+              case 'description': return <th key={k} className="col-desc">{S.col_desc}</th>
+              case 'details': return <th key={k} className="col-desc">{isRtl ? 'التفاصيل' : 'Details'}</th>
+              case 'quantity': return <th key={k} className="col-qty">{S.col_qty}</th>
+              case 'unit': return <th key={k} className="col-unit">{S.col_unit}</th>
+              case 'unit_price': return <th key={k} className="col-price">{S.col_price}</th>
+              case 'total': return <th key={k} className="col-total">{S.col_total}</th>
+              case 'notes': return <th key={k} className="col-notes">{S.col_notes}</th>
+              default: return <th key={k} className="col-custom">{extraName.get(k.slice(2)) || ''}</th>
+            }
+          }
+          const cell = (k: string, it: PrintItem) => {
+            switch (k) {
+              case 'image': return (
+                <td key={k} className="col-img">
+                  {/* eslint-disable-next-line @next/next/no-img-element -- print page, Puppeteer renders the raw URL */}
+                  {it.imageUrl ? <img src={it.imageUrl} alt="" className="item-img" /> : null}
+                </td>
+              )
+              case 'description': return (
+                <td key={k} className="col-desc">
+                  <div className="desc-title">{it.description}</div>
+                  {layout.includes('details') && (it.details || '').trim() && <div className="desc-details">{(it.details || '').trim()}</div>}
+                </td>
+              )
+              case 'details': return <td key={k} className="col-desc">{(it.details || '').trim()}</td>
+              case 'quantity': return <td key={k} className="col-qty">{Number(it.quantity).toLocaleString('en-US')}</td>
+              case 'unit': return <td key={k} className="col-unit">{it.unit}</td>
+              case 'unit_price': return <td key={k} className="col-price">{formatMoney(Number(it.unit_price || 0))}</td>
+              case 'total': return <td key={k} className="col-total">{formatMoney(Number(it.quantity || 0) * Number(it.unit_price || 0))}</td>
+              case 'notes': return <td key={k} className="col-notes">{it.notes || ''}</td>
+              default: return <td key={k} className="col-custom">{it.custom?.[k.slice(2)] || ''}</td>
+            }
+          }
+          return (
+            <table className="items-table">
+              <thead><tr><th className="col-pos">{S.col_pos}</th>{cols.map(head)}</tr></thead>
+              <tbody>
+                {items.map((it, idx) => (
+                  <tr key={it.id}><td className="col-pos">{idx + 1}</td>{cols.map((k) => cell(k, it))}</tr>
+                ))}
+              </tbody>
+            </table>
+          )
+        })() : (
         <table className="items-table">
           <thead>
             <tr>
@@ -362,6 +420,7 @@ export function QuotationPrint({ project, items, quotation, settings, deliveryNo
             })}
           </tbody>
         </table>
+        )}
 
         {/* Totals */}
         <div className="totals">

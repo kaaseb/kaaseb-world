@@ -69,7 +69,11 @@ export interface RouterInput {
 // When there's no BOQ, how many drawing/spec files we feed the extractor. Capped
 // so a drawings-only run stays "خفيف" — vision over every one of 200 sheets is
 // exactly the token spike we avoid elsewhere.
-const DRAWINGS_FOR_EXTRACTION = 6
+const DRAWINGS_PER_CALL = 6
+// Cost guard for a drawings-only project (each batch is one vision call).
+const MAX_DRAWING_FILES = 150
+// Files outside the BOQ bucket checked for being a BOQ themselves.
+const EXTRA_BOQ_CANDIDATES = 20
 
 export interface RouterCoverage {
   filesTotal: number
@@ -169,6 +173,7 @@ async function extractBoqRows(input: RouterInput): Promise<{
     : (input.boqUrl ? [{ url: input.boqUrl, name: input.boqFilename }] : [])
   const drawingsMode = boqList.length === 0
   type Source = { label: string; files: AiFile[] }
+  const isTextFile = (f: AiFile) => f.mimeType === 'text/csv' || f.mimeType === 'text/plain'
   const sources: Source[] = []
   if (!drawingsMode) {
     // Every failure is kept BY NAME AND REASON: "could not read the BOQ files"
@@ -188,22 +193,51 @@ async function extractBoqRows(input: RouterInput): Promise<{
       }
     }
     if (sources.length === 0) throw new Error(`تعذّرت قراءة ملفات الـBOQ — ${failures.join(' | ').slice(0, 600)}`)
-  } else {
-    // No BOQ → extract the items from the drawings/specs themselves (capped).
-    const src = [...input.drawingFiles, ...input.specFiles, ...input.otherFiles].slice(0, DRAWINGS_FOR_EXTRACTION)
-    const files: AiFile[] = []
-    for (const f of src) {
-      try { files.push(...(await fetchAiFiles(f.url, `Drawing: ${f.name}`, { name: f.name }))) } catch { /* skip a bad file */ }
+
+    // A BOQ the client filed somewhere else (a priced schedule under "specs", a
+    // quantities sheet under "other") is still a BOQ. Any spreadsheet/CSV in
+    // another bucket — or a PDF named like a BOQ — whose OWN rows look priceable
+    // (≥3 rows with a unit next to a quantity) is read as an additional BOQ.
+    // Lines it shares with the main BOQ fold away in the cross-file dedupe.
+    const extra = [...input.specFiles, ...input.drawingFiles, ...input.otherFiles]
+      .filter((f) => !boqList.some((b) => b.url === f.url))
+      .filter((f) => /\.(xlsx|xlsm|xlsb|xls|ods|csv|tsv)$/i.test(f.name) || (/\.pdf$/i.test(f.name) && /boq|bill|quantit|schedule|كميات|جدول/i.test(f.name)))
+      .slice(0, EXTRA_BOQ_CANDIDATES)
+    for (const f of extra) {
+      try {
+        const textFiles = (await fetchAiFiles(f.url, `BOQ: ${f.name}`, { name: f.name })).filter(isTextFile)
+        const rows = textFiles.reduce((n, af) => n + candidateRows(decodeTextFile(af.data)).length, 0)
+        if (rows >= 3) {
+          sources.push({ label: f.name, files: textFiles })
+          log(`phase1: «${f.name}» (outside the BOQ bucket) has ${rows} priceable rows — read as a BOQ too`)
+        }
+      } catch { /* not readable as a table — it stays an attachment */ }
     }
-    if (files.length === 0) throw new Error('لا توجد رسومات لاستخراج البنود')
-    sources.push({ label: 'drawings', files })
+  } else {
+    // No BOQ → the items come from the drawings / specs / other files
+    // themselves. EVERY file is read (this used to stop at the first 6 and
+    // silently ignore the rest), in batches so each call stays within limits.
+    const all = [...input.drawingFiles, ...input.specFiles, ...input.otherFiles]
+    const take = all.slice(0, MAX_DRAWING_FILES)
+    let batch: AiFile[] = []
+    const flush = () => { if (batch.length) { sources.push({ label: `drawings ${sources.length + 1}`, files: batch }); batch = [] } }
+    for (const f of take) {
+      try {
+        for (const af of await fetchAiFiles(f.url, `Drawing: ${f.name}`, { name: f.name })) {
+          batch.push(af)
+          if (batch.length >= DRAWINGS_PER_CALL) flush()
+        }
+      } catch { /* a bad file is reported by the indexer; the rest still read */ }
+    }
+    flush()
+    if (sources.length === 0) throw new Error('لا توجد رسومات/ملفات مقروءة لاستخراج البنود')
+    if (all.length > take.length) log(`phase1: drawings-only — first ${take.length} of ${all.length} files read`)
   }
   const multiBoq = !drawingsMode && sources.length > 1
 
   // Phase 0 — understand the PACKAGE before reading rows. Deterministic hints
   // (package lines, code families, drawing refs) plus one small text-only call
   // that forms the estimator's brief. Skipped in drawings-only mode.
-  const isTextFile = (f: AiFile) => f.mimeType === 'text/csv' || f.mimeType === 'text/plain'
   const boqTexts = drawingsMode ? [] : sources.map((s) => s.files.filter(isTextFile).map((f) => decodeTextFile(f.data)).join('\n'))
   const hints = headerHints([...boqTexts, input.projectNotes || ''])
   const brief = drawingsMode ? null : await buildBrief({
@@ -305,7 +339,9 @@ ${input.projectNotes.slice(0, 1500)}` : ''}`
     const src = sources[s]
     const fileNote = multiBoq
       ? `\n\nTHIS BOQ FILE ("${src.label}") IS ONE OF ${sources.length} BOQ FILES OF THE SAME PROJECT. Extract THIS file completely; the others are read separately and merged later.`
-      : ''
+      : drawingsMode && sources.length > 1
+        ? `\n\nTHESE FILES ARE BATCH ${s + 1} OF ${sources.length} OF THE SAME PROJECT'S DRAWINGS/SPECS (read separately, merged later). Extract every item visible in THESE files completely; an item shown again in another batch is folded later, so do not hold back.`
+        : ''
     const textBoq = !drawingsMode && src.files.length === 1 && isText(src.files[0]) ? src.files[0] : null
     const chunks = textBoq ? splitBoqText(decodeTextFile(textBoq.data)) : []
     if (textBoq && chunks.length > 1) {
@@ -390,7 +426,9 @@ ${input.projectNotes.slice(0, 1500)}` : ''}`
         : 0.5,
       referenceHint: String(it.reference_hint || '').trim().slice(0, 200),
       section: String(it.section || '').trim().slice(0, 160) || null,
-      boqFile: drawingsMode ? null : String(it._boqFile || '').trim() || null,
+      // Drawing batches carry their batch label only so the dedupe can fold an
+      // item drawn in two batches; it is cleared again below.
+      boqFile: String(it._boqFile || '').trim() || null,
       dupOf: null,
     }))
     .filter((r) => r.description)
@@ -399,7 +437,7 @@ ${input.projectNotes.slice(0, 1500)}` : ''}`
   // line twice — fold identical cross-file copies, keep the audit trail.
   const { rows: dedupedRows, merged: folded } = dedupeAcrossFiles(rawRows)
   // Re-number after the filters so positions stay dense and stable.
-  const rows = dedupedRows.map((r, i) => ({ ...r, position: i + 1 }))
+  const rows = dedupedRows.map((r, i) => ({ ...r, position: i + 1, ...(drawingsMode ? { boqFile: null, dupOf: null } : {}) }))
   if (folded.length > 0) log(`phase1: ${folded.length} بند مكرر بين ملفات الـBOQ — أُبقيت نسخة واحدة`)
 
   const noteBits = [

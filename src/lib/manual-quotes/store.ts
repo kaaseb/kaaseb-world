@@ -4,7 +4,8 @@
 // the client, adds priced line items (each with an optional thumbnail), and the
 // number runs from 100 upward. Rendered/printed from /print/manual-quote/<id>.
 
-import { readJson, writeJson, mutateJson } from '@/lib/s3'
+import { normalizeLayout, STD_KEYS, type LayoutKey, type StdKey } from './layout'
+import { readJson, mutateJson } from '@/lib/s3'
 
 const KEY = 'app-data/manual-quotes.json'
 const START_NUMBER = 100 // the owner's ask: numbering starts at 100
@@ -21,6 +22,8 @@ export type QuoteDelivery = 'none' | 'included' | 'excluded'
 export interface ManualQuoteColumn {
   id: string
   name: string
+  /** Management-only: kept in the editor, never printed on the quotation. */
+  internal?: boolean
 }
 
 export interface ManualQuoteItem {
@@ -32,6 +35,8 @@ export interface ManualQuoteItem {
   unit_price: number | null
   imageUrl: string | null // small per-line image (manual upload)
   notes?: string // team note — prints in the quote's Notes column
+  /** Management-only note — never reaches the client. */
+  adminNotes?: string
   // Values for the quote's custom columns, keyed by column id.
   custom?: Record<string, string>
 }
@@ -52,8 +57,13 @@ export interface ManualQuote {
   // delivery === 'excluded' — the priced delivery line amount.
   delivery: QuoteDelivery
   shipping: number
-  // Extra named columns shown on the quote table (beyond the standard ones).
+  // Extra named columns (beyond the standard ones). `internal` ones are for the
+  // management only and never print.
   columns: ManualQuoteColumn[]
+  /** Column order of the table (standard + "c:<id>") — see lib/manual-quotes/layout. */
+  layout: LayoutKey[]
+  /** Standard columns hidden from the printed quotation. */
+  hidden: StdKey[]
   items: ManualQuoteItem[]
   notes: string
   createdAt: string
@@ -76,11 +86,18 @@ async function read(): Promise<State> {
     quotes: Array.isArray(s?.quotes) ? s.quotes.map((q) => ({
       ...q,
       columns: Array.isArray(q?.columns) ? q.columns : [],
+      layout: normalizeLayout(q?.layout, Array.isArray(q?.columns) ? q.columns : []),
+      hidden: cleanHidden(q?.hidden),
       delivery: q?.delivery === 'included' || q?.delivery === 'excluded' ? q.delivery : 'none',
       shipping: Number.isFinite(q?.shipping) ? Number(q.shipping) : 0,
     })) : [],
     nextNumber: Number.isFinite(s?.nextNumber) && s.nextNumber >= START_NUMBER ? s.nextNumber : START_NUMBER,
   }
+}
+
+const HIDEABLE = new Set<string>(STD_KEYS.filter((k) => k !== 'adminNotes'))
+function cleanHidden(v: unknown): StdKey[] {
+  return Array.from(new Set((Array.isArray(v) ? v : []).map(String).filter((k) => HIDEABLE.has(k)))) as StdKey[]
 }
 
 function rid(): string {
@@ -118,6 +135,8 @@ export async function createManualQuote(input: {
       delivery: 'none',
       shipping: 0,
       columns: [],
+      layout: normalizeLayout(null, []),
+      hidden: [],
       items: [],
       notes: '',
       createdAt: now,
@@ -132,31 +151,96 @@ export async function createManualQuote(input: {
   return created
 }
 
+/**
+ * Copy an existing quote into a NEW one: next number, the title the team
+ * typed, everything else as it was (items, columns, layout, settings) so it
+ * can be edited freely. Atomic, like create.
+ */
+export async function duplicateManualQuote(sourceId: string, input: {
+  subject: string
+  createdBy: string | null
+  createdByName: string | null
+}): Promise<ManualQuote | null> {
+  const now = new Date().toISOString()
+  let created: ManualQuote | null = null
+  await mutateJson<State>(KEY, EMPTY, (raw) => {
+    const quotes = Array.isArray(raw?.quotes) ? raw.quotes : []
+    const src = quotes.find((q) => q.id === sourceId)
+    if (!src) return raw
+    const nextNumber = Number.isFinite(raw?.nextNumber) && raw.nextNumber >= START_NUMBER ? raw.nextNumber : START_NUMBER
+    const columns = Array.isArray(src.columns) ? src.columns.map((c) => ({ ...c })) : []
+    const q: ManualQuote = {
+      ...src,
+      id: rid(),
+      number: nextNumber,
+      subject: input.subject.slice(0, 300),
+      columns,
+      layout: normalizeLayout(src.layout, columns),
+      hidden: cleanHidden(src.hidden),
+      items: (Array.isArray(src.items) ? src.items : []).map((it) => ({ ...it, id: rid(), custom: it.custom ? { ...it.custom } : undefined })),
+      createdAt: now,
+      updatedAt: now,
+      createdBy: input.createdBy,
+      createdByName: input.createdByName,
+    }
+    created = q
+    return { quotes: [...quotes, q], nextNumber: nextNumber + 1 }
+  })
+  return created
+}
+
 const CURRENCIES: QuoteCurrency[] = ['SAR', 'USD']
 
 // Sanitise + persist an edit. The number, id and audit stamps are never client-
 // writable; everything else is replaced from the patch.
+// Sanitise + persist an edit. The number, id and audit stamps are never client-
+// writable; everything else is replaced from the patch.
+//
+// ATOMIC (mutateJson): this used to read the whole store, change one quote and
+// write the whole store back — a quote created by someone else in between was
+// silently erased. With autosave firing every few seconds that window is real.
 export async function updateManualQuote(id: string, patch: Partial<ManualQuote>): Promise<ManualQuote | null> {
-  const s = await read()
-  const idx = s.quotes.findIndex((q) => q.id === id)
-  if (idx < 0) return null
-  const cur = s.quotes[idx]
+  let result: ManualQuote | null = null
+  await mutateJson<State>(KEY, EMPTY, (raw) => {
+    const quotes = Array.isArray(raw?.quotes) ? raw.quotes : []
+    const idx = quotes.findIndex((q) => q.id === id)
+    if (idx < 0) { result = null; return raw }
+    const next = applyPatch(quotes[idx], patch)
+    result = next
+    const copy = quotes.slice()
+    copy[idx] = next
+    return { ...raw, quotes: copy }
+  })
+  return result
+}
+
+function applyPatch(curRaw: ManualQuote, patch: Partial<ManualQuote>): ManualQuote {
+  const cur: ManualQuote = {
+    ...curRaw,
+    columns: Array.isArray(curRaw.columns) ? curRaw.columns : [],
+    layout: normalizeLayout(curRaw.layout, Array.isArray(curRaw.columns) ? curRaw.columns : []),
+    hidden: cleanHidden(curRaw.hidden),
+  }
 
   // Custom columns first (item.custom is validated against these ids).
   const columns: ManualQuoteColumn[] = Array.isArray(patch.columns)
-    ? patch.columns.slice(0, 30).map((raw, i) => {
+    ? patch.columns.slice(0, 60).map((raw, i) => {
         const c = raw as Partial<ManualQuoteColumn>
         // A blank name gets a fallback rather than dropping the column — deleting
         // is the X button's job (it removes the column from the array). Dropping
         // a blank-named column here would silently wipe all its per-item data.
         const nm = String(c.name || '').trim()
-        return { id: typeof c.id === 'string' && c.id ? c.id.slice(0, 40) : rid(), name: (nm || `عمود ${i + 1}`).slice(0, 40) }
+        return {
+          id: typeof c.id === 'string' && c.id ? c.id.slice(0, 40) : rid(),
+          name: (nm || `عمود ${i + 1}`).slice(0, 60),
+          ...(c.internal === true ? { internal: true } : {}),
+        }
       })
-    : (cur.columns ?? [])
+    : cur.columns
   const colIds = new Set(columns.map((c) => c.id))
 
   const items: ManualQuoteItem[] = Array.isArray(patch.items)
-    ? patch.items.slice(0, 500).map((raw) => {
+    ? patch.items.slice(0, 1000).map((raw) => {
         const it = raw as Partial<ManualQuoteItem>
         const qty = Number(it.quantity)
         const price = it.unit_price === null || it.unit_price === undefined ? null : Number(it.unit_price)
@@ -164,24 +248,25 @@ export async function updateManualQuote(id: string, patch: Partial<ManualQuote>)
         if (it.custom && typeof it.custom === 'object') {
           custom = {}
           for (const [k, v] of Object.entries(it.custom)) {
-            if (colIds.has(k)) custom[k] = String(v ?? '').slice(0, 300)
+            if (colIds.has(k)) custom[k] = String(v ?? '').slice(0, 500)
           }
         }
         return {
           id: typeof it.id === 'string' && it.id ? it.id : rid(),
-          description: String(it.description || '').slice(0, 400),
-          details: String(it.details || '').slice(0, 1000),
+          description: String(it.description || '').slice(0, 1000),
+          details: String(it.details || '').slice(0, 2000),
           quantity: Number.isFinite(qty) ? Math.max(0, qty) : 0,
-          unit: String(it.unit || '').slice(0, 20),
+          unit: String(it.unit || '').slice(0, 30),
           unit_price: price !== null && Number.isFinite(price) ? Math.max(0, price) : null,
           imageUrl: typeof it.imageUrl === 'string' && it.imageUrl ? it.imageUrl.slice(0, 1000) : null,
           notes: String(it.notes || '').slice(0, 1000),
+          adminNotes: String(it.adminNotes || '').slice(0, 2000),
           ...(custom ? { custom } : {}),
         }
       })
     : cur.items
 
-  const next: ManualQuote = {
+  return {
     ...cur,
     language: patch.language === 'en' ? 'en' : patch.language === 'ar' ? 'ar' : cur.language,
     project_name: patch.project_name !== undefined ? String(patch.project_name).slice(0, 200) : (cur.project_name ?? ''),
@@ -195,20 +280,21 @@ export async function updateManualQuote(id: string, patch: Partial<ManualQuote>)
     delivery: patch.delivery === 'included' || patch.delivery === 'excluded' || patch.delivery === 'none' ? patch.delivery : (cur.delivery ?? 'none'),
     shipping: typeof patch.shipping === 'number' && patch.shipping >= 0 ? patch.shipping : (cur.shipping ?? 0),
     columns,
+    layout: normalizeLayout(patch.layout !== undefined ? patch.layout : cur.layout, columns),
+    hidden: patch.hidden !== undefined ? cleanHidden(patch.hidden) : cur.hidden,
     items,
     notes: patch.notes !== undefined ? String(patch.notes).slice(0, 4000) : cur.notes,
     updatedAt: new Date().toISOString(),
   }
-  s.quotes[idx] = next
-  await writeJson(KEY, s)
-  return next
 }
 
 export async function deleteManualQuote(id: string): Promise<boolean> {
-  const s = await read()
-  const before = s.quotes.length
-  s.quotes = s.quotes.filter((q) => q.id !== id)
-  if (s.quotes.length === before) return false
-  await writeJson(KEY, s)
-  return true
+  let removed = false
+  await mutateJson<State>(KEY, EMPTY, (raw) => {
+    const quotes = Array.isArray(raw?.quotes) ? raw.quotes : []
+    const next = quotes.filter((q) => q.id !== id)
+    removed = next.length !== quotes.length
+    return removed ? { ...raw, quotes: next } : raw
+  })
+  return removed
 }

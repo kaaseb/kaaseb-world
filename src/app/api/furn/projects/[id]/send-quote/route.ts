@@ -18,7 +18,7 @@ import { serverAudit } from '@/lib/audit-server'
 import { fetchAppOwned, uploadBufferToS3 } from '@/lib/s3'
 import { renderQuotationPdf } from '@/lib/quotation-pdf'
 import { createAdminClient } from '@/lib/supabase/admin'
-import { resolveMailer } from '@/lib/outreach/transport'
+import { resolveMailer, explainMailError } from '@/lib/outreach/transport'
 import { textToHtml, isEmail } from '@/lib/outreach/send'
 import { getQuoteMessage } from '@/lib/furn/quote-message'
 import { getProjectEmail } from '@/lib/projects/email'
@@ -135,11 +135,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       attachments,
     })
   } catch (e) {
-    const why = e instanceof Error ? e.message : 'فشل'
-    const hint = /auth|535|credentials|login/i.test(why) ? ' — بيانات حساب البريد غير صحيحة (الإعدادات ← البريد).'
-      : /ENOTFOUND|ECONNREFUSED|ETIMEDOUT|timeout/i.test(why) ? ' — تعذّر الاتصال بخادم البريد.'
-      : /not configured|missing|غير مهيأ/i.test(why) ? ' — حساب الإرسال غير مهيأ (الإعدادات ← البريد).' : ''
-    return NextResponse.json({ error: `تعذّر إرسال الإيميل: ${why}${hint}` }, { status: 502 })
+    return NextResponse.json({ error: `تعذّر إرسال الإيميل: ${explainMailError(e)}` }, { status: 502 })
   }
 
   await serverAudit({

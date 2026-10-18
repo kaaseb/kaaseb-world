@@ -9,11 +9,14 @@ import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { useLanguage } from '@/contexts/LanguageContext'
+import { computeTotals } from '@/lib/quotation/totals'
 import type { ManualQuote } from '@/lib/manual-quotes/store'
+import { DuplicateQuoteButton } from './DuplicateQuoteDialog'
 
+// Same totals function as the editor and the PDF (delivery line included).
 function quoteTotal(q: ManualQuote): number {
-  const sub = q.items.reduce((s, it) => s + (Number(it.quantity) || 0) * (Number(it.unit_price) || 0), 0)
-  return sub * (1 + (q.vat_rate || 0))
+  const shipping = q.delivery === 'excluded' ? Math.max(0, Number(q.shipping) || 0) : 0
+  return computeTotals(q.items, shipping, q.vat_rate || 0).total
 }
 
 export function ManualQuotesClient({ initialQuotes }: { initialQuotes: ManualQuote[] }) {
@@ -109,13 +112,14 @@ export function ManualQuotesClient({ initialQuotes }: { initialQuotes: ManualQuo
                 <button onClick={() => router.push(`/manual-quotes/${q.id}`)} className="flex-1 min-w-0 text-start flex items-center gap-3">
                   <span className="inline-flex items-center justify-center min-w-12 h-8 px-2 rounded-lg bg-teal-50 text-teal-700 font-bold text-sm">#{q.number}</span>
                   <span className="min-w-0">
-                    <span className="block text-sm font-medium text-gray-900 truncate">{q.company || q.client_name || (ar ? '(بلا اسم)' : '(untitled)')}</span>
+                    <span className="block text-sm font-medium text-gray-900 truncate">{q.subject || q.company || q.client_name || (ar ? '(بلا اسم)' : '(untitled)')}</span>
                     <span className="block text-xs text-muted-foreground truncate">{q.items.length} {ar ? 'بند' : 'items'} · {fmt(q.createdAt)}</span>
                   </span>
                 </button>
                 <span className="text-sm font-semibold tabular-nums whitespace-nowrap">
                   {quoteTotal(q).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {q.currency}
                 </span>
+                <DuplicateQuoteButton quoteId={q.id} number={q.number} subject={q.subject || q.project_name || ''} ar={ar} variant="ghost" />
                 <a href={`/print/manual-quote/${q.id}`} target="_blank" rel="noopener noreferrer" title={ar ? 'طباعة/PDF' : 'Print/PDF'}
                   className="inline-flex items-center justify-center h-8 w-8 rounded-md border hover:bg-muted transition"><ExternalLink className="w-4 h-4" /></a>
                 <Button variant="ghost" size="icon-sm" onClick={() => remove(q.id)} className="text-muted-foreground hover:text-red-600"><Trash2 className="w-4 h-4" /></Button>

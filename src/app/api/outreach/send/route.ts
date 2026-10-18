@@ -21,6 +21,7 @@ import { getOpportunity, updateOpportunity } from '@/lib/opportunities/store'
 import { getCompany, updateCompany } from '@/lib/companies/store'
 import { getOutreachTemplate, renderOutreach } from '@/lib/outreach/store'
 import { sendOutreachEmail, isEmail, normalizeRecipients } from '@/lib/outreach/send'
+import { explainMailError } from '@/lib/outreach/transport'
 
 export const runtime = 'nodejs'
 export const maxDuration = 120
@@ -120,8 +121,7 @@ export async function POST(request: Request) {
     })
     attached = res.attached
   } catch (e) {
-    const msg = e instanceof Error ? e.message : 'فشل الإرسال'
-    return NextResponse.json({ error: `تعذّر الإرسال: ${msg}` }, { status: 502 })
+    return NextResponse.json({ error: `تعذّر الإرسال: ${explainMailError(e)}` }, { status: 502 })
   }
 
   const stampedNote = `📧 أُرسل التعريف إلى ${recipients.join('، ')} — ${new Date().toISOString().slice(0, 10)} بواسطة ${profile.full_name || profile.email || 'مستخدم'}`

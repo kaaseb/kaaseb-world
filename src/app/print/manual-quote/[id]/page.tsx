@@ -10,6 +10,7 @@ import { QuotationPrint } from '@/components/furn/QuotationPrint'
 import { getManualQuote } from '@/lib/manual-quotes/store'
 import { resolveQuoteTerms } from '@/lib/quote-terms/store'
 import { computeTotals } from '@/lib/quotation/totals'
+import { normalizeLayout, printedLayout } from '@/lib/manual-quotes/layout'
 import type { FurnProject, FurnItem, FurnQuotation, FurnSettings } from '@/types'
 
 export const dynamic = 'force-dynamic'
@@ -130,7 +131,8 @@ export default async function ManualQuotePrintPage({ params }: { params: Promise
       quotation={quotationShim}
       settings={settings}
       currency={quote.currency}
-      extraColumns={quote.columns || []}
+      extraColumns={(quote.columns || []).filter((c) => !c.internal)}
+      layout={printedLayout(normalizeLayout(quote.layout, quote.columns || []), quote.columns || [], quote.hidden || [])}
       deliveryNote={deliveryNote}
       terms={tc.show ? tc.lines : []}
     />

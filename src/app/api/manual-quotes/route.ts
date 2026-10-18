@@ -1,12 +1,14 @@
 // GET  /api/manual-quotes — list
-// POST /api/manual-quotes — create a blank quote (number auto-assigned from 100)
+// POST /api/manual-quotes — create a blank quote (number auto-assigned from 100),
+//                            or { duplicateOf, subject } → a copy with the next number
 
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { verifyOrigin } from '@/lib/csrf'
 import { getProfileOrFallback, getEffectivePermissions } from '@/lib/profile'
 import { hasPermission } from '@/lib/permissions'
-import { listManualQuotes, createManualQuote } from '@/lib/manual-quotes/store'
+import { listManualQuotes, createManualQuote, duplicateManualQuote } from '@/lib/manual-quotes/store'
+import { getOverride, setOverride } from '@/lib/quote-terms/store'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -34,9 +36,21 @@ export async function POST(request: Request) {
   if (csrfError) return csrfError
   const { error, user, profile } = await guard()
   if (error) return error
-  const quote = await createManualQuote({
-    createdBy: user!.id,
-    createdByName: profile!.full_name || profile!.email || null,
-  })
+  const who = { createdBy: user!.id, createdByName: profile!.full_name || profile!.email || null }
+
+  let body: { duplicateOf?: unknown; subject?: unknown } = {}
+  try { body = await request.json() } catch { /* blank create has no body */ }
+  if (typeof body.duplicateOf === 'string' && body.duplicateOf) {
+    const subject = typeof body.subject === 'string' ? body.subject.trim() : ''
+    const quote = await duplicateManualQuote(body.duplicateOf, { ...who, subject })
+    if (!quote) return NextResponse.json({ error: 'العرض الأصلي غير موجود' }, { status: 404 })
+    // The per-quote Terms & Conditions choice travels with the copy.
+    try {
+      const ov = await getOverride(`manual:${body.duplicateOf}`)
+      if (ov) await setOverride(`manual:${quote.id}`, ov)
+    } catch { /* terms fall back to the global default */ }
+    return NextResponse.json({ quote })
+  }
+  const quote = await createManualQuote(who)
   return NextResponse.json({ quote })
 }
