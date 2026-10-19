@@ -4,7 +4,7 @@
 // No canned prompts: a greeting by name, a composer, and saved conversations.
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ArrowUp, History, Loader2, Maximize2, Plus, Sparkles, Trash2, X, ChevronLeft, ChevronRight } from 'lucide-react'
+import { ArrowUp, Check, Copy, History, Loader2, Maximize2, Plus, Sparkles, Trash2, X, ChevronLeft, ChevronRight } from 'lucide-react'
 import Link from 'next/link'
 import { toast } from 'sonner'
 import { useLanguage } from '@/contexts/LanguageContext'
@@ -254,6 +254,7 @@ export function KaasebAiChat({ mode, firstName, onClose }: Props) {
                     </div>
                     <div className={`min-w-0 flex-1 ${m.error ? 'text-red-600' : ''}`}>
                       <AiMessageBody content={m.content} cards={m.cards} isRtl={isRtl} />
+                      {!m.error && m.content.trim() && <CopyButton text={m.content} label={tx('نسخ', 'Copy')} done={tx('تم النسخ', 'Copied')} />}
                     </div>
                   </div>
                 ),
@@ -297,5 +298,22 @@ export function KaasebAiChat({ mode, firstName, onClose }: Props) {
         </>
       )}
     </div>
+  )
+}
+
+/** Copy the reply's words (card markers and markdown stars removed). */
+function CopyButton({ text, label, done }: { text: string; label: string; done: string }) {
+  const [ok, setOk] = useState(false)
+  return (
+    <button
+      type="button"
+      onClick={async () => {
+        const plain = text.replace(/\[\[card:[\w-]+\]\]/g, '').replace(/\*\*/g, '').replace(/\n{3,}/g, '\n\n').trim()
+        try { await navigator.clipboard.writeText(plain); setOk(true); setTimeout(() => setOk(false), 1500) } catch { /* clipboard blocked */ }
+      }}
+      className="mt-1.5 inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+    >
+      {ok ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}{ok ? done : label}
+    </button>
   )
 }

@@ -4,8 +4,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { availableTools, placeCards, ALL_TOOLS } from '@/lib/kaaseb-ai/engine'
-import { safeHref, renderableHref, bilingual, type AiCard } from '@/lib/kaaseb-ai/cards'
-import { matches, likeSafe, int, toEnd } from '@/lib/kaaseb-ai/tool'
+import { safeHref, renderableHref, bilingual, isAppPage, type AiCard } from '@/lib/kaaseb-ai/cards'
+import { matches, likeSafe, int, toEnd, ilikeOr } from '@/lib/kaaseb-ai/tool'
 import { isConversationId } from '@/lib/kaaseb-ai/store'
 import { DEFAULT_PERMISSIONS } from '@/lib/permissions'
 import type { Profile } from '@/types'
@@ -33,7 +33,7 @@ test('admin-only tools stay admin-only even if a custom role carries the key', (
 test('super admin sees every tool; everyone gets the personal ones', () => {
   assert.equal(names('super_admin', []).length, ALL_TOOLS.length)
   const none = names('employee', [])
-  assert.deepEqual(none.sort(), ['my_work', 'overview', 'search_everything'].sort())
+  assert.deepEqual(none.sort(), ['company_files', 'my_work', 'overview', 'prepare_downloads', 'search_everything'].sort())
 })
 
 test('default employee role: Furn yes, inbox no', () => {
@@ -81,6 +81,29 @@ test('argument hygiene', () => {
   assert.equal(int('999', 8, 1, 25), 25)
   assert.equal(int('x', 8, 1, 25), 8)
   assert.equal(toEnd('2026-10-01'), '2026-10-01T23:59:59.999Z')
+})
+
+test('bilingual search: alternatives, the Arabic article, gaps between words', () => {
+  assert.ok(matches('البروفايل|profile', 'Company Profile 2026'))
+  assert.ok(matches('البروفايل', 'بروفايل الشركة'))
+  assert.ok(matches('الراجحي|Al Rajhi', 'AL RAJHI CONSTRUCTION'))
+  assert.ok(!matches('بروفايل|profile', 'السجل التجاري'))
+  const f = ilikeOr(['name_ar', 'name_en'], 'مؤسسة الراجحي|Al Rajhi')
+  assert.equal(f, 'name_ar.ilike.%مؤسسة%راجحي%,name_ar.ilike.%Al%Rajhi%,name_en.ilike.%مؤسسة%راجحي%,name_en.ilike.%Al%Rajhi%')
+  assert.equal(ilikeOr(['name_ar'], '||'), 'name_ar.eq.__none__')
+  assert.ok(!ilikeOr(['a'], 'x,y(z)').includes(','))
+})
+
+test('every link that is not an app page opens in a new tab', () => {
+  assert.ok(isAppPage('/manual-quotes/abc'))
+  assert.ok(!isAppPage('/print/manual-quote/abc?lang=ar'))
+  assert.ok(!isAppPage('/api/manual-quotes/abc/template?lang=en'))
+  assert.ok(!isAppPage('https://bucket.s3.amazonaws.com/cr.pdf'))
+})
+
+test('company files are offered to everyone, gated per section inside', () => {
+  const got = names('employee', [])
+  assert.ok(got.includes('company_files') && got.includes('prepare_downloads'))
 })
 
 test('conversation ids cannot be used to walk the bucket', () => {

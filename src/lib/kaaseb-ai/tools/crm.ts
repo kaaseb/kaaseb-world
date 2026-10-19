@@ -7,7 +7,7 @@ import { getState as getOpportunities } from '@/lib/opportunities/store'
 import { getCompaniesState } from '@/lib/companies/store'
 import { isAppOwnedUrl } from '@/lib/s3'
 import { action, compact, day, type Tone } from '../cards'
-import { type AiTool, str, int, bool, matches, inRange, date, toEnd, likeSafe, DATE_ARGS } from '../tool'
+import { type AiTool, str, int, bool, matches, inRange, date, toEnd, likeSafe, DATE_ARGS, ilikeOr } from '../tool'
 import { fileAction } from './quotes'
 
 export const CP_STATUS: Record<string, { label: string; tone: Tone }> = {
@@ -59,7 +59,7 @@ const projectsList: AiTool = {
       const n = Number(q.replace(/^#/, ''))
       query = Number.isInteger(n) && n > 0
         ? query.eq('project_number', n)
-        : query.or(`name_en.ilike.%${q}%,name_ar.ilike.%${q}%,company_en.ilike.%${q}%,company_ar.ilike.%${q}%,engineer_name_en.ilike.%${q}%,engineer_name_ar.ilike.%${q}%`)
+        : query.or(ilikeOr(['name_en', 'name_ar', 'company_en', 'company_ar', 'engineer_name_en', 'engineer_name_ar'], q))
     }
     if (str(args.status)) query = query.eq('status', str(args.status))
     if (str(args.stage)) query = query.eq('stage', str(args.stage))

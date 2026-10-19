@@ -7,7 +7,7 @@ import { inboxUnlocked } from '@/lib/inbox/lock'
 import { getState as getOpportunities } from '@/lib/opportunities/store'
 import { getCompaniesState } from '@/lib/companies/store'
 import { money, type CardStat, type Tone } from '../cards'
-import { type AiTool, type ToolCtx, str, matches, inRange, date, toEnd, likeSafe, DATE_ARGS } from '../tool'
+import { type AiTool, type ToolCtx, str, matches, inRange, date, toEnd, likeSafe, DATE_ARGS, ilikeOr } from '../tool'
 import { quoteTotals, FURN_STAGE } from './quotes'
 import { CP_STATUS } from './crm'
 
@@ -117,21 +117,21 @@ const search: AiTool = {
       })())
       if (safe) jobs.push((async () => {
         const base = ctx.supabase.from('furn_projects').select('id, project_number, project_name, company_name')
-        const { data } = await (isNum ? base.eq('project_number', num) : base.or(`project_name.ilike.%${safe}%,company_name.ilike.%${safe}%,engineer_name.ilike.%${safe}%`)).limit(5)
+        const { data } = await (isNum ? base.eq('project_number', num) : base.or(ilikeOr(['project_name', 'company_name', 'engineer_name'], safe))).limit(5)
         for (const p of data || []) hits.push({ section: 'الفرن', title: `#${p.project_number} · ${p.project_name}`, subtitle: p.company_name, href: `/furn/${p.id}`, tone: 'violet' })
       })())
     }
     if (ctx.can('page.client_projects') && safe) {
       jobs.push((async () => {
         const base = ctx.supabase.from('client_projects').select('id, project_number, name_ar, name_en, company_ar, company_en')
-        const { data } = await (isNum ? base.eq('project_number', num) : base.or(`name_en.ilike.%${safe}%,name_ar.ilike.%${safe}%,company_en.ilike.%${safe}%,company_ar.ilike.%${safe}%,engineer_name_en.ilike.%${safe}%,engineer_name_ar.ilike.%${safe}%`)).limit(5)
+        const { data } = await (isNum ? base.eq('project_number', num) : base.or(ilikeOr(['name_en', 'name_ar', 'company_en', 'company_ar', 'engineer_name_en', 'engineer_name_ar'], safe))).limit(5)
         for (const p of data || []) hits.push({ section: 'مشروع', title: `#${p.project_number} · ${p.name_ar || p.name_en}`, subtitle: p.company_ar || p.company_en || undefined, href: `/projects/${p.id}`, tone: 'amber' })
       })())
     }
     if (ctx.can('page.tannoor') && safe && !isNum) {
       jobs.push((async () => {
         const { data } = await ctx.supabase.from('tannoor_projects').select('id, project_number, project_name_ar, project_name_en, company_ar, company_en')
-          .or(`project_name_en.ilike.%${safe}%,project_name_ar.ilike.%${safe}%,company_en.ilike.%${safe}%,company_ar.ilike.%${safe}%`).limit(3)
+          .or(ilikeOr(['project_name_en', 'project_name_ar', 'company_en', 'company_ar'], safe)).limit(3)
         for (const p of data || []) hits.push({ section: 'التنّور', title: `#${p.project_number} · ${p.project_name_ar || p.project_name_en}`, subtitle: p.company_ar || p.company_en || undefined, href: `/tannoor/${p.id}`, tone: 'slate' })
       })())
     }

@@ -70,12 +70,35 @@ export const norm = (s: unknown): string =>
     .replace(/\s+/g, ' ')
     .trim()
 
-/** Every query word appears somewhere in the haystack (Arabic-normalised). */
+/** "البروفايل" → "بروفايل": the article must not decide a match. */
+const stripAl = (w: string) => (w.length > 3 && w.startsWith('ال') ? w.slice(2) : w)
+
+/** The model sends spellings as alternatives: "الراجحي|Al Rajhi". */
+export function alternatives(q: string): string[] {
+  return q.split('|').map((s) => s.trim()).filter(Boolean).slice(0, 4)
+}
+
+/** ANY alternative whose every word appears in the haystack (Arabic-normalised,
+ *  article-insensitive). */
 export function matches(q: string, ...hay: unknown[]): boolean {
-  const words = norm(q).split(' ').filter(Boolean)
-  if (words.length === 0) return true
+  const alts = alternatives(q)
+  if (alts.length === 0) return true
   const h = norm(hay.filter(Boolean).join(' '))
-  return words.every((w) => h.includes(w))
+  return alts.some((a) => {
+    const words = norm(a).split(' ').filter(Boolean).map(stripAl)
+    return words.length > 0 && words.every((w) => h.includes(w))
+  })
+}
+
+/** PostgREST `.or()` filter: each column × each alternative, words in order
+ *  with gaps allowed ("مؤسسة الراجحي" also finds "مؤسسة عبدالله الراجحي"). */
+export function ilikeOr(cols: string[], q: string): string {
+  const patterns = alternatives(q)
+    .map((a) => likeSafe(a).split(/\s+/).filter(Boolean).map(stripAl).join('%'))
+    .filter(Boolean)
+  // Nothing searchable left → a filter that matches nothing (never "everything").
+  if (!patterns.length) return `${cols[0]}.eq.__none__`
+  return cols.flatMap((c) => patterns.map((p) => `${c}.ilike.%${p}%`)).join(',')
 }
 
 export function inRange(iso: string | null | undefined, from: string, to: string): boolean {

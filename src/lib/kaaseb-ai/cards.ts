@@ -64,6 +64,8 @@ export type AiCard =
         meta?: string
         badge?: { label: string; tone: Tone }
         href?: string
+        /** href is a file: show a blue «تحميل» button (new tab). */
+        download?: boolean
       }>
       more?: { label: string; href: string }
     }
@@ -82,6 +84,12 @@ export function renderableHref(href: string | null | undefined): string | null {
   if (!href) return null
   if (safeHref(href)) return href
   try { return new URL(href).protocol === 'https:' ? href : null } catch { return null }
+}
+
+/** A page of the app (same tab). Files, print pages, API downloads and other
+ *  sites are NOT pages — they always open in a new tab. */
+export function isAppPage(href: string): boolean {
+  return !!safeHref(href) && !/^\/(print|api)\//.test(href)
 }
 
 export function action(kind: ActionKind, label: string, href: string | null | undefined, external = false): CardAction | null {

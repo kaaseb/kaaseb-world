@@ -7,7 +7,7 @@
 import { Fragment, useState, type ReactNode } from 'react'
 import Link from 'next/link'
 import { Download, PencilLine, ArrowUpLeft, ArrowUpRight, ChevronDown, ChevronLeft, ChevronRight } from 'lucide-react'
-import { renderableHref, type AiCard, type CardAction, type Tone } from '@/lib/kaaseb-ai/cards'
+import { renderableHref, isAppPage, type AiCard, type CardAction, type Tone } from '@/lib/kaaseb-ai/cards'
 
 export const TONE: Record<Tone, string> = {
   emerald: 'bg-emerald-50 text-emerald-700 ring-emerald-600/20 dark:bg-emerald-500/10 dark:text-emerald-300',
@@ -58,9 +58,15 @@ function ActionButton({ a, isRtl }: { a: CardAction; isRtl: boolean }) {
       </div>
     )
   }
-  return a.external || !href.startsWith('/')
-    ? <a href={href} target="_blank" rel="noopener noreferrer" className={base}>{body}</a>
-    : <Link href={href} className={base}>{body}</Link>
+  return <SmartLink href={href} newTab={a.external} className={base}>{body}</SmartLink>
+}
+
+/** App pages open in place; files, PDFs, downloads and other sites open in a
+ *  new browser tab — never replacing the page the user is working on. */
+function SmartLink({ href, newTab, className, children }: { href: string; newTab?: boolean; className: string; children: ReactNode }) {
+  return newTab || !isAppPage(href)
+    ? <a href={href} target="_blank" rel="noopener noreferrer" className={className}>{children}</a>
+    : <Link href={href} className={className}>{children}</Link>
 }
 
 export function CardView({ card, isRtl }: { card: AiCard; isRtl: boolean }) {
@@ -91,6 +97,7 @@ export function CardView({ card, isRtl }: { card: AiCard; isRtl: boolean }) {
         <ul className="divide-y">
           {card.rows.map((r, i) => {
             const href = renderableHref(r.href)
+            const download = !!(href && (r.download || !isAppPage(href)))
             const inner = (
               <>
                 <span className="min-w-0 flex-1">
@@ -99,20 +106,31 @@ export function CardView({ card, isRtl }: { card: AiCard; isRtl: boolean }) {
                 </span>
                 {r.meta && <span className="text-xs font-semibold tabular-nums whitespace-nowrap" dir="ltr">{r.meta}</span>}
                 {r.badge && <Badge {...r.badge} />}
-                {href && <Chevron className="w-4 h-4 text-muted-foreground/60 flex-shrink-0" />}
+                {href && !download && <Chevron className="w-4 h-4 text-muted-foreground/60 flex-shrink-0" />}
               </>
             )
             return (
               <li key={i}>
-                {href
-                  ? <Link href={href} className="flex items-center gap-2 px-3 py-2 hover:bg-muted/40 transition-colors">{inner}</Link>
-                  : <div className="flex items-center gap-2 px-3 py-2">{inner}</div>}
+                {href && download ? (
+                  // A file: an explicit blue button, not a hidden row link.
+                  <div className="flex items-center gap-2 px-3 py-2">
+                    {inner}
+                    <a href={href} target="_blank" rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 h-7 px-2.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-[11px] font-semibold flex-shrink-0 transition-colors">
+                      <Download className="w-3.5 h-3.5" />تحميل
+                    </a>
+                  </div>
+                ) : href ? (
+                  <SmartLink href={href} className="flex items-center gap-2 px-3 py-2 hover:bg-muted/40 transition-colors">{inner}</SmartLink>
+                ) : (
+                  <div className="flex items-center gap-2 px-3 py-2">{inner}</div>
+                )}
               </li>
             )
           })}
         </ul>
         {card.more && renderableHref(card.more.href) && (
-          <Link href={card.more.href} className="block text-center text-xs font-medium text-blue-600 hover:bg-muted/40 py-2 border-t">{card.more.label}</Link>
+          <SmartLink href={card.more.href} className="block text-center text-xs font-medium text-blue-600 hover:bg-muted/40 py-2 border-t">{card.more.label}</SmartLink>
         )}
       </div>
     )

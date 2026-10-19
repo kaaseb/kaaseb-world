@@ -4,7 +4,7 @@ import { listManualQuotes, getManualQuote, type ManualQuote } from '@/lib/manual
 import { computeTotals } from '@/lib/quotation/totals'
 import { isAppOwnedUrl } from '@/lib/s3'
 import { action, bilingual, compact, money, day, type Tone } from '../cards'
-import { type AiTool, str, int, matches, inRange, date, toEnd, likeSafe, DATE_ARGS } from '../tool'
+import { type AiTool, str, int, matches, inRange, date, toEnd, likeSafe, DATE_ARGS, ilikeOr } from '../tool'
 
 // ── shared ───────────────────────────────────────────────────────────────────
 export function quoteTotals(q: ManualQuote) {
@@ -167,7 +167,7 @@ const furnList: AiTool = {
       const n = Number(q.replace(/^#/, ''))
       query = Number.isInteger(n) && n > 0
         ? query.eq('project_number', n)
-        : query.or(`project_name.ilike.%${q}%,company_name.ilike.%${q}%,engineer_name.ilike.%${q}%`)
+        : query.or(ilikeOr(['project_name', 'company_name', 'engineer_name'], q))
     }
     if (str(args.stage)) query = query.eq('stage', str(args.stage))
     if (str(args.status)) query = query.eq('status', str(args.status))
@@ -292,7 +292,7 @@ const tannoorList: AiTool = {
       const n = Number(q.replace(/^#/, ''))
       query = Number.isInteger(n) && n > 0
         ? query.eq('project_number', n)
-        : query.or(`project_name_en.ilike.%${q}%,project_name_ar.ilike.%${q}%,company_en.ilike.%${q}%,company_ar.ilike.%${q}%`)
+        : query.or(ilikeOr(['project_name_en', 'project_name_ar', 'company_en', 'company_ar'], q))
     }
     if (date(args.from)) query = query.gte('created_at', date(args.from))
     if (toEnd(args.to)) query = query.lte('created_at', toEnd(args.to))

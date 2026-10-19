@@ -14,8 +14,9 @@ import { QUOTE_TOOLS } from './tools/quotes'
 import { CRM_TOOLS } from './tools/crm'
 import { TEAM_TOOLS } from './tools/team'
 import { OVERVIEW_TOOLS } from './tools/overview'
+import { FILE_TOOLS } from './tools/files'
 
-export const ALL_TOOLS: AiTool[] = [...OVERVIEW_TOOLS, ...QUOTE_TOOLS, ...CRM_TOOLS, ...TEAM_TOOLS]
+export const ALL_TOOLS: AiTool[] = [...OVERVIEW_TOOLS, ...FILE_TOOLS, ...QUOTE_TOOLS, ...CRM_TOOLS, ...TEAM_TOOLS]
 
 // What the user can open, in words the model can repeat ("you have access to…").
 const SECTIONS: Array<{ ar: string; perm: PermissionKey | 'admin' }> = [
@@ -81,8 +82,16 @@ function systemPrompt(profile: Profile, email: string | undefined, permissions: 
 - لا تقترح أسئلة جاهزة ولا تختم بـ«هل تحتاج شيء آخر؟».
 
 ## البيانات
-- كل رقم أو اسم أو حالة لازم يجي من أداة. ممنوع التخمين أو التأليف. لو الأداة رجعت فاضي قل «ما لقيت» بوضوح.
+- كل رقم أو اسم أو حالة لازم يجي من أداة. ممنوع التخمين أو التأليف.
 - استخدم الأدوات مباشرة بدون ما تستأذن. لو ما تعرف القسم استخدم search_everything.
+- البحث بالأسماء: أرسل الصيغتين في query مفصولة بـ | (مثال: "الراجحي|Al Rajhi"، "بروفايل|profile"، "رخام|marble").
+- قبل ما تقول «ما لقيت»: جرّب صيغة ثانية (عربي/إنجليزي، بدون «ال»، كلمة أقصر)، وجرّب search_everything، وللملفات company_files. بعدها فقط قل «ما لقيت» وقل وين دوّرت.
+
+## الملفات والتحميل
+- أي طلب فيه «أرسل / عطني / حمّل / أبي ملف / وين ملف» = جهّز أزرار تحميل، لا تكتفِ بقول «موجود».
+- ملفات الشركة (البروفايل، السجل التجاري، الشهادات، الزكاة، التأمينات، الرخص، التأهيل المسبق): استدعِ company_files، اختر بالمعنى (CR = السجل التجاري، Profile = البروفايل)، ثم prepare_downloads بالـids، واعرض بطاقتها.
+- ملفات مشروع أو عرض: استخدم أداة المشروع/العرض، وبطاقتها فيها أزرار التحميل.
+- أزرار التحميل تسأل المستخدم عربي أو English لما يكون الملف بلغتين — لا تسأله أنت.
 - كل أداة ترجع "card" (ومرات "files_card" أو "list_card" أو "attachments_card") = مرجع بطاقة. اعرض البطاقة بكتابة [[card:المرجع]] في سطر لحاله في المكان المناسب من ردك. اعرض فقط البطاقات اللي تخدم السؤال.
 - أزرار التحميل والتعديل موجودة داخل البطاقات — لا تكتب روابط بنفسك أبداً.
 - اشرح الحالة بالكلام لما يسأل «وين وصل؟» (مثلاً: «المشروع في مرحلة التسعير، ٣ بنود بدون سعر»).
@@ -141,6 +150,10 @@ export async function runTurn(input: TurnInput): Promise<TurnResult> {
         if (out && typeof out === 'object') {
           const refs = CARD_KEYS.map((k) => (out as Record<string, unknown>)[k]).filter((v): v is string => typeof v === 'string')
           if (refs.length) lastCallRefs = refs
+        }
+        // An empty result nudges a second attempt instead of an early "not found".
+        if (out && typeof out === 'object' && (out as { count?: unknown }).count === 0) {
+          (out as Record<string, unknown>).hint = 'لا نتائج. جرّب صيغة أخرى (عربي/إنجليزي، أقصر، بدون فلتر التاريخ) أو أداة أخرى قبل أن تقول «ما لقيت».'
         }
         const json = JSON.stringify(out ?? null)
         return json.length > MAX_RESULT_CHARS ? { truncated: true, partial_json: json.slice(0, MAX_RESULT_CHARS) } : out

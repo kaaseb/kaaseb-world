@@ -49,6 +49,12 @@ export function KaasebAiLauncher({ firstName, stacked }: { firstName: string; st
           className={`fixed z-50 inset-0 h-[100dvh] sm:inset-auto sm:bottom-5 sm:end-5 sm:h-[680px] sm:max-h-[88vh] sm:w-[440px] sm:rounded-2xl sm:shadow-2xl sm:border overflow-hidden bg-background ${open ? '' : 'hidden'}`}
           role="dialog"
           aria-label={label}
+          onClickCapture={(e) => {
+            // Phone: the panel is full screen — following an in-app link (تعديل،
+            // فتح المشروع) must reveal that page, so the panel steps aside.
+            const a = (e.target as HTMLElement).closest('a')
+            if (a && a.getAttribute('target') !== '_blank' && a.getAttribute('href')?.startsWith('/') && window.innerWidth < 640) setOpen(false)
+          }}
         >
           <Suspense fallback={<div className="h-full flex items-center justify-center"><Loader2 className="w-5 h-5 animate-spin text-muted-foreground" /></div>}>
             <KaasebAiChat mode="panel" firstName={firstName} onClose={() => setOpen(false)} />
