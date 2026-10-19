@@ -1,0 +1,301 @@
+'use client'
+
+// كاسب AI — the conversation surface (floating panel or the full /ai page).
+// No canned prompts: a greeting by name, a composer, and saved conversations.
+
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { ArrowUp, History, Loader2, Maximize2, Plus, Sparkles, Trash2, X, ChevronLeft, ChevronRight } from 'lucide-react'
+import Link from 'next/link'
+import { toast } from 'sonner'
+import { useLanguage } from '@/contexts/LanguageContext'
+import type { AiMessage, ConversationMeta } from '@/lib/kaaseb-ai/store'
+import { AiMessageBody } from './AiMessageBody'
+
+interface Props {
+  mode: 'panel' | 'page'
+  firstName: string
+  onClose?: () => void
+}
+
+type Pending = { id: string; status: string }
+
+export function KaasebAiMark({ className = 'w-4 h-4' }: { className?: string }) {
+  return <Sparkles className={className} />
+}
+
+export function KaasebAiChat({ mode, firstName, onClose }: Props) {
+  const { lang, isRtl } = useLanguage()
+  const ar = lang === 'ar'
+  const tx = (a: string, e: string) => (ar ? a : e)
+  const Back = isRtl ? ChevronRight : ChevronLeft
+
+  const [convs, setConvs] = useState<ConversationMeta[]>([])
+  const [convId, setConvId] = useState<string | null>(null)
+  const [messages, setMessages] = useState<AiMessage[]>([])
+  const [loadingConv, setLoadingConv] = useState(false)
+  const [showHistory, setShowHistory] = useState(false)
+  const [input, setInput] = useState('')
+  const [pending, setPending] = useState<Pending | null>(null)
+  const scroller = useRef<HTMLDivElement>(null)
+  const box = useRef<HTMLTextAreaElement>(null)
+  const abort = useRef<AbortController | null>(null)
+
+  const loadList = useCallback(async () => {
+    try {
+      const r = await fetch('/api/kaaseb-ai/conversations')
+      const j = await r.json().catch(() => ({}))
+      if (r.ok && Array.isArray(j.conversations)) setConvs(j.conversations)
+    } catch { /* offline — the list just stays as is */ }
+  }, [])
+
+  useEffect(() => { loadList() }, [loadList])
+  useEffect(() => () => abort.current?.abort(), [])
+
+  useEffect(() => {
+    const el = scroller.current
+    if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+  }, [messages, pending])
+
+  useEffect(() => {
+    const el = box.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${Math.min(el.scrollHeight, 160)}px`
+  }, [input])
+
+  async function openConversation(id: string) {
+    setShowHistory(false)
+    if (id === convId) return
+    abort.current?.abort()
+    setPending(null)
+    setConvId(id)
+    setMessages([])
+    setLoadingConv(true)
+    try {
+      const r = await fetch(`/api/kaaseb-ai/conversations/${id}`)
+      const j = await r.json().catch(() => ({}))
+      if (!r.ok) throw new Error(j.error)
+      setMessages(Array.isArray(j.messages) ? j.messages : [])
+    } catch {
+      toast.error(tx('تعذّر فتح المحادثة', 'Could not open the conversation'))
+    } finally { setLoadingConv(false) }
+  }
+
+  function newChat() {
+    abort.current?.abort()
+    setPending(null)
+    setConvId(null)
+    setMessages([])
+    setShowHistory(false)
+    setTimeout(() => box.current?.focus(), 0)
+  }
+
+  async function removeConversation(id: string) {
+    if (!confirm(tx('حذف هذه المحادثة؟', 'Delete this conversation?'))) return
+    const prev = convs
+    setConvs((l) => l.filter((c) => c.id !== id))
+    if (id === convId) newChat()
+    const r = await fetch(`/api/kaaseb-ai/conversations/${id}`, { method: 'DELETE' }).catch(() => null)
+    if (!r?.ok) { setConvs(prev); toast.error(tx('تعذّر الحذف', 'Delete failed')) }
+  }
+
+  async function send() {
+    const text = input.trim()
+    if (!text || pending) return
+    setInput('')
+    const local: AiMessage = { id: `local-${Date.now()}`, role: 'user', content: text, at: new Date().toISOString() }
+    setMessages((m) => [...m, local])
+    setPending({ id: local.id, status: tx('يقرأ سؤالك…', 'Reading your question…') })
+
+    const ctrl = new AbortController()
+    abort.current = ctrl
+    let activeConv = convId
+    try {
+      const res = await fetch('/api/kaaseb-ai/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ conversationId: convId, message: text }),
+        signal: ctrl.signal,
+      })
+      if (!res.ok || !res.body) {
+        const j = await res.json().catch(() => ({}))
+        throw new Error(j.error || tx('تعذّر الرد', 'No reply'))
+      }
+      const reader = res.body.getReader()
+      const dec = new TextDecoder()
+      let buf = ''
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buf += dec.decode(value, { stream: true })
+        let nl: number
+        while ((nl = buf.indexOf('\n')) >= 0) {
+          const line = buf.slice(0, nl).trim()
+          buf = buf.slice(nl + 1)
+          if (!line) continue
+          const ev = JSON.parse(line) as
+            | { t: 'conv'; conversation: ConversationMeta }
+            | { t: 'status'; text: string }
+            | { t: 'done'; message: AiMessage }
+            | { t: 'error'; message: AiMessage }
+          if (ev.t === 'conv') {
+            activeConv = ev.conversation.id
+            setConvId(ev.conversation.id)
+            setConvs((l) => [ev.conversation, ...l.filter((c) => c.id !== ev.conversation.id)])
+          } else if (ev.t === 'status') {
+            setPending((p) => (p ? { ...p, status: ev.text } : p))
+          } else {
+            setMessages((m) => [...m, ev.message])
+          }
+        }
+      }
+      if (activeConv) setConvs((l) => l.map((c) => (c.id === activeConv ? { ...c, updatedAt: new Date().toISOString() } : c)))
+    } catch (e) {
+      if ((e as Error)?.name === 'AbortError') return
+      setMessages((m) => [...m, {
+        id: `err-${Date.now()}`, role: 'assistant', error: true, at: new Date().toISOString(),
+        content: e instanceof Error && e.message ? e.message : tx('صار خلل في الاتصال، جرّب مرة ثانية.', 'Connection problem — try again.'),
+      }])
+    } finally {
+      setPending(null)
+      abort.current = null
+    }
+  }
+
+  const empty = messages.length === 0 && !pending && !loadingConv
+  const fmt = (iso: string) => {
+    const d = new Date(iso)
+    return Number.isNaN(d.getTime()) ? '' : d.toLocaleDateString(ar ? 'ar-SA-u-nu-latn' : 'en-GB', { month: 'short', day: 'numeric' })
+  }
+
+  return (
+    <div dir={isRtl ? 'rtl' : 'ltr'} className="flex flex-col h-full min-h-0 bg-background">
+      {/* Header */}
+      <div className="flex items-center gap-2 px-3 h-14 border-b bg-card flex-shrink-0">
+        {showHistory ? (
+          <button onClick={() => setShowHistory(false)} className="p-1.5 rounded-full hover:bg-muted text-muted-foreground" aria-label={tx('رجوع', 'Back')}>
+            <Back className="w-5 h-5" />
+          </button>
+        ) : (
+          <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-slate-900 via-indigo-900 to-sky-700 text-white flex items-center justify-center shadow-sm">
+            <KaasebAiMark />
+          </div>
+        )}
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-bold leading-tight">{showHistory ? tx('المحادثات', 'Conversations') : tx('كاسب AI', 'Kaaseb AI')}</p>
+          {!showHistory && <p className="text-[11px] text-muted-foreground leading-tight truncate">{tx('مساعدك داخل عالم كاسب', 'Your assistant inside Kaaseb World')}</p>}
+        </div>
+        {!showHistory && (
+          <>
+            <button onClick={() => setShowHistory(true)} className="p-2 rounded-lg hover:bg-muted text-muted-foreground" title={tx('المحادثات', 'Conversations')} aria-label={tx('المحادثات', 'Conversations')}>
+              <History className="w-4 h-4" />
+            </button>
+            <button onClick={newChat} className="p-2 rounded-lg hover:bg-muted text-muted-foreground" title={tx('محادثة جديدة', 'New chat')} aria-label={tx('محادثة جديدة', 'New chat')}>
+              <Plus className="w-4 h-4" />
+            </button>
+          </>
+        )}
+        {mode === 'panel' && (
+          <>
+            <Link href="/ai" onClick={onClose} className="hidden sm:inline-flex p-2 rounded-lg hover:bg-muted text-muted-foreground" title={tx('ملء الشاشة', 'Full screen')} aria-label={tx('ملء الشاشة', 'Full screen')}>
+              <Maximize2 className="w-4 h-4" />
+            </Link>
+            <button onClick={onClose} className="p-2 rounded-lg hover:bg-muted text-muted-foreground" aria-label={tx('إغلاق', 'Close')}>
+              <X className="w-4 h-4" />
+            </button>
+          </>
+        )}
+      </div>
+
+      {showHistory ? (
+        <div className="flex-1 overflow-y-auto min-h-0">
+          {convs.length === 0 ? (
+            <p className="text-center text-sm text-muted-foreground py-12">{tx('ما فيه محادثات محفوظة', 'No saved conversations')}</p>
+          ) : (
+            <ul className="divide-y">
+              {convs.map((c) => (
+                <li key={c.id} className={`group flex items-center gap-2 px-3 hover:bg-muted/40 ${c.id === convId ? 'bg-muted/50' : ''}`}>
+                  <button onClick={() => openConversation(c.id)} className="flex-1 min-w-0 text-start py-3">
+                    <span className="block text-sm font-medium truncate">{c.title}</span>
+                    <span className="block text-[11px] text-muted-foreground">{fmt(c.updatedAt)}</span>
+                  </button>
+                  <button onClick={() => removeConversation(c.id)} className="p-1.5 rounded-md text-muted-foreground/60 hover:text-red-600 hover:bg-red-50 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition" aria-label={tx('حذف', 'Delete')}>
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      ) : (
+        <>
+          {/* Messages */}
+          <div ref={scroller} className="flex-1 overflow-y-auto min-h-0 px-3 py-4">
+            <div className={`${mode === 'page' ? 'max-w-3xl' : ''} mx-auto space-y-4`}>
+              {empty && (
+                <div className="flex flex-col items-center text-center pt-10 sm:pt-16 px-4">
+                  <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-slate-900 via-indigo-900 to-sky-700 text-white flex items-center justify-center shadow-lg shadow-indigo-900/20">
+                    <KaasebAiMark className="w-6 h-6" />
+                  </div>
+                  <p className="mt-4 text-lg font-bold">{tx(`هلا ${firstName}`, `Hello ${firstName}`)}</p>
+                  <p className="mt-1 text-sm text-muted-foreground">{tx('وش تحتاج اليوم؟', 'What do you need today?')}</p>
+                </div>
+              )}
+              {loadingConv && <div className="flex justify-center py-10"><Loader2 className="w-5 h-5 animate-spin text-muted-foreground" /></div>}
+              {messages.map((m) =>
+                m.role === 'user' ? (
+                  <div key={m.id} className="flex justify-end">
+                    <div className="max-w-[85%] rounded-2xl rounded-ee-md bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900 px-3.5 py-2 text-sm whitespace-pre-wrap break-words">{m.content}</div>
+                  </div>
+                ) : (
+                  <div key={m.id} className="flex gap-2">
+                    <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-slate-900 via-indigo-900 to-sky-700 text-white flex items-center justify-center flex-shrink-0 mt-0.5">
+                      <KaasebAiMark className="w-3.5 h-3.5" />
+                    </div>
+                    <div className={`min-w-0 flex-1 ${m.error ? 'text-red-600' : ''}`}>
+                      <AiMessageBody content={m.content} cards={m.cards} isRtl={isRtl} />
+                    </div>
+                  </div>
+                ),
+              )}
+              {pending && (
+                <div className="flex gap-2 items-center">
+                  <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-slate-900 via-indigo-900 to-sky-700 text-white flex items-center justify-center flex-shrink-0">
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  </div>
+                  <p className="text-xs text-muted-foreground">{pending.status}</p>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Composer */}
+          <div className="border-t bg-card p-2.5 flex-shrink-0 pb-[max(0.625rem,env(safe-area-inset-bottom))]">
+            <div className={`${mode === 'page' ? 'max-w-3xl' : ''} mx-auto flex items-end gap-2 rounded-2xl border bg-background px-3 py-2 focus-within:ring-2 focus-within:ring-indigo-500/30 focus-within:border-indigo-400 transition`}>
+              <textarea
+                ref={box}
+                value={input}
+                onChange={(e) => setInput(e.target.value.slice(0, 4000))}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send() }
+                }}
+                rows={1}
+                autoFocus={mode === 'page'}
+                placeholder={tx('اكتب رسالتك…', 'Type your message…')}
+                className="flex-1 resize-none bg-transparent outline-none text-sm leading-6 max-h-40 py-1"
+              />
+              <button
+                onClick={send}
+                disabled={!input.trim() || !!pending}
+                className="w-9 h-9 rounded-xl bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900 flex items-center justify-center disabled:opacity-30 transition hover:scale-105 active:scale-95 flex-shrink-0"
+                aria-label={tx('إرسال', 'Send')}
+              >
+                {pending ? <Loader2 className="w-4 h-4 animate-spin" /> : <ArrowUp className="w-4 h-4" />}
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  )
+}

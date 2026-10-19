@@ -5,6 +5,7 @@ import { Sidebar } from '@/components/sidebar/Sidebar'
 import { MobileTopBar } from '@/components/dashboard/MobileTopBar'
 import { LanguageProvider, useLanguage } from '@/contexts/LanguageContext'
 import { ProjectChatLauncher } from '@/components/project-chat/ProjectChatLauncher'
+import { KaasebAiLauncher } from '@/components/kaaseb-ai/KaasebAiLauncher'
 import type { Profile } from '@/types'
 import type { Lang } from '@/lib/i18n/translations'
 import { useSearchParams, usePathname } from 'next/navigation'
@@ -92,6 +93,10 @@ function DashboardInner({ profile, permissions, children }: DashboardShellProps)
     return () => { document.body.style.overflow = original }
   }, [drawerOpen])
 
+  const showProjectChat = profile.role === 'super_admin' || (permissions?.includes('page.client_projects') ?? false)
+  const fullName = (profile.full_name || '').trim()
+  const firstName = fullName && fullName !== 'Setup Required' ? fullName.split(/\s+/)[0] : (profile.email || '').split('@')[0]
+
   function handleUnlock() {
     setIsLocked(false)
     sessionStorage.setItem(`unlocked_${profile.id}`, 'true')
@@ -137,9 +142,10 @@ function DashboardInner({ profile, permissions, children }: DashboardShellProps)
 
       {/* Floating project-chat launcher — inside the LanguageProvider so it gets
           the right language, and only for users who can see projects. */}
-      {(profile.role === 'super_admin' || (permissions?.includes('page.client_projects') ?? false)) && (
-        <ProjectChatLauncher currentUser={profile} />
-      )}
+      {showProjectChat && <ProjectChatLauncher currentUser={profile} />}
+
+      {/* كاسب AI — for everyone; what it can read follows the user's permissions. */}
+      <KaasebAiLauncher firstName={firstName} stacked={showProjectChat} />
     </div>
   )
 }

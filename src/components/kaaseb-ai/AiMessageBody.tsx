@@ -1,0 +1,186 @@
+'use client'
+
+// Renders one Kaaseb AI reply: light markdown (bold, headings, bullets) + the
+// server-built cards, placed where the model pointed at them ([[card:ref]]).
+// No HTML is ever injected — text goes through React as text.
+
+import { Fragment, type ReactNode } from 'react'
+import Link from 'next/link'
+import { Download, PencilLine, ArrowUpLeft, ArrowUpRight, ChevronLeft, ChevronRight } from 'lucide-react'
+import { renderableHref, type AiCard, type CardAction, type Tone } from '@/lib/kaaseb-ai/cards'
+
+export const TONE: Record<Tone, string> = {
+  emerald: 'bg-emerald-50 text-emerald-700 ring-emerald-600/20 dark:bg-emerald-500/10 dark:text-emerald-300',
+  amber: 'bg-amber-50 text-amber-800 ring-amber-600/20 dark:bg-amber-500/10 dark:text-amber-300',
+  red: 'bg-red-50 text-red-700 ring-red-600/20 dark:bg-red-500/10 dark:text-red-300',
+  blue: 'bg-blue-50 text-blue-700 ring-blue-600/20 dark:bg-blue-500/10 dark:text-blue-300',
+  violet: 'bg-violet-50 text-violet-700 ring-violet-600/20 dark:bg-violet-500/10 dark:text-violet-300',
+  slate: 'bg-slate-100 text-slate-700 ring-slate-500/20 dark:bg-slate-500/15 dark:text-slate-300',
+}
+const STAT_ACCENT: Record<Tone, string> = {
+  emerald: 'before:bg-emerald-500', amber: 'before:bg-amber-500', red: 'before:bg-red-500',
+  blue: 'before:bg-blue-500', violet: 'before:bg-violet-500', slate: 'before:bg-slate-400',
+}
+
+function Badge({ label, tone }: { label: string; tone: Tone }) {
+  return <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset whitespace-nowrap ${TONE[tone]}`}>{label}</span>
+}
+
+function ActionButton({ a, isRtl }: { a: CardAction; isRtl: boolean }) {
+  const href = renderableHref(a.href)
+  if (!href) return null
+  const Icon = a.kind === 'download' ? Download : a.kind === 'edit' ? PencilLine : isRtl ? ArrowUpLeft : ArrowUpRight
+  const cls =
+    a.kind === 'download' ? 'bg-blue-600 hover:bg-blue-700 text-white shadow-sm shadow-blue-600/20'
+    : a.kind === 'edit' ? 'bg-red-600 hover:bg-red-700 text-white shadow-sm shadow-red-600/20'
+    : 'bg-muted hover:bg-muted/70 text-foreground ring-1 ring-inset ring-border'
+  const body = <><Icon className="w-3.5 h-3.5" />{a.label}</>
+  const base = `inline-flex items-center gap-1.5 h-8 px-3 rounded-lg text-xs font-semibold transition-colors ${cls}`
+  return a.external || !href.startsWith('/')
+    ? <a href={href} target="_blank" rel="noopener noreferrer" className={base}>{body}</a>
+    : <Link href={href} className={base}>{body}</Link>
+}
+
+export function CardView({ card, isRtl }: { card: AiCard; isRtl: boolean }) {
+  const Chevron = isRtl ? ChevronLeft : ChevronRight
+  if (card.type === 'stats') {
+    return (
+      <div className="rounded-xl border bg-card p-3">
+        <p className="text-xs font-semibold text-muted-foreground mb-2">{card.title}</p>
+        <div className="grid grid-cols-2 gap-2">
+          {card.stats.map((s, i) => (
+            <div key={i} className={`relative rounded-lg bg-muted/50 px-3 py-2 overflow-hidden before:absolute before:inset-y-2 before:start-0 before:w-0.5 before:rounded-full ${STAT_ACCENT[s.tone || 'slate']}`}>
+              <p className="text-[11px] text-muted-foreground truncate">{s.label}</p>
+              <p className="text-base font-bold tabular-nums leading-tight mt-0.5" dir="ltr" style={{ textAlign: isRtl ? 'right' : 'left' }}>{s.value}</p>
+              {s.hint && <p className="text-[10px] text-muted-foreground truncate mt-0.5">{s.hint}</p>}
+            </div>
+          ))}
+        </div>
+      </div>
+    )
+  }
+  if (card.type === 'list') {
+    return (
+      <div className="rounded-xl border bg-card overflow-hidden">
+        <div className="flex items-center justify-between px-3 py-2 border-b bg-muted/30">
+          <p className="text-xs font-semibold">{card.title}</p>
+          {typeof card.total === 'number' && <span className="text-[11px] text-muted-foreground tabular-nums">{card.total}</span>}
+        </div>
+        <ul className="divide-y">
+          {card.rows.map((r, i) => {
+            const href = renderableHref(r.href)
+            const inner = (
+              <>
+                <span className="min-w-0 flex-1">
+                  <span className="block text-sm font-medium truncate">{r.title}</span>
+                  {r.subtitle && <span className="block text-[11px] text-muted-foreground truncate">{r.subtitle}</span>}
+                </span>
+                {r.meta && <span className="text-xs font-semibold tabular-nums whitespace-nowrap" dir="ltr">{r.meta}</span>}
+                {r.badge && <Badge {...r.badge} />}
+                {href && <Chevron className="w-4 h-4 text-muted-foreground/60 flex-shrink-0" />}
+              </>
+            )
+            return (
+              <li key={i}>
+                {href
+                  ? <Link href={href} className="flex items-center gap-2 px-3 py-2 hover:bg-muted/40 transition-colors">{inner}</Link>
+                  : <div className="flex items-center gap-2 px-3 py-2">{inner}</div>}
+              </li>
+            )
+          })}
+        </ul>
+        {card.more && renderableHref(card.more.href) && (
+          <Link href={card.more.href} className="block text-center text-xs font-medium text-blue-600 hover:bg-muted/40 py-2 border-t">{card.more.label}</Link>
+        )}
+      </div>
+    )
+  }
+  return (
+    <div className="rounded-xl border bg-card p-3">
+      <div className="flex items-start gap-2">
+        <div className="min-w-0 flex-1">
+          <p className="text-[11px] font-medium text-muted-foreground">{card.kind}</p>
+          <p className="text-sm font-bold leading-snug mt-0.5 break-words">{card.title}</p>
+          {card.subtitle && <p className="text-xs text-muted-foreground mt-0.5 break-words">{card.subtitle}</p>}
+        </div>
+        {card.badge && <Badge {...card.badge} />}
+      </div>
+      {card.amount && <p className="text-lg font-extrabold tabular-nums mt-2" dir="ltr" style={{ textAlign: isRtl ? 'right' : 'left' }}>{card.amount}</p>}
+      {card.fields && card.fields.length > 0 && (
+        <dl className="grid grid-cols-2 gap-x-3 gap-y-1.5 mt-2 text-xs">
+          {card.fields.map((f, i) => (
+            <div key={i} className="min-w-0">
+              <dt className="text-muted-foreground text-[11px]">{f.label}</dt>
+              <dd className="font-medium truncate" title={f.value}>{f.value}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
+      {card.actions && card.actions.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 mt-3">
+          {card.actions.map((a, i) => <ActionButton key={i} a={a} isRtl={isRtl} />)}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── light markdown ───────────────────────────────────────────────────────────
+function inline(text: string): ReactNode[] {
+  return text.split(/(\*\*[^*]+\*\*)/g).map((part, i) =>
+    part.startsWith('**') && part.endsWith('**') && part.length > 4
+      ? <strong key={i} className="font-semibold">{part.slice(2, -2)}</strong>
+      : <Fragment key={i}>{part}</Fragment>,
+  )
+}
+
+function TextBlock({ text }: { text: string }) {
+  const lines = text.split('\n')
+  const out: ReactNode[] = []
+  let list: { ordered: boolean; items: string[] } | null = null
+  const flush = () => {
+    if (!list) return
+    const L = list
+    out.push(L.ordered
+      ? <ol key={out.length} className="list-decimal ps-5 space-y-0.5">{L.items.map((t, i) => <li key={i}>{inline(t)}</li>)}</ol>
+      : <ul key={out.length} className="list-disc ps-5 space-y-0.5 marker:text-muted-foreground">{L.items.map((t, i) => <li key={i}>{inline(t)}</li>)}</ul>)
+    list = null
+  }
+  for (const raw of lines) {
+    const line = raw.trimEnd()
+    const b = /^\s*[-•*]\s+(.*)$/.exec(line)
+    const n = /^\s*\d+[.)]\s+(.*)$/.exec(line)
+    if (b || n) {
+      const ordered = !!n
+      if (!list || list.ordered !== ordered) { flush(); list = { ordered, items: [] } }
+      list.items.push((b || n)![1])
+      continue
+    }
+    flush()
+    if (!line.trim()) continue
+    const h = /^#{1,4}\s+(.*)$/.exec(line)
+    out.push(h
+      ? <p key={out.length} className="font-bold mt-1">{inline(h[1])}</p>
+      : <p key={out.length}>{inline(line)}</p>)
+  }
+  flush()
+  return <div className="space-y-1.5">{out}</div>
+}
+
+/** Text with inline card markers; cards the text didn't place go at the end. */
+export function AiMessageBody({ content, cards = [], isRtl }: { content: string; cards?: AiCard[]; isRtl: boolean }) {
+  const byRef = new Map(cards.map((c) => [c.ref, c]))
+  const used = new Set<string>()
+  const parts = content.split(/\[\[card:([\w-]+)\]\]/g)
+  const nodes: ReactNode[] = []
+  parts.forEach((p, i) => {
+    if (i % 2 === 1) {
+      const c = byRef.get(p)
+      if (c && !used.has(p)) { used.add(p); nodes.push(<CardView key={`c${i}`} card={c} isRtl={isRtl} />) }
+    } else if (p.trim()) {
+      nodes.push(<TextBlock key={`t${i}`} text={p.trim()} />)
+    }
+  })
+  for (const c of cards) if (!used.has(c.ref)) nodes.push(<CardView key={`r${c.ref}`} card={c} isRtl={isRtl} />)
+  return <div className="space-y-2.5 text-sm leading-relaxed">{nodes}</div>
+}
