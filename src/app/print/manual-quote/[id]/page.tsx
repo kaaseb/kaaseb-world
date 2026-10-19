@@ -4,6 +4,7 @@
 // seal, footer, default terms) comes from furn_settings so the three surfaces
 // are pixel-identical.
 
+import { getFurnSettings } from '@/lib/furn/settings-store'
 import { createClient } from '@/lib/supabase/server'
 import { notFound, redirect } from 'next/navigation'
 import { QuotationPrint } from '@/components/furn/QuotationPrint'
@@ -27,8 +28,7 @@ export default async function ManualQuotePrintPage({ params }: { params: Promise
   // Branding lives in furn_settings (shared with Furn/Tannoor). Fall back to an
   // empty object so a manual quote still prints even if the row is absent —
   // QuotationPrint treats every missing field as "not shown".
-  const { data: settingsRow } = await supabase.from('furn_settings').select('*').eq('id', 1).maybeSingle()
-  const settings = (settingsRow || {}) as FurnSettings
+  const settings: FurnSettings = await getFurnSettings(supabase)
 
   const lang = quote.language
   // Delivery: "included" → a note only; "excluded" → a priced line folded into the

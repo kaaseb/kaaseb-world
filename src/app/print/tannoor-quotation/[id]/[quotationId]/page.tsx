@@ -3,6 +3,7 @@
 // a thin server-side mapper so the PDF design stays consistent across both
 // quotation systems.
 
+import { getFurnSettings } from '@/lib/furn/settings-store'
 import { createClient } from '@/lib/supabase/server'
 import { notFound, redirect } from 'next/navigation'
 import { QuotationPrint } from '@/components/furn/QuotationPrint'
@@ -36,7 +37,7 @@ export default async function TannoorPrintPage({
     supabase.from('tannoor_projects').select('*').eq('id', id).maybeSingle(),
     supabase.from('tannoor_items').select('*, tannoor_products(id, name_en, name_ar, unit, price_sar, price_usd)').eq('project_id', id).order('position'),
     supabase.from('tannoor_quotations').select('*').eq('id', quotationId).maybeSingle(),
-    supabase.from('furn_settings').select('*').eq('id', 1).maybeSingle(),
+    getFurnSettings(supabase).then((data) => ({ data })),
   ])
   if (!project || !quotation || !settings) notFound()
 

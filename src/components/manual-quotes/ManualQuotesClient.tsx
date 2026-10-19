@@ -4,7 +4,7 @@
 
 import { useState, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
-import { FileSpreadsheet, Plus, Loader2, Trash2, ExternalLink, Search, X } from 'lucide-react'
+import { FileSpreadsheet, Plus, Loader2, ExternalLink, Search, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -23,7 +23,7 @@ export function ManualQuotesClient({ initialQuotes }: { initialQuotes: ManualQuo
   const { isRtl, lang } = useLanguage()
   const ar = lang === 'ar'
   const router = useRouter()
-  const [quotes, setQuotes] = useState<ManualQuote[]>(initialQuotes)
+  const quotes = initialQuotes
   const [creating, setCreating] = useState(false)
   const [search, setSearch] = useState('')
 
@@ -43,16 +43,6 @@ export function ManualQuotesClient({ initialQuotes }: { initialQuotes: ManualQuo
       if (!res.ok || !j.quote) { toast.error(j.error || 'فشل الإنشاء'); return }
       router.push(`/manual-quotes/${j.quote.id}`)
     } catch { toast.error('فشل الإنشاء') } finally { setCreating(false) }
-  }
-
-  async function remove(id: string) {
-    if (!confirm(ar ? 'حذف هذا العرض؟' : 'Delete this quote?')) return
-    const prev = quotes
-    setQuotes((l) => l.filter((q) => q.id !== id))
-    try {
-      const res = await fetch(`/api/manual-quotes/${id}`, { method: 'DELETE' })
-      if (!res.ok) throw new Error()
-    } catch { setQuotes(prev); toast.error('فشل الحذف') }
   }
 
   const fmt = (iso: string) => { const d = new Date(iso); return Number.isNaN(d.getTime()) ? '' : d.toLocaleDateString(ar ? 'ar-SA' : 'en-GB', { dateStyle: 'medium' }) }
@@ -122,7 +112,6 @@ export function ManualQuotesClient({ initialQuotes }: { initialQuotes: ManualQuo
                 <DuplicateQuoteButton quoteId={q.id} number={q.number} subject={q.subject || q.project_name || ''} ar={ar} variant="ghost" />
                 <a href={`/print/manual-quote/${q.id}`} target="_blank" rel="noopener noreferrer" title={ar ? 'طباعة/PDF' : 'Print/PDF'}
                   className="inline-flex items-center justify-center h-8 w-8 rounded-md border hover:bg-muted transition"><ExternalLink className="w-4 h-4" /></a>
-                <Button variant="ghost" size="icon-sm" onClick={() => remove(q.id)} className="text-muted-foreground hover:text-red-600"><Trash2 className="w-4 h-4" /></Button>
               </CardContent>
             </Card>
           ))}

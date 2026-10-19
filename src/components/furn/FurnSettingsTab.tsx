@@ -10,13 +10,13 @@ import { toast } from 'sonner'
 import { Camera, Flame, Image as ImageIcon, Loader2, Plus, Save, Trash2 } from 'lucide-react'
 import { useLanguage } from '@/contexts/LanguageContext'
 import type { FurnSettings, FurnDepartment } from '@/types'
+import { useAutosave } from '@/hooks/useAutosave'
 
 export function FurnSettingsTab() {
   const { t, isRtl } = useLanguage()
   const [settings, setSettings] = useState<FurnSettings | null>(null)
   const [departments, setDepartments] = useState<FurnDepartment[]>([])
   const [loading, setLoading] = useState(true)
-  const [saving, setSaving] = useState(false)
   const [uploadingHeader, setUploadingHeader] = useState(false)
   const [uploadingSig, setUploadingSig] = useState(false)
   const [uploadingSeal, setUploadingSeal] = useState(false)
@@ -28,6 +28,9 @@ export function FurnSettingsTab() {
   const sigInputRef = useRef<HTMLInputElement>(null)
   const sealInputRef = useRef<HTMLInputElement>(null)
 
+  // Every change saves itself (no more "uploaded the header, left, it's gone").
+  const autosave = useAutosave(settings, persist, { delayMs: 1200, enabled: !loading })
+
   useEffect(() => {
     async function load() {
       const [sRes, dRes] = await Promise.all([
@@ -36,6 +39,7 @@ export function FurnSettingsTab() {
       ])
       if (sRes.ok) {
         const j = await sRes.json()
+        autosave.markClean()
         setSettings(j.settings)
       }
       if (dRes.ok) {
@@ -45,6 +49,7 @@ export function FurnSettingsTab() {
       setLoading(false)
     }
     load()
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- load once; markClean is stable
   }, [])
 
   function patch<K extends keyof FurnSettings>(key: K, value: FurnSettings[K]) {
@@ -59,49 +64,64 @@ export function FurnSettingsTab() {
       kind === 'header' ? setUploadingHeader
     : kind === 'signature' ? setUploadingSig
     : setUploadingSeal
+    const field = kind === 'header' ? 'header_image_url' : kind === 'signature' ? 'signature_image_url' : 'seal_image_url'
     setUploading(true)
-    const res = await fetch('/api/upload', { method: 'POST', body: fd })
-    const j = await res.json()
-    setUploading(false)
-    if (!j.url) {
-      toast.error(j.error || 'Upload failed')
-      return
+    try {
+      const res = await fetch('/api/upload', { method: 'POST', body: fd })
+      const j = await res.json().catch(() => ({}))
+      if (!j.url) { toast.error(j.error || (isRtl ? 'فشل رفع الصورة' : 'Upload failed')); return }
+      // Saved on the spot — the image is the whole point of this action.
+      const sv = await fetch('/api/furn/settings', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ [field]: j.url }),
+      })
+      const sj = await sv.json().catch(() => ({}))
+      if (!sv.ok) { toast.error(sj.error || (isRtl ? 'فشل حفظ الصورة' : 'Save failed')); return }
+      patch(field, j.url)
+      toast.success(isRtl ? 'تم حفظ الصورة' : 'Image saved')
+    } catch {
+      toast.error(isRtl ? 'فشل رفع الصورة' : 'Upload failed')
+    } finally {
+      setUploading(false)
     }
-    if (kind === 'header') patch('header_image_url', j.url)
-    else if (kind === 'signature') patch('signature_image_url', j.url)
-    else patch('seal_image_url', j.url)
   }
 
-  async function handleSave() {
-    if (!settings) return
-    setSaving(true)
+  async function persist(v: FurnSettings | null) {
+    if (!v) return
     const res = await fetch('/api/furn/settings', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        header_image_url: settings.header_image_url,
-        signature_image_url: settings.signature_image_url,
-        seal_image_url: settings.seal_image_url,
-        manager_name: settings.manager_name,
-        company_phone: settings.company_phone,
-        company_email: settings.company_email,
-        commercial_register: settings.commercial_register,
-        tax_number: settings.tax_number,
-        footer_address: settings.footer_address,
-        default_payment_terms: settings.default_payment_terms,
-        default_delivery_terms: settings.default_delivery_terms,
-        default_offer_duration: settings.default_offer_duration,
-        default_special_conditions: settings.default_special_conditions,
-        next_quotation_number: settings.next_quotation_number,
+        header_image_url: v.header_image_url,
+        signature_image_url: v.signature_image_url,
+        seal_image_url: v.seal_image_url,
+        manager_name: v.manager_name,
+        company_phone: v.company_phone,
+        company_email: v.company_email,
+        commercial_register: v.commercial_register,
+        tax_number: v.tax_number,
+        footer_address: v.footer_address,
+        default_payment_terms: v.default_payment_terms,
+        default_delivery_terms: v.default_delivery_terms,
+        default_offer_duration: v.default_offer_duration,
+        default_special_conditions: v.default_special_conditions,
+        next_quotation_number: v.next_quotation_number,
       }),
     })
-    setSaving(false)
-    const j = await res.json()
     if (!res.ok) {
-      toast.error(j.error || 'Save failed')
-      return
+      const j = await res.json().catch(() => ({}))
+      throw new Error(j.error || 'Save failed')
     }
-    toast.success(t('furn_settings_saved'))
+  }
+
+  async function handleSave() {
+    try {
+      await autosave.flush(true)
+      toast.success(t('furn_settings_saved'))
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Save failed')
+    }
   }
 
   async function addDepartment() {
@@ -330,11 +350,22 @@ export function FurnSettingsTab() {
         </CardContent>
       </Card>
 
-      <Button onClick={handleSave} disabled={saving} size="lg" className="bg-orange-600 hover:bg-orange-700 text-white">
-        {saving
+      <div className="flex items-center gap-3">
+      <Button onClick={handleSave} disabled={autosave.status === 'saving'} size="lg" className="bg-orange-600 hover:bg-orange-700 text-white">
+        {autosave.status === 'saving'
           ? <><Loader2 className={`w-4 h-4 animate-spin ${isRtl ? 'ml-2' : 'mr-2'}`} />Saving…</>
           : <><Save className={`w-4 h-4 ${isRtl ? 'ml-2' : 'mr-2'}`} />{t('furn_settings_save')}</>}
       </Button>
+      <span className={`text-xs ${autosave.status === 'error' ? 'text-red-600' : 'text-muted-foreground'}`}>
+        {autosave.status === 'error'
+          ? (isRtl ? `لم يُحفظ: ${autosave.error || ''}` : `Not saved: ${autosave.error || ''}`)
+          : autosave.status === 'pending' || autosave.status === 'saving'
+            ? (isRtl ? 'يحفظ…' : 'Saving…')
+            : autosave.status === 'saved'
+              ? (isRtl ? 'محفوظ تلقائياً ✓' : 'Saved ✓')
+              : (isRtl ? 'يُحفظ تلقائياً' : 'Saves automatically')}
+      </span>
+      </div>
     </div>
   )
 }

@@ -1,3 +1,4 @@
+import { getFurnSettings } from '@/lib/furn/settings-store'
 import { createClient } from '@/lib/supabase/server'
 import { notFound, redirect } from 'next/navigation'
 import { QuotationPrint } from '@/components/furn/QuotationPrint'
@@ -24,7 +25,7 @@ export default async function QuotationPrintPage({
     supabase.from('furn_projects').select('*').eq('id', id).maybeSingle(),
     supabase.from('furn_items').select('*').eq('project_id', id).order('position'),
     supabase.from('furn_quotations').select('*').eq('id', quotationId).maybeSingle(),
-    supabase.from('furn_settings').select('*').eq('id', 1).maybeSingle(),
+    getFurnSettings(supabase).then((data) => ({ data })),
   ])
 
   if (!project || !quotation || !settings) notFound()
