@@ -4,7 +4,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { availableTools, placeCards, ALL_TOOLS } from '@/lib/kaaseb-ai/engine'
-import { safeHref, renderableHref, type AiCard } from '@/lib/kaaseb-ai/cards'
+import { safeHref, renderableHref, bilingual, type AiCard } from '@/lib/kaaseb-ai/cards'
 import { matches, likeSafe, int, toEnd } from '@/lib/kaaseb-ai/tool'
 import { isConversationId } from '@/lib/kaaseb-ai/store'
 import { DEFAULT_PERMISSIONS } from '@/lib/permissions'
@@ -51,6 +51,15 @@ test('only in-app paths are accepted from tools; renderer also allows https file
   assert.equal(renderableHref('javascript:alert(1)'), null)
   assert.equal(renderableHref('http://x.com/a.pdf'), null)
   assert.equal(renderableHref('https://bucket.s3.amazonaws.com/a.pdf'), 'https://bucket.s3.amazonaws.com/a.pdf')
+})
+
+test('downloads offer عربي / English; a missing language is simply not offered', () => {
+  const both = bilingual('تحميل PDF', '/print/manual-quote/x?lang=ar', '/print/manual-quote/x?lang=en')
+  assert.deepEqual(both?.options?.map((o) => o.label), ['عربي', 'English'])
+  const one = bilingual('تحميل', null, '/print/quotation/p/q')
+  assert.deepEqual(one?.options?.map((o) => o.label), ['English'])
+  assert.equal(bilingual('x', null, null), null)
+  assert.equal(bilingual('x', 'javascript:alert(1)', null), null)
 })
 
 test('cards: only referenced, known, unique refs are kept; fallback to the last call', () => {

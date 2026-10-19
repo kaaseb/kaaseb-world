@@ -4,9 +4,9 @@
 // server-built cards, placed where the model pointed at them ([[card:ref]]).
 // No HTML is ever injected — text goes through React as text.
 
-import { Fragment, type ReactNode } from 'react'
+import { Fragment, useState, type ReactNode } from 'react'
 import Link from 'next/link'
-import { Download, PencilLine, ArrowUpLeft, ArrowUpRight, ChevronLeft, ChevronRight } from 'lucide-react'
+import { Download, PencilLine, ArrowUpLeft, ArrowUpRight, ChevronDown, ChevronLeft, ChevronRight } from 'lucide-react'
 import { renderableHref, type AiCard, type CardAction, type Tone } from '@/lib/kaaseb-ai/cards'
 
 export const TONE: Record<Tone, string> = {
@@ -27,6 +27,7 @@ function Badge({ label, tone }: { label: string; tone: Tone }) {
 }
 
 function ActionButton({ a, isRtl }: { a: CardAction; isRtl: boolean }) {
+  const [open, setOpen] = useState(false)
   const href = renderableHref(a.href)
   if (!href) return null
   const Icon = a.kind === 'download' ? Download : a.kind === 'edit' ? PencilLine : isRtl ? ArrowUpLeft : ArrowUpRight
@@ -36,6 +37,27 @@ function ActionButton({ a, isRtl }: { a: CardAction; isRtl: boolean }) {
     : 'bg-muted hover:bg-muted/70 text-foreground ring-1 ring-inset ring-border'
   const body = <><Icon className="w-3.5 h-3.5" />{a.label}</>
   const base = `inline-flex items-center gap-1.5 h-8 px-3 rounded-lg text-xs font-semibold transition-colors ${cls}`
+  const options = (a.options || []).filter((o) => renderableHref(o.href))
+  if (options.length > 1) {
+    // Language (or any) choice: the button opens a small picker under itself.
+    return (
+      <div className="relative">
+        <button type="button" onClick={() => setOpen((v) => !v)} className={base} aria-expanded={open}>
+          {body}<ChevronDown className={`w-3.5 h-3.5 transition-transform ${open ? 'rotate-180' : ''}`} />
+        </button>
+        {open && (
+          <div className="absolute z-10 top-full mt-1 start-0 min-w-full rounded-lg border bg-card shadow-lg p-1 flex flex-col">
+            {options.map((o) => (
+              <a key={o.href} href={o.href} target="_blank" rel="noopener noreferrer" onClick={() => setOpen(false)}
+                className="px-3 py-1.5 rounded-md text-xs font-semibold text-blue-700 dark:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-500/10 whitespace-nowrap">
+                {o.label}
+              </a>
+            ))}
+          </div>
+        )}
+      </div>
+    )
+  }
   return a.external || !href.startsWith('/')
     ? <a href={href} target="_blank" rel="noopener noreferrer" className={base}>{body}</a>
     : <Link href={href} className={base}>{body}</Link>

@@ -17,6 +17,8 @@ export interface CardAction {
   href: string
   /** Open in a new tab (PDFs, files). */
   external?: boolean
+  /** Pick one before going (e.g. عربي / English). `href` is the first option. */
+  options?: Array<{ label: string; href: string }>
 }
 
 export interface CardField {
@@ -87,7 +89,17 @@ export function action(kind: ActionKind, label: string, href: string | null | un
   return h ? { kind, label, href: h, external } : null
 }
 
-export const compact = <T,>(xs: Array<T | null | undefined | false>): T[] => xs.filter(Boolean) as T[]
+/** A download offered in both languages: the button asks عربي / English. */
+export function bilingual(label: string, ar: string | null, en: string | null): CardAction | null {
+  const options = compact([
+    ar && (safeHref(ar) || renderableHref(ar)) ? { label: 'عربي', href: ar } : null,
+    en && (safeHref(en) || renderableHref(en)) ? { label: 'English', href: en } : null,
+  ])
+  if (!options.length) return null
+  return { kind: 'download', label, href: options[0].href, external: true, options }
+}
+
+export const compact =<T,>(xs: Array<T | null | undefined | false>): T[] => xs.filter(Boolean) as T[]
 
 export function money(n: number | null | undefined, currency = 'SAR'): string {
   const v = Number(n) || 0

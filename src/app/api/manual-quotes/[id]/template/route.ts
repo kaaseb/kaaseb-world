@@ -11,7 +11,7 @@ import { buildQuoteTemplate } from '@/lib/manual-quotes/template-xlsx'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
+export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -22,11 +22,13 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
   const { id } = await params
   const quote = await getManualQuote(id)
   if (!quote) return NextResponse.json({ error: 'Not found' }, { status: 404 })
-  const buf = await buildQuoteTemplate(quote)
+  // ?lang=ar|en → the sheet in that language (it is what the quote becomes if re-uploaded).
+  const l = new URL(request.url).searchParams.get('lang')
+  const buf = await buildQuoteTemplate(l === 'ar' || l === 'en' ? { ...quote, language: l } : quote)
   return new NextResponse(new Uint8Array(buf), {
     headers: {
       'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      'Content-Disposition': `attachment; filename="Kaaseb_${quote.number}.xlsx"`,
+      'Content-Disposition': `attachment; filename="Kaaseb_${quote.number}${l === 'ar' || l === 'en' ? `-${l}` : ''}.xlsx"`,
       'Cache-Control': 'no-store',
     },
   })

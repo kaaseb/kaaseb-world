@@ -3,7 +3,7 @@
 import { listManualQuotes, getManualQuote, type ManualQuote } from '@/lib/manual-quotes/store'
 import { computeTotals } from '@/lib/quotation/totals'
 import { isAppOwnedUrl } from '@/lib/s3'
-import { action, compact, money, day, type Tone } from '../cards'
+import { action, bilingual, compact, money, day, type Tone } from '../cards'
 import { type AiTool, str, int, matches, inRange, date, toEnd, likeSafe, DATE_ARGS } from '../tool'
 
 // ── shared ───────────────────────────────────────────────────────────────────
@@ -120,8 +120,8 @@ const manualGet: AiTool = {
         q.createdByName ? { label: 'أنشأه', value: q.createdByName } : null,
       ]),
       actions: compact([
-        action('download', 'تحميل PDF', `/print/manual-quote/${q.id}`, true),
-        action('download', 'تحميل إكسل', `/api/manual-quotes/${q.id}/template`, true),
+        bilingual('تحميل PDF', `/print/manual-quote/${q.id}?lang=ar`, `/print/manual-quote/${q.id}?lang=en`),
+        bilingual('تحميل إكسل', `/api/manual-quotes/${q.id}/template?lang=ar`, `/api/manual-quotes/${q.id}/template?lang=en`),
         action('edit', 'تعديل', `/manual-quotes/${q.id}`),
       ]),
     })
@@ -230,7 +230,10 @@ const furnGet: AiTool = {
       ...((p.other_files || []) as Array<{ name: string; url: string }>).map((f) => ({ ...f, kind: 'أخرى' })),
     ]
     const latest = (quotations || [])[0]
-    const stage = p.ai_error ? { label: 'فشلت المعالجة', tone: 'red' as Tone } : FURN_STAGE[p.stage]
+    const latestIn = (l: 'ar' | 'en') => (quotations || []).find((x) => x.language === l) || null
+    const pdfHref = (pid: string, x: { id: string; pdf_url?: string | null } | null) =>
+      !x ? null : fileAction('', x.pdf_url)?.href || `/print/quotation/${pid}/${x.id}`
+    const stage =p.ai_error ? { label: 'فشلت المعالجة', tone: 'red' as Tone } : FURN_STAGE[p.stage]
     const ref = ctx.card({
       type: 'record',
       kind: `مشروع فرن #${p.project_number}`,
@@ -246,7 +249,8 @@ const furnGet: AiTool = {
         { label: 'التاريخ', value: day(p.created_at) },
       ]),
       actions: compact([
-        latest ? (fileAction('تحميل العرض PDF', latest.pdf_url) || action('download', 'تحميل العرض PDF', `/print/quotation/${p.id}/${latest.id}`, true)) : null,
+        // Furn issues one quotation per language — offer each one that exists.
+        bilingual('تحميل العرض PDF', pdfHref(p.id, latestIn('ar')), pdfHref(p.id, latestIn('en'))),
         action('edit', 'تعديل', `/furn/${p.id}`),
       ]),
     })

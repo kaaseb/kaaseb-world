@@ -16,8 +16,12 @@ import type { FurnProject, FurnItem, FurnQuotation, FurnSettings } from '@/types
 
 export const dynamic = 'force-dynamic'
 
-export default async function ManualQuotePrintPage({ params }: { params: Promise<{ id: string }> }) {
+export default async function ManualQuotePrintPage({ params, searchParams }: {
+  params: Promise<{ id: string }>
+  searchParams: Promise<{ lang?: string }>
+}) {
   const { id } = await params
+  const { lang: langParam } = await searchParams
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect('/login')
@@ -30,7 +34,9 @@ export default async function ManualQuotePrintPage({ params }: { params: Promise
   // QuotationPrint treats every missing field as "not shown".
   const settings: FurnSettings = await getFurnSettings(supabase)
 
-  const lang = quote.language
+  // ?lang=ar|en prints the same quote in the other language (labels, terms,
+  // direction) without changing the saved quote.
+  const lang = langParam === 'ar' || langParam === 'en' ? langParam : quote.language
   // Delivery: "included" → a note only; "excluded" → a priced line folded into the
   // subtotal (so VAT applies and it flows into the grand total). Mirrors Furn.
   const shipping = quote.delivery === 'excluded' ? Math.max(0, Number(quote.shipping) || 0) : 0
@@ -41,7 +47,7 @@ export default async function ManualQuotePrintPage({ params }: { params: Promise
   // ONE totals function for every surface.
   const { subtotal, vat: vatAmount, total } = computeTotals(quote.items, shipping, quote.vat_rate || 0)
 
-  const tc = await resolveQuoteTerms(`manual:${quote.id}`, quote.language)
+  const tc = await resolveQuoteTerms(`manual:${quote.id}`, lang)
 
   const projectShim: FurnProject = {
     id: quote.id,
@@ -114,7 +120,7 @@ export default async function ManualQuotePrintPage({ params }: { params: Promise
     id: quote.id,
     project_id: quote.id,
     quotation_number: quote.number,
-    language: quote.language,
+    language: lang,
     vat_rate: quote.vat_rate,
     subtotal,
     vat_amount: vatAmount,
