@@ -100,6 +100,7 @@ export function availableTools(profile: Profile, permissions: string[]): AiTool[
 }
 
 const MAX_RESULT_CHARS = 24_000
+export const KAASEB_AI_OPENAI_MODEL = 'gpt-5.4-mini'
 const CARD_KEYS = ['card', 'files_card', 'list_card', 'attachments_card']
 
 export async function runTurn(input: TurnInput): Promise<TurnResult> {
@@ -122,6 +123,10 @@ export async function runTurn(input: TurnInput): Promise<TurnResult> {
 
   const provider = await getProvider()
   const text = await provider.chatWithTools({
+    // A mid-size model on purpose: it reads tool results and phrases a short
+    // answer — the heavy model chosen in settings (for opportunities scanning)
+    // would only add cost and latency here. Gemini keeps its own chat model.
+    model: provider.id === 'openai' ? KAASEB_AI_OPENAI_MODEL : undefined,
     systemInstruction: systemPrompt(profile, user.email, permissions),
     history: input.history,
     tools: tools.map((t) => ({ name: t.name, description: t.description, parameters: t.parameters })),

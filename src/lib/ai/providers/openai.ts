@@ -175,9 +175,13 @@ export class OpenAiProvider implements AiProvider {
     // fall through to a known-good one instead of failing. Resolved once, on the
     // first hop, then reused for the rest of the tool loop.
     const chatCandidates = Array.from(
-      new Set([this.chatModel, 'gpt-5.4-mini', 'gpt-4.1-mini', 'gpt-4o-mini'].filter(Boolean)),
+      new Set([req.model || this.chatModel, 'gpt-5.4-mini', 'gpt-4.1-mini', 'gpt-4o-mini'].filter(Boolean)),
     )
     let modelIdx = 0
+    // Some reasoning models refuse function tools on Chat Completions unless
+    // reasoning is switched off ("Function tools with reasoning_effort are not
+    // supported … set reasoning_effort to 'none'"). Learned once, kept for the loop.
+    let noReasoning = false
 
     for (let hop = 0; hop < maxHops; hop++) {
       let res: OpenAI.Chat.ChatCompletion
@@ -188,9 +192,14 @@ export class OpenAiProvider implements AiProvider {
             messages,
             tools,
             tool_choice: 'auto',
+            ...(noReasoning ? { reasoning_effort: 'none' as const } : {}),
           })
           break
         } catch (e) {
+          if (!noReasoning && /reasoning_effort/i.test((e as { message?: string })?.message || '')) {
+            noReasoning = true
+            continue
+          }
           if (OpenAiProvider.isModelNotFound(e) && modelIdx < chatCandidates.length - 1) {
             console.warn(`[openai] chat model "${chatCandidates[modelIdx]}" unavailable — trying "${chatCandidates[modelIdx + 1]}". Fix it in AI settings.`)
             modelIdx++

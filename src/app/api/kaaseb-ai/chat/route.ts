@@ -102,7 +102,9 @@ export async function POST(request: Request) {
         console.error('[كاسب AI] turn failed:', raw)
         const content = e instanceof AiNotConfiguredError
           ? 'الذكاء الاصطناعي غير مهيّأ — أضف المفتاح من الإعدادات ← الذكاء الاصطناعي.'
-          : `صار خلل وما قدرت أرد. ${friendlyAiError(raw).split('\n')[0]}`
+          : friendlyAiError(raw) !== raw
+            ? `ما قدرت أرد الحين. ${friendlyAiError(raw).split('\n')[0]}`
+            : 'صار خلل مؤقت وما قدرت أرد — جرّب مرة ثانية بعد لحظات.'
         const errMsg: AiMessage = { id: newId(8), role: 'assistant', content, at: new Date().toISOString(), error: true }
         if (convId) await appendMessages(user.id, convId, [userMsg, errMsg]).catch(() => {})
         send({ t: 'error', message: errMsg })

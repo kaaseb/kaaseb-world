@@ -67,6 +67,9 @@ export interface ChatRequest {
   executeTool: (name: string, args: Record<string, unknown>) => Promise<unknown>
   // Safety bound on the tool ↔ model ping-pong.
   maxToolHops?: number
+  // Use this model instead of the settings' chat model (provider-specific id;
+  // a feature that needs a lighter/heavier model than the global choice).
+  model?: string
 }
 
 export interface AiProvider {
