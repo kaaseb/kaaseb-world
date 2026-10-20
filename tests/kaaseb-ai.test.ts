@@ -27,13 +27,14 @@ test('admin-only tools stay admin-only even if a custom role carries the key', (
   const got = names('project_manager', ['page.audit', 'page.users'])
   assert.ok(!got.includes('audit_log'))
   assert.ok(!got.includes('finances_summary'))
+  assert.ok(!got.includes('team_access') && !got.includes('pending_approvals'))
   assert.ok(names('super_admin', []).includes('finances_summary'))
 })
 
 test('super admin sees every tool; everyone gets the personal ones', () => {
   assert.equal(names('super_admin', []).length, ALL_TOOLS.length)
   const none = names('employee', [])
-  assert.deepEqual(none.sort(), ['company_files', 'my_work', 'overview', 'prepare_downloads', 'search_everything'].sort())
+  assert.deepEqual(none.sort(), ['company_files', 'my_work', 'overview', 'points', 'prepare_downloads', 'search_everything'].sort())
 })
 
 test('default employee role: Furn yes, inbox no', () => {

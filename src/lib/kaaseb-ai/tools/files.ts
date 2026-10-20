@@ -21,9 +21,10 @@ interface FileEntry {
   expiry?: string | null
 }
 
-async function catalogue(ctx: ToolCtx): Promise<{ files: FileEntry[]; notes: string[] }> {
+async function catalogue(ctx: ToolCtx): Promise<{ files: FileEntry[]; notes: string[]; docsLocked: boolean }> {
   const files: FileEntry[] = []
   const notes: string[] = []
+  let docsLocked = false
   const jobs: Promise<void>[] = []
 
   // The marketing profile attached to every outreach email — open to everyone.
@@ -36,7 +37,7 @@ async function catalogue(ctx: ToolCtx): Promise<{ files: FileEntry[]; notes: str
 
   if (ctx.can('page.important_docs')) {
     jobs.push((async () => {
-      if (!(await docsUnlocked())) { notes.push('المستندات المهمة مقفلة برمز — افتحها من صفحتها أولاً.'); return }
+      if (!(await docsUnlocked())) { docsLocked = true; notes.push('المستندات المهمة مقفلة برمز — اعرض unlock_card ليكتب الرمز فيها، ثم أعد المحاولة.'); return }
       const { data } = await ctx.supabase.from('important_documents').select('id, name_ar, name_en, file_url, expiry_date').limit(300)
       for (const d of data || []) {
         if (!d.file_url || !isAppOwnedUrl(d.file_url)) continue
@@ -58,7 +59,7 @@ async function catalogue(ctx: ToolCtx): Promise<{ files: FileEntry[]; notes: str
   }
 
   await Promise.allSettled(jobs)
-  return { files, notes }
+  return { files, notes, docsLocked }
 }
 
 const companyFiles: AiTool = {
@@ -68,8 +69,9 @@ const companyFiles: AiTool = {
   perms: [],
   status: 'يجمع ملفات الشركة…',
   async run(_args, ctx) {
-    const { files, notes } = await catalogue(ctx)
+    const { files, notes, docsLocked } = await catalogue(ctx)
     return {
+      unlock_card: docsLocked ? ctx.card({ type: 'unlock', target: 'docs', title: 'المستندات المهمة مقفلة برمز' }) : undefined,
       count: files.length,
       files: files.map((f) => ({ id: f.id, name: f.name, name_en: f.name_en || undefined, type: f.type, expiry: f.expiry || undefined })),
       notes,

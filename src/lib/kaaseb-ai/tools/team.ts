@@ -188,7 +188,7 @@ const documents: AiTool = {
   perms: ['page.important_docs'],
   status: 'يراجع المستندات…',
   async run(args, ctx) {
-    if (!(await docsUnlocked())) return { locked: true, message: 'المستندات المهمة مقفلة برمز. افتحها من صفحتها أولاً.' }
+    if (!(await docsUnlocked())) return { locked: true, card: ctx.card({ type: 'unlock', target: 'docs', title: 'المستندات المهمة مقفلة برمز' }), message: 'المستندات مقفلة. اعرض بطاقة الفتح ليكتب الرمز فيها — لا تطلب الرمز في النص.' }
     const { data, error } = await ctx.supabase.from('important_documents').select('id, name_ar, name_en, file_url, expiry_date, notes').order('expiry_date', { ascending: true }).limit(200)
     if (error) return { error: error.message }
     const text = str(args.query)

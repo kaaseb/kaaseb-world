@@ -69,6 +69,20 @@ export type AiCard =
       }>
       more?: { label: string; href: string }
     }
+  | {
+      /** A PIN-locked section. The PIN is typed in the chat but posted straight
+       *  to that section's own unlock endpoint — never to the model, never saved. */
+      type: 'unlock'
+      ref: string
+      target: UnlockTarget
+      title: string
+    }
+
+export type UnlockTarget = 'inbox' | 'docs'
+export const UNLOCK_ENDPOINT: Record<UnlockTarget, string> = {
+  inbox: '/api/inbox/unlock',
+  docs: '/api/important-documents/unlock',
+}
 
 const SAFE_HREF = /^\/(?!\/)[\w\-./?=&%#:+,@~؀-ۿ]*$/
 

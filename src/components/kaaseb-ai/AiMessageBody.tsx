@@ -6,8 +6,11 @@
 
 import { Fragment, useState, type ReactNode } from 'react'
 import Link from 'next/link'
-import { Download, PencilLine, ArrowUpLeft, ArrowUpRight, ChevronDown, ChevronLeft, ChevronRight } from 'lucide-react'
-import { renderableHref, isAppPage, type AiCard, type CardAction, type Tone } from '@/lib/kaaseb-ai/cards'
+import { Download, PencilLine, ArrowUpLeft, ArrowUpRight, ChevronDown, ChevronLeft, ChevronRight, Lock, LockOpen, Loader2 } from 'lucide-react'
+import { renderableHref, isAppPage, type AiCard, type CardAction, type Tone, type UnlockTarget } from '@/lib/kaaseb-ai/cards'
+
+/** Posts a PIN to the section's own unlock endpoint; returns an error or null. */
+export type UnlockFn = (target: UnlockTarget, pin: string) => Promise<string | null>
 
 export const TONE: Record<Tone, string> = {
   emerald: 'bg-emerald-50 text-emerald-700 ring-emerald-600/20 dark:bg-emerald-500/10 dark:text-emerald-300',
@@ -69,7 +72,8 @@ function SmartLink({ href, newTab, className, children }: { href: string; newTab
     : <Link href={href} className={className}>{children}</Link>
 }
 
-export function CardView({ card, isRtl }: { card: AiCard; isRtl: boolean }) {
+export function CardView({ card, isRtl, unlock, opened }: { card: AiCard; isRtl: boolean; unlock?: UnlockFn; opened?: UnlockTarget[] }) {
+  if (card.type === 'unlock') return <UnlockCard card={card} unlock={unlock} opened={!!opened?.includes(card.target)} />
   const Chevron = isRtl ? ChevronLeft : ChevronRight
   if (card.type === 'stats') {
     return (
@@ -212,7 +216,7 @@ function TextBlock({ text }: { text: string }) {
 }
 
 /** Text with inline card markers; cards the text didn't place go at the end. */
-export function AiMessageBody({ content, cards = [], isRtl }: { content: string; cards?: AiCard[]; isRtl: boolean }) {
+export function AiMessageBody({ content, cards = [], isRtl, unlock, opened }: { content: string; cards?: AiCard[]; isRtl: boolean; unlock?: UnlockFn; opened?: UnlockTarget[] }) {
   const byRef = new Map(cards.map((c) => [c.ref, c]))
   const used = new Set<string>()
   const parts = content.split(/\[\[card:([\w-]+)\]\]/g)
@@ -220,11 +224,52 @@ export function AiMessageBody({ content, cards = [], isRtl }: { content: string;
   parts.forEach((p, i) => {
     if (i % 2 === 1) {
       const c = byRef.get(p)
-      if (c && !used.has(p)) { used.add(p); nodes.push(<CardView key={`c${i}`} card={c} isRtl={isRtl} />) }
+      if (c && !used.has(p)) { used.add(p); nodes.push(<CardView key={`c${i}`} card={c} isRtl={isRtl} unlock={unlock} opened={opened} />) }
     } else if (p.trim()) {
       nodes.push(<TextBlock key={`t${i}`} text={p.trim()} />)
     }
   })
-  for (const c of cards) if (!used.has(c.ref)) nodes.push(<CardView key={`r${c.ref}`} card={c} isRtl={isRtl} />)
+  for (const c of cards) if (!used.has(c.ref)) nodes.push(<CardView key={`r${c.ref}`} card={c} isRtl={isRtl} unlock={unlock} opened={opened} />)
   return <div className="space-y-2.5 text-sm leading-relaxed">{nodes}</div>
+}
+
+/** PIN box for a locked section. The PIN goes to that section's unlock endpoint
+ *  (rate-limited there) — it never reaches the model and is never saved. */
+function UnlockCard({ card, unlock, opened }: { card: Extract<AiCard, { type: 'unlock' }>; unlock?: UnlockFn; opened: boolean }) {
+  const [pin, setPin] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [done, setDone] = useState(false)
+  async function submit() {
+    if (!unlock || !pin.trim() || busy) return
+    setBusy(true); setError(null)
+    const err = await unlock(card.target, pin.trim())
+    setBusy(false); setPin('')
+    if (err) setError(err); else setDone(true)
+  }
+  if (done || opened) {
+    return (
+      <div className="rounded-xl border border-emerald-200 bg-emerald-50 dark:bg-emerald-500/10 dark:border-emerald-500/30 p-3 flex items-center gap-2 text-sm font-semibold text-emerald-700 dark:text-emerald-300">
+        <LockOpen className="w-4 h-4" />تم الفتح ✓
+      </div>
+    )
+  }
+  return (
+    <div className="rounded-xl border border-amber-200 bg-amber-50/60 dark:bg-amber-500/10 dark:border-amber-500/30 p-3">
+      <p className="flex items-center gap-2 text-sm font-semibold"><Lock className="w-4 h-4 text-amber-600" />{card.title}</p>
+      <p className="text-[11px] text-muted-foreground mt-1">اكتب الرمز هنا أو في خانة الرسالة. الرمز يروح للنظام مباشرة ولا ينحفظ في المحادثة.</p>
+      <form className="flex gap-1.5 mt-2.5" onSubmit={(e) => { e.preventDefault(); submit() }}>
+        <input
+          type="password" inputMode="numeric" autoComplete="off" value={pin} onChange={(e) => setPin(e.target.value.slice(0, 64))}
+          placeholder="الرمز السري" dir="ltr"
+          className="flex-1 min-w-0 h-10 sm:h-9 rounded-xl border bg-background px-3 text-base sm:text-sm outline-none focus:ring-2 focus:ring-amber-400/40 focus:border-amber-400"
+        />
+        <button type="submit" disabled={!pin.trim() || busy}
+          className="h-10 sm:h-9 px-4 rounded-xl bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900 text-sm font-semibold disabled:opacity-40 inline-flex items-center gap-1.5">
+          {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <LockOpen className="w-4 h-4" />}فتح
+        </button>
+      </form>
+      {error && <p className="text-xs text-red-600 mt-1.5">{error}</p>}
+    </div>
+  )
 }

@@ -10,6 +10,10 @@ import { toast } from 'sonner'
 import { useLanguage } from '@/contexts/LanguageContext'
 import type { AiMessage, ConversationMeta } from '@/lib/kaaseb-ai/store'
 import { AiMessageBody } from './AiMessageBody'
+import { UNLOCK_ENDPOINT, type UnlockTarget } from '@/lib/kaaseb-ai/cards'
+
+// A PIN typed in the composer: one token of plain ASCII (never an Arabic sentence).
+const PIN_LIKE = /^[!-~]{4,64}$/
 
 interface Props {
   mode: 'panel' | 'page'
@@ -36,6 +40,7 @@ export function KaasebAiChat({ mode, firstName, onClose }: Props) {
   const [showHistory, setShowHistory] = useState(false)
   const [input, setInput] = useState('')
   const [pending, setPending] = useState<Pending | null>(null)
+  const [opened, setOpened] = useState<UnlockTarget[]>([])
   const scroller = useRef<HTMLDivElement>(null)
   const box = useRef<HTMLTextAreaElement>(null)
   const abort = useRef<AbortController | null>(null)
@@ -99,10 +104,35 @@ export function KaasebAiChat({ mode, firstName, onClose }: Props) {
     if (!r?.ok) { setConvs(prev); toast.error(tx('تعذّر الحذف', 'Delete failed')) }
   }
 
-  async function send() {
-    const text = input.trim()
+  // The section the latest reply asked a PIN for (if still locked).
+  const lastBot = [...messages].reverse().find((m) => m.role === 'assistant')
+  const lockedTarget = (lastBot?.cards || []).map((c) => (c.type === 'unlock' ? c.target : null)).find((t): t is UnlockTarget => !!t && !opened.includes(t)) || null
+
+  /** PIN → that section's own unlock endpoint (rate-limited there). Never sent
+   *  to the model, never stored. On success the question that hit the lock is
+   *  asked again. */
+  async function unlock(target: UnlockTarget, pin: string): Promise<string | null> {
+    try {
+      const r = await fetch(UNLOCK_ENDPOINT[target], { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pin }) })
+      const j = await r.json().catch(() => ({}))
+      if (!r.ok) return j.error || tx('تعذّر الفتح', 'Unlock failed')
+    } catch { return tx('تعذّر الاتصال', 'Connection failed') }
+    setOpened((o) => [...o, target])
+    const lastQuestion = [...messages].reverse().find((m) => m.role === 'user')?.content
+    if (lastQuestion) setTimeout(() => send(lastQuestion), 0)
+    return null
+  }
+
+  async function send(again?: string) {
+    const text = (again ?? input).trim()
     if (!text || pending) return
-    setInput('')
+    if (again === undefined) setInput('')
+    // Typed the PIN in the message box: unlock instead of chatting.
+    if (again === undefined && lockedTarget && PIN_LIKE.test(text)) {
+      const err = await unlock(lockedTarget, text)
+      if (err) toast.error(err)
+      return
+    }
     const local: AiMessage = { id: `local-${Date.now()}`, role: 'user', content: text, at: new Date().toISOString() }
     setMessages((m) => [...m, local])
     setPending({ id: local.id, status: tx('يقرأ سؤالك…', 'Reading your question…') })
@@ -254,7 +284,7 @@ export function KaasebAiChat({ mode, firstName, onClose }: Props) {
                       <KaasebAiMark className="w-3.5 h-3.5" />
                     </div>
                     <div className={`min-w-0 flex-1 ${m.error ? 'text-red-600' : ''}`}>
-                      <AiMessageBody content={m.content} cards={m.cards} isRtl={isRtl} />
+                      <AiMessageBody content={m.content} cards={m.cards} isRtl={isRtl} unlock={unlock} opened={opened} />
                       {!m.error && m.content.trim() && <CopyButton text={m.content} label={tx('نسخ', 'Copy')} done={tx('تم النسخ', 'Copied')} />}
                     </div>
                   </div>
@@ -283,11 +313,14 @@ export function KaasebAiChat({ mode, firstName, onClose }: Props) {
                 }}
                 rows={1}
                 autoFocus={mode === 'page'}
-                placeholder={tx('اكتب رسالتك…', 'Type your message…')}
+                placeholder={lockedTarget ? tx('اكتب الرمز السري أو رسالتك…', 'Type the PIN or your message…') : tx('اكتب رسالتك…', 'Type your message…')}
+                // While a section waits for its PIN, a PIN-looking entry shows as dots.
+                style={lockedTarget && PIN_LIKE.test(input) ? ({ WebkitTextSecurity: 'disc' } as React.CSSProperties) : undefined}
+                autoComplete="off"
                 className="flex-1 resize-none bg-transparent outline-none text-base sm:text-sm leading-6 max-h-40 py-1"
               />
               <button
-                onClick={send}
+                onClick={() => send()}
                 disabled={!input.trim() || !!pending}
                 className="w-10 h-10 sm:w-9 sm:h-9 rounded-xl bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900 flex items-center justify-center disabled:opacity-30 transition hover:scale-105 active:scale-95 flex-shrink-0"
                 aria-label={tx('إرسال', 'Send')}

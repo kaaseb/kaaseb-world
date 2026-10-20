@@ -177,7 +177,7 @@ const inbox: AiTool = {
   async run(args, ctx) {
     // The inbox has its own PIN on top of the permission — the assistant must
     // not become a way around it.
-    if (!(await inboxUnlocked())) return { locked: true, message: 'صندوق الوارد مقفل برمز. افتحه من صفحة الوارد أولاً ثم اسأل.' }
+    if (!(await inboxUnlocked())) return { locked: true, card: ctx.card({ type: 'unlock', target: 'inbox', title: 'صندوق الوارد مقفل برمز' }), message: 'صندوق الوارد مقفل. اعرض بطاقة الفتح ليكتب الرمز فيها — لا تطلب الرمز في النص.' }
     const q = str(args.query)
     const from = date(args.from)
     const to = toEnd(args.to)

@@ -15,8 +15,9 @@ import { CRM_TOOLS } from './tools/crm'
 import { TEAM_TOOLS } from './tools/team'
 import { OVERVIEW_TOOLS } from './tools/overview'
 import { FILE_TOOLS } from './tools/files'
+import { MORE_TOOLS } from './tools/more'
 
-export const ALL_TOOLS: AiTool[] = [...OVERVIEW_TOOLS, ...FILE_TOOLS, ...QUOTE_TOOLS, ...CRM_TOOLS, ...TEAM_TOOLS]
+export const ALL_TOOLS: AiTool[] = [...OVERVIEW_TOOLS, ...FILE_TOOLS, ...QUOTE_TOOLS, ...CRM_TOOLS, ...TEAM_TOOLS, ...MORE_TOOLS]
 
 // What the user can open, in words the model can repeat ("you have access to…").
 const SECTIONS: Array<{ ar: string; perm: PermissionKey | 'admin' }> = [
@@ -32,8 +33,14 @@ const SECTIONS: Array<{ ar: string; perm: PermissionKey | 'admin' }> = [
   { ar: 'الأهداف', perm: 'page.goals' },
   { ar: 'التقويم', perm: 'page.calendar' },
   { ar: 'الفريق', perm: 'page.users' },
+  { ar: 'منتجات التنّور', perm: 'page.tannoor_products' },
+  { ar: 'الأقسام وملفاتها', perm: 'page.departments' },
+  { ar: 'النفق السحري', perm: 'page.visualize' },
+  { ar: 'الأفكار', perm: 'page.idea_market' },
   { ar: 'سجل التدقيق', perm: 'admin' },
   { ar: 'المالية', perm: 'admin' },
+  { ar: 'الاعتمادات', perm: 'admin' },
+  { ar: 'صلاحيات الفريق', perm: 'admin' },
 ]
 
 export interface TurnInput {
@@ -92,6 +99,10 @@ function systemPrompt(profile: Profile, email: string | undefined, permissions: 
 - ملفات الشركة (البروفايل، السجل التجاري، الشهادات، الزكاة، التأمينات، الرخص، التأهيل المسبق): استدعِ company_files، اختر بالمعنى (CR = السجل التجاري، Profile = البروفايل)، ثم prepare_downloads بالـids، واعرض بطاقتها.
 - ملفات مشروع أو عرض: استخدم أداة المشروع/العرض، وبطاقتها فيها أزرار التحميل.
 - أزرار التحميل تسأل المستخدم عربي أو English لما يكون الملف بلغتين — لا تسأله أنت.
+
+## الأقسام المقفلة برمز
+- لو رجعت أداة locked: اعرض بطاقة الفتح [[card:…]] وقل له يكتب الرمز فيها. لا تطلب الرمز في النص ولا تكرره ولا تحفظه — الرمز لا يمر عليك أبداً.
+- بعد الفتح يُعاد سؤاله تلقائياً.
 - كل أداة ترجع "card" (ومرات "files_card" أو "list_card" أو "attachments_card") = مرجع بطاقة. اعرض البطاقة بكتابة [[card:المرجع]] في سطر لحاله في المكان المناسب من ردك. اعرض فقط البطاقات اللي تخدم السؤال.
 - أزرار التحميل والتعديل موجودة داخل البطاقات — لا تكتب روابط بنفسك أبداً.
 - ملاحظات الإدارة (admin_notes) والأعمدة المعلّمة «(للإدارة)» مسموحة لهذا المستخدم: أجب عنها عادي إذا سأل، وقل إنها «للإدارة فقط ولا تظهر للعميل».
@@ -112,7 +123,7 @@ export function availableTools(profile: Profile, permissions: string[]): AiTool[
 
 const MAX_RESULT_CHARS = 24_000
 export const KAASEB_AI_OPENAI_MODEL = 'gpt-5.4-mini'
-const CARD_KEYS = ['card', 'files_card', 'list_card', 'attachments_card']
+const CARD_KEYS = ['card', 'files_card', 'list_card', 'attachments_card', 'unlock_card']
 
 export async function runTurn(input: TurnInput): Promise<TurnResult> {
   const { supabase, user, profile, permissions } = input
