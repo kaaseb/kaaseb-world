@@ -5,17 +5,81 @@ on:
     branches:
       - main
 
+# Two pushes in a row deploy one after the other, never on top of each other.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Deploy to VM
+      - name: Deploy to VM (zero downtime)
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.VM_HOST }}
           username: ${{ secrets.VM_USER }}
           key: ${{ secrets.VM_SSH_KEY }}
+          command_timeout: 30m
+          # WHY THIS EXISTS: the old deploy ran `npm ci` (deletes node_modules)
+          # and `next build` (rewrites .next) UNDER the running site, so every
+          # deploy answered "Internal Server Error" for ~3 minutes, and a failed
+          # build left the site broken. Now:
+          #   • the new version is built into whichever of .next-a / .next-b is
+          #     NOT live — the running site is never touched while building,
+          #   • a failed build stops here and the live site keeps running,
+          #   • the switch is one file (.next-active) + a reload (seconds),
+          #   • if the new version doesn't answer, it rolls back by itself.
           script: |
+            bash -euo pipefail <<'DEPLOY'
             cd /var/www/Kaaseb-World
-            ./deploy.sh
+            APP=Kaaseb-World
+            URL=https://world.kaaseb.sa/login
+
+            LOCK_BEFORE=$(sha1sum package-lock.json | cut -d' ' -f1)
+            git pull --ff-only origin main
+            LOCK_AFTER=$(sha1sum package-lock.json | cut -d' ' -f1)
+
+            # 1) Dependencies — only when they changed; installed beside the live
+            #    ones and swapped in with a rename instead of deleted in place.
+            if [ "$LOCK_BEFORE" != "$LOCK_AFTER" ] || [ ! -d node_modules ]; then
+              echo "▶ dependencies changed — installing beside the live ones"
+              rm -rf .deps-new && mkdir .deps-new
+              cp package.json package-lock.json .deps-new/
+              (cd .deps-new && npm ci --no-audit --no-fund)
+              rm -rf node_modules.old
+              if [ -d node_modules ]; then mv node_modules node_modules.old; fi
+              mv .deps-new/node_modules node_modules
+              rm -rf .deps-new node_modules.old
+            fi
+
+            # 2) Build the new version beside the live one.
+            LIVE=$(cat .next-active 2>/dev/null || echo .next)
+            if [ "$LIVE" = ".next-a" ]; then NEW=.next-b; else NEW=.next-a; fi
+            echo "▶ live: $LIVE — building into $NEW"
+            rm -rf "$NEW"
+            NEXT_DIST_DIR="$NEW" npm run build
+
+            # 3) Switch (seconds).
+            echo "$NEW" > .next-active
+            pm2 reload "$APP"
+
+            # 4) Prove it answers; otherwise go back to the previous version.
+            ok=0
+            for i in $(seq 1 30); do
+              code=$(curl -s -o /dev/null -w '%{http_code}' "$URL" || true)
+              if [ "$code" = "200" ]; then ok=1; break; fi
+              sleep 2
+            done
+            if [ "$ok" != "1" ]; then
+              echo "✖ new version did not answer — rolling back to $LIVE"
+              if [ "$LIVE" = ".next" ]; then rm -f .next-active; else echo "$LIVE" > .next-active; fi
+              pm2 reload "$APP"
+              exit 1
+            fi
+
+            # 5) Keep the previous build for a manual rollback; drop the legacy one.
+            if [ "$LIVE" != ".next" ] && [ -d .next ]; then rm -rf .next; fi
+            echo "✔ deployed $(git rev-parse --short HEAD) from $NEW"
+            DEPLOY

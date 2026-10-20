@@ -1,4 +1,16 @@
 import type { NextConfig } from "next";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
+/** The live build folder written by the deploy (".next-a" / ".next-b"). */
+function activeDistDir(): string | null {
+  try {
+    const v = readFileSync(join(__dirname, ".next-active"), "utf8").trim();
+    return /^\.next-[ab]$/.test(v) ? v : null;
+  } catch {
+    return null;
+  }
+}
 
 // HTTP response headers applied to every route.
 // Notes:
@@ -33,6 +45,14 @@ if (process.env.NODE_ENV === 'production') {
 }
 
 const nextConfig: NextConfig = {
+  // Zero-downtime deploys (see .github/workflows/deploy.yml): the server builds
+  // into whichever of .next-a / .next-b is NOT live (NEXT_DIST_DIR at build
+  // time), then writes that name to `.next-active` and reloads. The running
+  // site is never touched mid-build — building straight into `.next` under it
+  // is what answered "Internal Server Error" for ~3 minutes on every deploy.
+  // The folder name is baked into the build, so it is never renamed; at start
+  // the server reads `.next-active`. Locally (no file) → `.next`.
+  distDir: process.env.NEXT_DIST_DIR || activeDistDir() || '.next',
   turbopack: {
     root: __dirname,
   },

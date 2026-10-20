@@ -15,6 +15,11 @@
 
 # next.js
 /.next/
+# zero-downtime deploy: the two alternating builds + which one is live
+/.next-a/
+/.next-b/
+/.next-active
+/.deps-new/
 /out/
 
 # production
