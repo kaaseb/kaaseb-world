@@ -37,6 +37,8 @@ jobs:
             APP=Kaaseb-World
             URL=https://world.kaaseb.sa/login
 
+            # A build may touch tsconfig.json; never let that block the pull.
+            git checkout -- tsconfig.json 2>/dev/null || true
             LOCK_BEFORE=$(sha1sum package-lock.json | cut -d' ' -f1)
             git pull --ff-only origin main
             LOCK_AFTER=$(sha1sum package-lock.json | cut -d' ' -f1)
