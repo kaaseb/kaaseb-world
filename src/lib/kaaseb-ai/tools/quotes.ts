@@ -3,7 +3,7 @@
 import { listManualQuotes, getManualQuote, type ManualQuote } from '@/lib/manual-quotes/store'
 import { computeTotals } from '@/lib/quotation/totals'
 import { isAppOwnedUrl } from '@/lib/s3'
-import { action, bilingual, compact, money, day, type Tone } from '../cards'
+import { action, bilingual, compact, money, day, type Tone, type AiCard } from '../cards'
 import { type AiTool, str, int, matches, inRange, date, toEnd, likeSafe, DATE_ARGS, ilikeOr } from '../tool'
 
 // ── shared ───────────────────────────────────────────────────────────────────
@@ -39,6 +39,33 @@ function customValues(q: ManualQuote, i: ManualQuote['items'][number]): Record<s
 
 function quoteTitle(q: ManualQuote) {
   return q.subject || q.project_name || q.company || q.client_name || 'بدون عنوان'
+}
+
+/** The manual-quote card (download PDF/Excel in AR/EN, edit). Also used after
+ *  a confirmed chat edit, outside any tool run. */
+export function quoteCard(q: ManualQuote): Omit<Extract<AiCard, { type: 'record' }>, 'ref'> {
+  const t = quoteTotals(q)
+  return {
+    type: 'record',
+    kind: `عرض سعر يدوي #${q.number}`,
+    title: quoteTitle(q),
+    subtitle: [q.company, q.client_name].filter(Boolean).join(' · ') || undefined,
+    badge: { label: q.language === 'ar' ? 'عربي' : 'English', tone: 'slate' },
+    amount: money(t.total, q.currency),
+    fields: compact([
+      { label: 'البنود', value: String(q.items.length) },
+      { label: 'قبل الضريبة', value: money(t.subtotal, q.currency) },
+      { label: 'الضريبة', value: q.vat_rate ? `${Math.round(q.vat_rate * 100)}% · ${money(t.vat, q.currency)}` : 'بدون ضريبة' },
+      { label: 'التوصيل', value: q.delivery === 'included' ? 'شامل' : q.delivery === 'excluded' ? `غير شامل · ${money(t.shipping, q.currency)}` : '—' },
+      { label: 'التاريخ', value: day(q.createdAt) },
+      q.createdByName ? { label: 'أنشأه', value: q.createdByName } : null,
+    ]),
+    actions: compact([
+      bilingual('تحميل PDF', `/print/manual-quote/${q.id}?lang=ar`, `/print/manual-quote/${q.id}?lang=en`),
+      bilingual('تحميل إكسل', `/api/manual-quotes/${q.id}/template?lang=ar`, `/api/manual-quotes/${q.id}/template?lang=en`),
+      action('edit', 'تعديل', `/manual-quotes/${q.id}`),
+    ]),
+  }
 }
 
 // ── manual quotes ────────────────────────────────────────────────────────────
@@ -114,27 +141,7 @@ const manualGet: AiTool = {
     if (!q && num) q = (await listManualQuotes()).find((x) => x.number === num) || null
     if (!q) return { error: 'ما لقيت عرض يدوي بهذا الرقم.' }
     const t = quoteTotals(q)
-    const ref = ctx.card({
-      type: 'record',
-      kind: `عرض سعر يدوي #${q.number}`,
-      title: quoteTitle(q),
-      subtitle: [q.company, q.client_name].filter(Boolean).join(' · ') || undefined,
-      badge: { label: q.language === 'ar' ? 'عربي' : 'English', tone: 'slate' },
-      amount: money(t.total, q.currency),
-      fields: compact([
-        { label: 'البنود', value: String(q.items.length) },
-        { label: 'قبل الضريبة', value: money(t.subtotal, q.currency) },
-        { label: 'الضريبة', value: q.vat_rate ? `${Math.round(q.vat_rate * 100)}% · ${money(t.vat, q.currency)}` : 'بدون ضريبة' },
-        { label: 'التوصيل', value: q.delivery === 'included' ? 'شامل' : q.delivery === 'excluded' ? `غير شامل · ${money(t.shipping, q.currency)}` : '—' },
-        { label: 'التاريخ', value: day(q.createdAt) },
-        q.createdByName ? { label: 'أنشأه', value: q.createdByName } : null,
-      ]),
-      actions: compact([
-        bilingual('تحميل PDF', `/print/manual-quote/${q.id}?lang=ar`, `/print/manual-quote/${q.id}?lang=en`),
-        bilingual('تحميل إكسل', `/api/manual-quotes/${q.id}/template?lang=ar`, `/api/manual-quotes/${q.id}/template?lang=en`),
-        action('edit', 'تعديل', `/manual-quotes/${q.id}`),
-      ]),
-    })
+    const ref = ctx.card(quoteCard(q))
     return {
       card: ref,
       number: q.number, title: quoteTitle(q), project: q.project_name, company: q.company, client: q.client_name,

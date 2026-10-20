@@ -27,6 +27,7 @@ import { computeTotals } from '@/lib/quotation/totals'
 import { ManualQuoteGrid } from './ManualQuoteGrid'
 import { ManualQuoteUpload } from './ManualQuoteUpload'
 import { DuplicateQuoteButton } from './DuplicateQuoteDialog'
+import { QuoteHistoryButton } from './QuoteHistoryDialog'
 
 export function ManualQuoteEditor({ initial }: { initial: ManualQuote }) {
   const { isRtl, lang } = useLanguage()
@@ -157,6 +158,12 @@ export function ManualQuoteEditor({ initial }: { initial: ManualQuote }) {
             <button onClick={() => set('vat_rate', 0)} className={opt((q.vat_rate || 0) === 0)}>{ar ? 'بدون ضريبة' : 'No VAT'}</button>
           </div>
           <DuplicateQuoteButton quoteId={q.id} number={q.number} subject={q.subject || q.project_name || ''} ar={ar} beforeCopy={() => autosave.flush()} />
+          <QuoteHistoryButton
+            quoteId={q.id} number={q.number} ar={ar}
+            beforeOpen={() => autosave.flush()}
+            // The restored version comes from the server — not an edit to save again.
+            onRestored={(r) => { autosave.markClean(); setQ({ ...r, columns: r.columns || [], layout: normalizeLayout(r.layout, r.columns || []), hidden: r.hidden || [] }) }}
+          />
         </div>
       </div>
 

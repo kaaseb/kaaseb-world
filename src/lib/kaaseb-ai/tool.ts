@@ -20,6 +20,10 @@ export interface ToolCtx {
   profile: Profile
   permissions: string[]
   can: (key: PermissionKey) => boolean
+  /** The conversation this turn belongs to (proposals post their result there). */
+  conversationId: string
+  /** How the user is named in histories ("محمد فؤاد"). */
+  actorName: string
   /** Register a card; returns its ref for the model to place with [[card:ref]]. */
   card: (c: DistributiveOmit<AiCard, 'ref'>) => string
 }

@@ -78,6 +78,18 @@ export type AiCard =
       title: string
     }
 
+  | {
+      /** A change the user must approve. Nothing happens until «تأكيد». */
+      type: 'confirm'
+      ref: string
+      actionId: string
+      title: string
+      subtitle?: string
+      lines: Array<{ label: string; item?: string; before?: string; after?: string }>
+      status?: 'pending' | 'done' | 'cancelled' | 'failed'
+      note?: string
+    }
+
 export type UnlockTarget = 'inbox' | 'docs'
 export const UNLOCK_ENDPOINT: Record<UnlockTarget, string> = {
   inbox: '/api/inbox/unlock',

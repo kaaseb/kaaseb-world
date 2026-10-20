@@ -123,6 +123,18 @@ export function KaasebAiChat({ mode, firstName, onClose }: Props) {
     return null
   }
 
+  /** The user's own decision on a proposal → the server applies (or not) and
+   *  answers with the follow-up message (the updated quote card). */
+  async function act(actionId: string, decision: 'confirm' | 'cancel'): Promise<string | null> {
+    try {
+      const r = await fetch(`/api/kaaseb-ai/actions/${actionId}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ decision }) })
+      const j = await r.json().catch(() => ({}))
+      if (!r.ok) return j.error || tx('تعذّر التنفيذ', 'Failed')
+      if (j.message) setMessages((m) => [...m, j.message as AiMessage])
+      return j.status === 'failed' ? (j.message?.content || tx('لم يُنفّذ', 'Not applied')) : null
+    } catch { return tx('تعذّر الاتصال', 'Connection failed') }
+  }
+
   async function send(again?: string) {
     const text = (again ?? input).trim()
     if (!text || pending) return
@@ -284,7 +296,7 @@ export function KaasebAiChat({ mode, firstName, onClose }: Props) {
                       <KaasebAiMark className="w-3.5 h-3.5" />
                     </div>
                     <div className={`min-w-0 flex-1 ${m.error ? 'text-red-600' : ''}`}>
-                      <AiMessageBody content={m.content} cards={m.cards} isRtl={isRtl} unlock={unlock} opened={opened} />
+                      <AiMessageBody content={m.content} cards={m.cards} isRtl={isRtl} unlock={unlock} opened={opened} act={act} />
                       {!m.error && m.content.trim() && <CopyButton text={m.content} label={tx('نسخ', 'Copy')} done={tx('تم النسخ', 'Copied')} />}
                     </div>
                   </div>

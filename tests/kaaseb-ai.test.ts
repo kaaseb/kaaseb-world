@@ -18,7 +18,7 @@ test('a sales-only employee gets sales tools and nothing from Furn', () => {
   const got = names('employee', ['page.client_projects', 'page.inbox'])
   assert.ok(got.includes('client_projects_list'))
   assert.ok(got.includes('inbox_search'))
-  for (const t of ['manual_quotes_list', 'manual_quote_get', 'items_search', 'furn_projects_list', 'furn_project_get', 'tannoor_projects_list']) {
+  for (const t of ['manual_quotes_list', 'manual_quote_get', 'items_search', 'manual_quote_edit', 'manual_quote_history', 'manual_quote_restore', 'furn_projects_list', 'furn_project_get', 'tannoor_projects_list']) {
     assert.ok(!got.includes(t), `${t} must not be offered`)
   }
 })

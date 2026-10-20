@@ -79,6 +79,19 @@ export async function createConversation(userId: string, firstMessage: string): 
   return meta
 }
 
+/** Mark a confirm card (by its action id) with its final status, so reopening
+ *  the conversation shows «تم» / «أُلغي» instead of live buttons. */
+export async function setConfirmStatus(userId: string, convId: string, actionId: string, status: 'done' | 'cancelled' | 'failed', note?: string): Promise<void> {
+  if (!isConversationId(convId)) return
+  await mutateJson<ConversationFile>(convKey(userId, convId), { id: convId, messages: [] }, (cur) => ({
+    id: convId,
+    messages: (cur?.messages || []).map((m) => (!m.cards?.some((c) => c.type === 'confirm' && c.actionId === actionId) ? m : {
+      ...m,
+      cards: m.cards.map((c) => (c.type === 'confirm' && c.actionId === actionId ? { ...c, status, ...(note ? { note } : {}) } : c)),
+    })),
+  }))
+}
+
 export async function appendMessages(userId: string, convId: string, msgs: AiMessage[]): Promise<void> {
   await mutateJson<ConversationFile>(convKey(userId, convId), { id: convId, messages: [] }, (cur) => ({
     id: convId,

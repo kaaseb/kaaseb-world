@@ -6,6 +6,7 @@
 
 import { normalizeLayout, STD_KEYS, type LayoutKey, type StdKey } from './layout'
 import { readJson, mutateJson } from '@/lib/s3'
+import { recordChange, getHistory, type HistorySource } from './history'
 
 const KEY = 'app-data/manual-quotes.json'
 const START_NUMBER = 100 // the owner's ask: numbering starts at 100
@@ -199,19 +200,52 @@ const CURRENCIES: QuoteCurrency[] = ['SAR', 'USD']
 // ATOMIC (mutateJson): this used to read the whole store, change one quote and
 // write the whole store back — a quote created by someone else in between was
 // silently erased. With autosave firing every few seconds that window is real.
-export async function updateManualQuote(id: string, patch: Partial<ManualQuote>): Promise<ManualQuote | null> {
+export async function updateManualQuote(
+  id: string,
+  patch: Partial<ManualQuote>,
+  /** Who saved — recorded in the quote's history (lib/manual-quotes/history). */
+  actor?: { id: string; name: string; source: HistorySource },
+): Promise<ManualQuote | null> {
   let result: ManualQuote | null = null
+  let before: ManualQuote | null = null
   await mutateJson<State>(KEY, EMPTY, (raw) => {
     const quotes = Array.isArray(raw?.quotes) ? raw.quotes : []
     const idx = quotes.findIndex((q) => q.id === id)
-    if (idx < 0) { result = null; return raw }
+    if (idx < 0) { result = null; before = null; return raw }
     const next = applyPatch(quotes[idx], patch)
     result = next
+    before = quotes[idx]
     const copy = quotes.slice()
     copy[idx] = next
     return { ...raw, quotes: copy }
   })
+  // History is best-effort: a hiccup there must never fail the save itself.
+  if (actor && before && result) {
+    await recordChange(before, result, actor).catch((e) => console.error('[manual-quotes] history:', e))
+  }
   return result
+}
+
+/** Put a quote back to how it was before a history entry. Recorded as a restore. */
+export async function restoreManualQuote(
+  id: string,
+  entryId: string,
+  actor: { id: string; name: string },
+): Promise<ManualQuote | null> {
+  const entry = (await getHistory(id)).find((e) => e.id === entryId)
+  if (!entry) return null
+  const s = entry.snapshot
+  return updateManualQuote(id, {
+    language: s.language, project_name: s.project_name, subject: s.subject, client_name: s.client_name,
+    company: s.company, email: s.email, phone: s.phone, currency: s.currency, vat_rate: s.vat_rate,
+    delivery: s.delivery, shipping: s.shipping, columns: s.columns, layout: s.layout, hidden: s.hidden,
+    items: s.items, notes: s.notes,
+  }, { ...actor, source: 'restore' })
+}
+
+/** What a patch WOULD produce — for previews (nothing is saved). */
+export function previewPatch(cur: ManualQuote, patch: Partial<ManualQuote>): ManualQuote {
+  return applyPatch(cur, patch)
 }
 
 function applyPatch(curRaw: ManualQuote, patch: Partial<ManualQuote>): ManualQuote {

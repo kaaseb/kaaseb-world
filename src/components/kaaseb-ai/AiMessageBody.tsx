@@ -6,11 +6,13 @@
 
 import { Fragment, useState, type ReactNode } from 'react'
 import Link from 'next/link'
-import { Download, PencilLine, ArrowUpLeft, ArrowUpRight, ChevronDown, ChevronLeft, ChevronRight, Lock, LockOpen, Loader2 } from 'lucide-react'
+import { Download, PencilLine, ArrowUpLeft, ArrowUpRight, ChevronDown, ChevronLeft, ChevronRight, Lock, LockOpen, Loader2, Check, X } from 'lucide-react'
 import { renderableHref, isAppPage, type AiCard, type CardAction, type Tone, type UnlockTarget } from '@/lib/kaaseb-ai/cards'
 
 /** Posts a PIN to the section's own unlock endpoint; returns an error or null. */
 export type UnlockFn = (target: UnlockTarget, pin: string) => Promise<string | null>
+/** Confirm / cancel a proposal; returns an error or null. */
+export type ActFn = (actionId: string, decision: 'confirm' | 'cancel') => Promise<string | null>
 
 export const TONE: Record<Tone, string> = {
   emerald: 'bg-emerald-50 text-emerald-700 ring-emerald-600/20 dark:bg-emerald-500/10 dark:text-emerald-300',
@@ -72,8 +74,9 @@ function SmartLink({ href, newTab, className, children }: { href: string; newTab
     : <Link href={href} className={className}>{children}</Link>
 }
 
-export function CardView({ card, isRtl, unlock, opened }: { card: AiCard; isRtl: boolean; unlock?: UnlockFn; opened?: UnlockTarget[] }) {
+export function CardView({ card, isRtl, unlock, opened, act }: { card: AiCard; isRtl: boolean; unlock?: UnlockFn; opened?: UnlockTarget[]; act?: ActFn }) {
   if (card.type === 'unlock') return <UnlockCard card={card} unlock={unlock} opened={!!opened?.includes(card.target)} />
+  if (card.type === 'confirm') return <ConfirmCard card={card} act={act} />
   const Chevron = isRtl ? ChevronLeft : ChevronRight
   if (card.type === 'stats') {
     return (
@@ -216,7 +219,7 @@ function TextBlock({ text }: { text: string }) {
 }
 
 /** Text with inline card markers; cards the text didn't place go at the end. */
-export function AiMessageBody({ content, cards = [], isRtl, unlock, opened }: { content: string; cards?: AiCard[]; isRtl: boolean; unlock?: UnlockFn; opened?: UnlockTarget[] }) {
+export function AiMessageBody({ content, cards = [], isRtl, unlock, opened, act }: { content: string; cards?: AiCard[]; isRtl: boolean; unlock?: UnlockFn; opened?: UnlockTarget[]; act?: ActFn }) {
   const byRef = new Map(cards.map((c) => [c.ref, c]))
   const used = new Set<string>()
   const parts = content.split(/\[\[card:([\w-]+)\]\]/g)
@@ -224,12 +227,12 @@ export function AiMessageBody({ content, cards = [], isRtl, unlock, opened }: { 
   parts.forEach((p, i) => {
     if (i % 2 === 1) {
       const c = byRef.get(p)
-      if (c && !used.has(p)) { used.add(p); nodes.push(<CardView key={`c${i}`} card={c} isRtl={isRtl} unlock={unlock} opened={opened} />) }
+      if (c && !used.has(p)) { used.add(p); nodes.push(<CardView key={`c${i}`} card={c} isRtl={isRtl} unlock={unlock} opened={opened} act={act} />) }
     } else if (p.trim()) {
       nodes.push(<TextBlock key={`t${i}`} text={p.trim()} />)
     }
   })
-  for (const c of cards) if (!used.has(c.ref)) nodes.push(<CardView key={`r${c.ref}`} card={c} isRtl={isRtl} unlock={unlock} opened={opened} />)
+  for (const c of cards) if (!used.has(c.ref)) nodes.push(<CardView key={`r${c.ref}`} card={c} isRtl={isRtl} unlock={unlock} opened={opened} act={act} />)
   return <div className="space-y-2.5 text-sm leading-relaxed">{nodes}</div>
 }
 
@@ -270,6 +273,62 @@ function UnlockCard({ card, unlock, opened }: { card: Extract<AiCard, { type: 'u
         </button>
       </form>
       {error && <p className="text-xs text-red-600 mt-1.5">{error}</p>}
+    </div>
+  )
+}
+
+/** A proposed change: before → after per line, and the user's own decision. */
+function ConfirmCard({ card, act }: { card: Extract<AiCard, { type: 'confirm' }>; act?: ActFn }) {
+  const [busy, setBusy] = useState<'confirm' | 'cancel' | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [local, setLocal] = useState<'done' | 'cancelled' | null>(null)
+  const status = local || card.status || 'pending'
+  async function decide(d: 'confirm' | 'cancel') {
+    if (!act || busy) return
+    setBusy(d); setError(null)
+    const err = await act(card.actionId, d)
+    setBusy(null)
+    if (err) setError(err); else setLocal(d === 'confirm' ? 'done' : 'cancelled')
+  }
+  const frame = status === 'done' ? 'border-emerald-200 dark:border-emerald-500/30'
+    : status === 'cancelled' || status === 'failed' ? 'border-border opacity-80' : 'border-indigo-200 dark:border-indigo-500/40 ring-1 ring-indigo-500/10'
+  return (
+    <div className={`rounded-xl border bg-card overflow-hidden ${frame}`}>
+      <div className="px-3 py-2.5 border-b bg-muted/30 flex items-start gap-2">
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-bold"><bdi>{card.title}</bdi></p>
+          {card.subtitle && <p className="text-[11px] text-muted-foreground truncate"><bdi>{card.subtitle}</bdi></p>}
+        </div>
+        <Badge
+          label={status === 'done' ? 'تم التنفيذ' : status === 'cancelled' ? 'أُلغي' : status === 'failed' ? 'لم يُنفّذ' : 'بانتظار تأكيدك'}
+          tone={status === 'done' ? 'emerald' : status === 'failed' ? 'red' : status === 'cancelled' ? 'slate' : 'violet'}
+        />
+      </div>
+      <ul className="divide-y max-h-80 overflow-y-auto">
+        {card.lines.map((l, i) => (
+          <li key={i} className="px-3 py-2 text-xs">
+            <p className="text-muted-foreground"><bdi>{l.item ? `${l.item} — ` : ''}{l.label}</bdi></p>
+            <p className="mt-0.5 flex flex-wrap items-center gap-1.5">
+              {l.before !== undefined && <span className="rounded-md bg-red-50 dark:bg-red-500/10 text-red-700 dark:text-red-300 px-1.5 py-0.5 line-through decoration-red-400/70"><bdi>{l.before}</bdi></span>}
+              {l.before !== undefined && l.after !== undefined && <span className="text-muted-foreground">←</span>}
+              {l.after !== undefined && <span className="rounded-md bg-emerald-50 dark:bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 px-1.5 py-0.5 font-semibold"><bdi>{l.after}</bdi></span>}
+            </p>
+          </li>
+        ))}
+      </ul>
+      {status === 'pending' && act && (
+        <div className="grid grid-cols-2 gap-1.5 p-3 border-t">
+          <button type="button" onClick={() => decide('confirm')} disabled={!!busy}
+            className="h-10 sm:h-9 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-[13px] sm:text-xs font-semibold inline-flex items-center justify-center gap-1.5 disabled:opacity-60 active:scale-[0.98] transition">
+            {busy === 'confirm' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}تأكيد
+          </button>
+          <button type="button" onClick={() => decide('cancel')} disabled={!!busy}
+            className="h-10 sm:h-9 rounded-xl bg-muted hover:bg-muted/70 ring-1 ring-inset ring-border text-[13px] sm:text-xs font-semibold inline-flex items-center justify-center gap-1.5 disabled:opacity-60 active:scale-[0.98] transition">
+            {busy === 'cancel' ? <Loader2 className="w-4 h-4 animate-spin" /> : <X className="w-4 h-4" />}إلغاء
+          </button>
+        </div>
+      )}
+      {(error || card.note) && <p className="px-3 pb-2.5 text-xs text-red-600">{error || card.note}</p>}
     </div>
   )
 }

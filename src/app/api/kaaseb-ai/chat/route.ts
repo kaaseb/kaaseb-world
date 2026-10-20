@@ -88,6 +88,7 @@ export async function POST(request: Request) {
         const { text, cards } = await runTurn({
           supabase, user, profile, permissions,
           history: [...toHistory(past), { role: 'user', content: message }],
+          conversationId: convId,
           onStatus: (s) => send({ t: 'status', text: s }),
         })
         const reply: AiMessage = {
