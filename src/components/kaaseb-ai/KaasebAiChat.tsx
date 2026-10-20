@@ -171,7 +171,7 @@ export function KaasebAiChat({ mode, firstName, onClose }: Props) {
   return (
     <div dir={isRtl ? 'rtl' : 'ltr'} className="flex flex-col h-full min-h-0 bg-background">
       {/* Header */}
-      <div className="flex items-center gap-2 px-3 h-14 border-b bg-card flex-shrink-0">
+      <div className="flex items-center gap-1.5 px-3 border-b bg-card flex-shrink-0 pt-[env(safe-area-inset-top)] min-h-14">
         {showHistory ? (
           <button onClick={() => setShowHistory(false)} className="p-1.5 rounded-full hover:bg-muted text-muted-foreground" aria-label={tx('رجوع', 'Back')}>
             <Back className="w-5 h-5" />
@@ -187,20 +187,20 @@ export function KaasebAiChat({ mode, firstName, onClose }: Props) {
         </div>
         {!showHistory && (
           <>
-            <button onClick={() => setShowHistory(true)} className="p-2 rounded-lg hover:bg-muted text-muted-foreground" title={tx('المحادثات', 'Conversations')} aria-label={tx('المحادثات', 'Conversations')}>
+            <button onClick={() => setShowHistory(true)} className="p-2.5 sm:p-2 rounded-xl hover:bg-muted active:bg-muted text-muted-foreground" title={tx('المحادثات', 'Conversations')} aria-label={tx('المحادثات', 'Conversations')}>
               <History className="w-4 h-4" />
             </button>
-            <button onClick={newChat} className="p-2 rounded-lg hover:bg-muted text-muted-foreground" title={tx('محادثة جديدة', 'New chat')} aria-label={tx('محادثة جديدة', 'New chat')}>
+            <button onClick={newChat} className="p-2.5 sm:p-2 rounded-xl hover:bg-muted active:bg-muted text-muted-foreground" title={tx('محادثة جديدة', 'New chat')} aria-label={tx('محادثة جديدة', 'New chat')}>
               <Plus className="w-4 h-4" />
             </button>
           </>
         )}
         {mode === 'panel' && (
           <>
-            <Link href="/ai" onClick={onClose} className="hidden sm:inline-flex p-2 rounded-lg hover:bg-muted text-muted-foreground" title={tx('ملء الشاشة', 'Full screen')} aria-label={tx('ملء الشاشة', 'Full screen')}>
+            <Link href="/ai" onClick={onClose} className="hidden sm:inline-flex p-2 rounded-xl hover:bg-muted text-muted-foreground" title={tx('ملء الشاشة', 'Full screen')} aria-label={tx('ملء الشاشة', 'Full screen')}>
               <Maximize2 className="w-4 h-4" />
             </Link>
-            <button onClick={onClose} className="p-2 rounded-lg hover:bg-muted text-muted-foreground" aria-label={tx('إغلاق', 'Close')}>
+            <button onClick={onClose} className="p-2.5 sm:p-2 rounded-xl hover:bg-muted active:bg-muted text-muted-foreground" aria-label={tx('إغلاق', 'Close')}>
               <X className="w-4 h-4" />
             </button>
           </>
@@ -249,7 +249,8 @@ export function KaasebAiChat({ mode, firstName, onClose }: Props) {
                   </div>
                 ) : (
                   <div key={m.id} className="flex gap-2">
-                    <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-slate-900 via-indigo-900 to-sky-700 text-white flex items-center justify-center flex-shrink-0 mt-0.5">
+                    {/* Phones: the cards get the full width — the avatar shows from sm up. */}
+                    <div className="hidden sm:flex w-7 h-7 rounded-lg bg-gradient-to-br from-slate-900 via-indigo-900 to-sky-700 text-white items-center justify-center flex-shrink-0 mt-0.5">
                       <KaasebAiMark className="w-3.5 h-3.5" />
                     </div>
                     <div className={`min-w-0 flex-1 ${m.error ? 'text-red-600' : ''}`}>
@@ -283,12 +284,12 @@ export function KaasebAiChat({ mode, firstName, onClose }: Props) {
                 rows={1}
                 autoFocus={mode === 'page'}
                 placeholder={tx('اكتب رسالتك…', 'Type your message…')}
-                className="flex-1 resize-none bg-transparent outline-none text-sm leading-6 max-h-40 py-1"
+                className="flex-1 resize-none bg-transparent outline-none text-base sm:text-sm leading-6 max-h-40 py-1"
               />
               <button
                 onClick={send}
                 disabled={!input.trim() || !!pending}
-                className="w-9 h-9 rounded-xl bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900 flex items-center justify-center disabled:opacity-30 transition hover:scale-105 active:scale-95 flex-shrink-0"
+                className="w-10 h-10 sm:w-9 sm:h-9 rounded-xl bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900 flex items-center justify-center disabled:opacity-30 transition hover:scale-105 active:scale-95 flex-shrink-0"
                 aria-label={tx('إرسال', 'Send')}
               >
                 {pending ? <Loader2 className="w-4 h-4 animate-spin" /> : <ArrowUp className="w-4 h-4" />}

@@ -36,7 +36,7 @@ function ActionButton({ a, isRtl }: { a: CardAction; isRtl: boolean }) {
     : a.kind === 'edit' ? 'bg-red-600 hover:bg-red-700 text-white shadow-sm shadow-red-600/20'
     : 'bg-muted hover:bg-muted/70 text-foreground ring-1 ring-inset ring-border'
   const body = <><Icon className="w-3.5 h-3.5" />{a.label}</>
-  const base = `inline-flex items-center gap-1.5 h-8 px-3 rounded-lg text-xs font-semibold transition-colors ${cls}`
+  const base = `w-full inline-flex items-center justify-center gap-1 sm:gap-1.5 whitespace-nowrap h-10 sm:h-9 px-2 sm:px-3 rounded-xl text-[13px] sm:text-xs font-semibold transition-colors active:scale-[0.98] ${cls}`
   const options = (a.options || []).filter((o) => renderableHref(o.href))
   if (options.length > 1) {
     // Language (or any) choice: the button opens a small picker under itself.
@@ -46,10 +46,10 @@ function ActionButton({ a, isRtl }: { a: CardAction; isRtl: boolean }) {
           {body}<ChevronDown className={`w-3.5 h-3.5 transition-transform ${open ? 'rotate-180' : ''}`} />
         </button>
         {open && (
-          <div className="absolute z-10 top-full mt-1 start-0 min-w-full rounded-lg border bg-card shadow-lg p-1 flex flex-col">
+          <div className="absolute z-20 top-full mt-1 inset-x-0 rounded-xl border bg-card shadow-xl p-1 flex flex-col">
             {options.map((o) => (
               <a key={o.href} href={o.href} target="_blank" rel="noopener noreferrer" onClick={() => setOpen(false)}
-                className="px-3 py-1.5 rounded-md text-xs font-semibold text-blue-700 dark:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-500/10 whitespace-nowrap">
+                className="px-3 py-2.5 sm:py-1.5 rounded-lg text-sm sm:text-xs font-semibold text-center text-blue-700 dark:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-500/10 whitespace-nowrap">
                 {o.label}
               </a>
             ))}
@@ -80,7 +80,7 @@ export function CardView({ card, isRtl }: { card: AiCard; isRtl: boolean }) {
             <div key={i} className={`relative rounded-lg bg-muted/50 px-3 py-2 overflow-hidden before:absolute before:inset-y-2 before:start-0 before:w-0.5 before:rounded-full ${STAT_ACCENT[s.tone || 'slate']}`}>
               <p className="text-[11px] text-muted-foreground truncate">{s.label}</p>
               <p className="text-base font-bold tabular-nums leading-tight mt-0.5" dir="ltr" style={{ textAlign: isRtl ? 'right' : 'left' }}>{s.value}</p>
-              {s.hint && <p className="text-[10px] text-muted-foreground truncate mt-0.5">{s.hint}</p>}
+              {s.hint && <p className="text-[10px] text-muted-foreground truncate mt-0.5"><bdi>{s.hint}</bdi></p>}
             </div>
           ))}
         </div>
@@ -101,8 +101,8 @@ export function CardView({ card, isRtl }: { card: AiCard; isRtl: boolean }) {
             const inner = (
               <>
                 <span className="min-w-0 flex-1">
-                  <span className="block text-sm font-medium truncate">{r.title}</span>
-                  {r.subtitle && <span className="block text-[11px] text-muted-foreground truncate">{r.subtitle}</span>}
+                  <span className="block text-sm font-medium leading-snug line-clamp-2 break-words"><bdi>{r.title}</bdi></span>
+                  {r.subtitle && <span className="block text-[11px] text-muted-foreground truncate mt-0.5"><bdi>{r.subtitle}</bdi></span>}
                 </span>
                 {r.meta && <span className="text-xs font-semibold tabular-nums whitespace-nowrap" dir="ltr">{r.meta}</span>}
                 {r.badge && <Badge {...r.badge} />}
@@ -116,7 +116,7 @@ export function CardView({ card, isRtl }: { card: AiCard; isRtl: boolean }) {
                   <div className="flex items-center gap-2 px-3 py-2">
                     {inner}
                     <a href={href} target="_blank" rel="noopener noreferrer"
-                      className="inline-flex items-center gap-1 h-7 px-2.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-[11px] font-semibold flex-shrink-0 transition-colors">
+                      className="inline-flex items-center gap-1 h-9 sm:h-7 px-3 sm:px-2.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs sm:text-[11px] font-semibold flex-shrink-0 transition-colors active:scale-[0.97]">
                       <Download className="w-3.5 h-3.5" />تحميل
                     </a>
                   </div>
@@ -140,8 +140,8 @@ export function CardView({ card, isRtl }: { card: AiCard; isRtl: boolean }) {
       <div className="flex items-start gap-2">
         <div className="min-w-0 flex-1">
           <p className="text-[11px] font-medium text-muted-foreground">{card.kind}</p>
-          <p className="text-sm font-bold leading-snug mt-0.5 break-words">{card.title}</p>
-          {card.subtitle && <p className="text-xs text-muted-foreground mt-0.5 break-words">{card.subtitle}</p>}
+          <p className="text-sm font-bold leading-snug mt-0.5 break-words"><bdi>{card.title}</bdi></p>
+          {card.subtitle && <p className="text-xs text-muted-foreground mt-0.5 break-words"><bdi>{card.subtitle}</bdi></p>}
         </div>
         {card.badge && <Badge {...card.badge} />}
       </div>
@@ -151,14 +151,18 @@ export function CardView({ card, isRtl }: { card: AiCard; isRtl: boolean }) {
           {card.fields.map((f, i) => (
             <div key={i} className="min-w-0">
               <dt className="text-muted-foreground text-[11px]">{f.label}</dt>
-              <dd className="font-medium truncate" title={f.value}>{f.value}</dd>
+              <dd className="font-medium truncate" title={f.value}><bdi>{f.value}</bdi></dd>
             </div>
           ))}
         </dl>
       )}
       {card.actions && card.actions.length > 0 && (
-        <div className="flex flex-wrap gap-1.5 mt-3">
-          {card.actions.map((a, i) => <ActionButton key={i} a={a} isRtl={isRtl} />)}
+        <div className="grid grid-cols-2 gap-1.5 mt-3">
+          {card.actions.map((a, i, all) => (
+            <div key={i} className={all.length % 2 === 1 && i === all.length - 1 ? 'col-span-2' : ''}>
+              <ActionButton a={a} isRtl={isRtl} />
+            </div>
+          ))}
         </div>
       )}
     </div>

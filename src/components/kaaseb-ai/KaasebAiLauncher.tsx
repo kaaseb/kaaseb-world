@@ -41,7 +41,6 @@ export function KaasebAiLauncher({ firstName, stacked }: { firstName: string; st
           title={label}
         >
           <Sparkles className="w-6 h-6" />
-          <span className="absolute -top-1 -end-1 w-3 h-3 rounded-full bg-sky-400 ring-2 ring-background" />
         </button>
       )}
       {everOpened && (
