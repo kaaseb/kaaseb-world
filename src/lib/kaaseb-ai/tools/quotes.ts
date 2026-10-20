@@ -27,6 +27,16 @@ export const FURN_STATUS: Record<string, string> = {
   pending: 'قيد الانتظار', in_progress: 'قيد التنفيذ', completed: 'مكتمل', rejected: 'مرفوض', archived: 'مؤرشف',
 }
 
+/** An item's custom-column values by column NAME (admin columns marked). */
+function customValues(q: ManualQuote, i: ManualQuote['items'][number]): Record<string, string> | undefined {
+  const out: Record<string, string> = {}
+  for (const c of q.columns || []) {
+    const v = String(i.custom?.[c.id] ?? '').trim()
+    if (v) out[c.internal ? `${c.name} (للإدارة)` : c.name] = v.slice(0, 300)
+  }
+  return Object.keys(out).length ? out : undefined
+}
+
 function quoteTitle(q: ManualQuote) {
   return q.subject || q.project_name || q.company || q.client_name || 'بدون عنوان'
 }
@@ -131,12 +141,15 @@ const manualGet: AiTool = {
       email: q.email, phone: q.phone, currency: q.currency, language: q.language,
       totals: t, vat_rate: q.vat_rate, delivery: q.delivery, notes: q.notes?.slice(0, 600),
       created: q.createdAt, updated: q.updatedAt, by: q.createdByName,
-      items: q.items.slice(0, 80).map((i, n) => ({
+      // Management-only columns are named "(للإدارة)" so the model can say so.
+      columns: (q.columns || []).map((c) => (c.internal ? `${c.name} (للإدارة)` : c.name)),
+      items: q.items.slice(0, 150).map((i, n) => ({
         n: n + 1, description: i.description, details: i.details, quantity: i.quantity, unit: i.unit,
         unit_price: i.unit_price, total: (Number(i.quantity) || 0) * (Number(i.unit_price) || 0),
-        notes: i.notes, admin_notes: i.adminNotes,
+        notes: i.notes || undefined, admin_notes: i.adminNotes || undefined,
+        columns: customValues(q, i),
       })),
-      items_truncated: q.items.length > 80,
+      items_truncated: q.items.length > 150,
     }
   },
 }
@@ -218,7 +231,8 @@ const furnGet: AiTool = {
     const { data: p } = await query.maybeSingle()
     if (!p) return { error: 'ما لقيت مشروع فرن بهذا الرقم.' }
     const [{ data: items }, { data: quotations }] = await Promise.all([
-      ctx.supabase.from('furn_items').select('description, quantity, unit, unit_price').eq('project_id', p.id).order('position').limit(1000),
+      // select('*'): the same read the Furn page does — no guessing at live columns.
+      ctx.supabase.from('furn_items').select('*').eq('project_id', p.id).order('position').limit(1000),
       ctx.supabase.from('furn_quotations').select('*').eq('project_id', p.id).order('generated_at', { ascending: false }).limit(10),
     ])
     const its = items || []
@@ -269,7 +283,11 @@ const furnGet: AiTool = {
       items: its.length, priced, unpriced: its.length - priced,
       files: files.map((f) => ({ name: f.name, kind: f.kind })),
       quotations: (quotations || []).map((x) => ({ number: x.quotation_number, language: x.language, total: x.total, date: String(x.generated_at || '').slice(0, 10) })),
-      sample_items: its.slice(0, 30).map((i) => ({ description: i.description, quantity: i.quantity, unit: i.unit, unit_price: i.unit_price })),
+      items_list: its.slice(0, 150).map((i, n) => ({
+        n: n + 1, description: i.description, details: i.details || undefined, quantity: i.quantity, unit: i.unit,
+        unit_price: i.unit_price, team_notes: i.notes || undefined,
+      })),
+      items_truncated: its.length > 150,
     }
   },
 }
@@ -322,4 +340,78 @@ const tannoorList: AiTool = {
   },
 }
 
-export const QUOTE_TOOLS: AiTool[] = [manualList, manualGet, furnList, furnGet, tannoorList]
+// ── line items across every quote ────────────────────────────────────────────
+const itemsSearch: AiTool = {
+  name: 'items_search',
+  description: 'Find LINE ITEMS (بنود) across every manual quote and Furn project by text in the description, details, team notes, MANAGEMENT notes (ملاحظات الإدارة) and management-only columns (e.g. سعر الشراء). Use for "أي عرض فيه بند…", "وش ملاحظة الإدارة على بند…", "بكم سعّرنا…".',
+  parameters: {
+    type: 'object',
+    properties: {
+      query: { type: 'string', description: 'Item text; send both spellings with | (e.g. "كرارا|carrara").' },
+      limit: { type: 'integer', description: '1-25, default 10.' },
+    },
+    required: ['query'],
+  },
+  perms: ['page.furn'],
+  status: 'يبحث في البنود…',
+  async run(args, ctx) {
+    const q = str(args.query)
+    if (!q) return { error: 'وش البند اللي أدور عليه؟' }
+    const limit = int(args.limit, 10, 1, 25)
+    type Hit = { source: string; ref: string; href: string; description: string; details?: string; quantity: unknown; unit: string; unit_price: unknown; notes?: string; admin_notes?: string; columns?: Record<string, string>; date: string }
+    const hits: Hit[] = []
+
+    for (const x of await listManualQuotes()) {
+      for (const i of x.items || []) {
+        const cols = customValues(x, i)
+        if (!matches(q, i.description, i.details, i.notes, i.adminNotes, cols && Object.values(cols).join(' '))) continue
+        hits.push({
+          source: 'عرض يدوي', ref: `#${x.number} · ${quoteTitle(x)}`, href: `/manual-quotes/${x.id}`,
+          description: i.description, details: i.details || undefined, quantity: i.quantity, unit: i.unit, unit_price: i.unit_price,
+          notes: i.notes || undefined, admin_notes: i.adminNotes || undefined, columns: cols, date: x.createdAt,
+        })
+      }
+    }
+
+    const { data: furnItems } = await ctx.supabase.from('furn_items').select('*')
+      .or(ilikeOr(['description', 'details', 'notes'], likeSafe(q))).limit(60)
+    const ids = [...new Set((furnItems || []).map((i) => i.project_id as string))]
+    const { data: projects } = ids.length
+      ? await ctx.supabase.from('furn_projects').select('id, project_number, project_name, created_at').in('id', ids)
+      : { data: [] as Array<{ id: string; project_number: number; project_name: string; created_at: string }> }
+    const byId = new Map((projects || []).map((p) => [p.id, p]))
+    for (const i of furnItems || []) {
+      const p = byId.get(i.project_id)
+      if (!p) continue
+      hits.push({
+        source: 'الفرن', ref: `#${p.project_number} · ${p.project_name}`, href: `/furn/${p.id}`,
+        description: i.description, details: i.details || undefined, quantity: i.quantity, unit: i.unit, unit_price: i.unit_price,
+        notes: i.notes || undefined, date: p.created_at,
+      })
+    }
+
+    hits.sort((a, b) => String(b.date).localeCompare(String(a.date)))
+    const shown = hits.slice(0, limit)
+    const ref = shown.length
+      ? ctx.card({
+          type: 'list', title: `بنود «${q.split('|')[0].slice(0, 30)}»`, total: hits.length,
+          rows: shown.map((h) => ({
+            title: h.description,
+            subtitle: [h.ref, h.admin_notes ? `ملاحظة الإدارة: ${h.admin_notes}` : ''].filter(Boolean).join(' · '),
+            meta: h.unit_price != null && h.unit_price !== '' ? `${h.unit_price} / ${h.unit}` : undefined,
+            badge: { label: h.source, tone: (h.source === 'الفرن' ? 'violet' : 'blue') as Tone },
+            href: h.href,
+          })),
+        })
+      : null
+    return {
+      card: ref, count: hits.length,
+      items: shown.map((h) => ({
+        source: h.source, quote_or_project: h.ref, description: h.description, details: h.details, quantity: h.quantity, unit: h.unit,
+        unit_price: h.unit_price, notes: h.notes, admin_notes: h.admin_notes, columns: h.columns, date: String(h.date).slice(0, 10),
+      })),
+    }
+  },
+}
+
+export const QUOTE_TOOLS: AiTool[] = [manualList, manualGet, itemsSearch, furnList, furnGet, tannoorList]
