@@ -89,6 +89,8 @@ export async function POST(request: Request) {
           supabase, user, profile, permissions,
           history: [...toHistory(past), { role: 'user', content: message }],
           conversationId: convId,
+          shownKinds: past.flatMap((m) => (m.cards || []).flatMap((c) => (c.type === 'record' ? [c.kind] : []))),
+          userMessage: message,
           onStatus: (s) => send({ t: 'status', text: s }),
         })
         const reply: AiMessage = {

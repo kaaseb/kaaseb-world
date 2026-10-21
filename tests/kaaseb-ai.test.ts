@@ -3,7 +3,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { availableTools, placeCards, ALL_TOOLS } from '@/lib/kaaseb-ai/engine'
+import { availableTools, placeCards, ALL_TOOLS, WANTS_CARD } from '@/lib/kaaseb-ai/engine'
 import { safeHref, renderableHref, bilingual, isAppPage, type AiCard } from '@/lib/kaaseb-ai/cards'
 import { matches, likeSafe, int, toEnd, ilikeOr } from '@/lib/kaaseb-ai/tool'
 import { isConversationId } from '@/lib/kaaseb-ai/store'
@@ -64,7 +64,8 @@ test('downloads offer عربي / English; a missing language is simply not offer
 })
 
 test('cards: only referenced, known, unique refs are kept; never re-sent on their own', () => {
-  const card = (ref: string): AiCard => ({ type: 'record', ref, kind: 'k', title: ref })
+  // List cards: the "first time a record comes up" rule is tested separately below.
+  const card = (ref: string): AiCard => ({ type: 'list', ref, title: ref, rows: [] })
   const cards = new Map([['c1', card('c1')], ['c2', card('c2')], ['c3', card('c3')]])
   const a = placeCards('هذا العرض\n[[card:c2]]\n[[card:c9]]\n[[ card : c2 ]]', cards, ['c3'])
   assert.deepEqual(a.cards.map((c) => c.ref), ['c2'])
@@ -116,4 +117,46 @@ test('conversation ids cannot be used to walk the bucket', () => {
   assert.ok(isConversationId('0123456789abcdef0123'))
   assert.ok(!isConversationId('../index'))
   assert.ok(!isConversationId('0123456789abcdef0123/../../x'))
+})
+
+// ── the owner's rule: card once, then just answers ───────────────────────────
+const quoteCard = (ref: string, n = 172): AiCard => ({ type: 'record', ref, kind: `عرض سعر يدوي #${n}`, title: 'ابو عبدالرحمن' })
+const itemsText = 'فيه بند واحد:\n- **رخام مقدوني يوناني** — 100 م² — 300'
+
+test('first time a quote comes up: its card leads, the answer follows', () => {
+  const cards = new Map([['c1', quoteCard('c1')]])
+  const r = placeCards(itemsText, cards, ['c1'], { shownKinds: [] })
+  assert.deepEqual(r.cards.map((c) => c.ref), ['c1'])
+  assert.ok(r.text.startsWith('[[card:c1]]'))
+  assert.ok(r.text.includes('رخام مقدوني يوناني'))
+})
+
+test('same quote again in the conversation: no card, even if the model places it', () => {
+  const cards = new Map([['c1', quoteCard('c1')]])
+  const r = placeCards(`[[card:c1]]\n${itemsText}`, cards, ['c1'], { shownKinds: ['عرض سعر يدوي #172'] })
+  assert.deepEqual(r.cards, [])
+  assert.ok(!r.text.includes('[[card:'))
+})
+
+test('…unless the user asks for it (download / open / edit / send)', () => {
+  const cards = new Map([['c1', quoteCard('c1')]])
+  const r = placeCards('تفضل:\n[[card:c1]]', cards, ['c1'], { shownKinds: ['عرض سعر يدوي #172'], wantsCard: true })
+  assert.deepEqual(r.cards.map((c) => c.ref), ['c1'])
+})
+
+test('a different quote in the same conversation still gets its card once', () => {
+  const cards = new Map([['c1', quoteCard('c1', 168)]])
+  const r = placeCards('هذا عرض 168', cards, ['c1'], { shownKinds: ['عرض سعر يدوي #172'] })
+  assert.deepEqual(r.cards.map((c) => c.ref), ['c1'])
+})
+
+test('an edit proposal is not crowded by the quote card', () => {
+  const cards = new Map<string, AiCard>([['c1', quoteCard('c1')], ['c2', { type: 'confirm', ref: 'c2', actionId: 'x', title: 'تعديل', lines: [] }]])
+  const r = placeCards('راجع التعديل واضغط تأكيد\n[[card:c2]]', cards, ['c2'], { shownKinds: [] })
+  assert.deepEqual(r.cards.map((c) => c.ref), ['c2'])
+})
+
+test('what counts as asking for the card itself', () => {
+  for (const yes of ['حمّل عرض 172', 'ارسلي pdf', 'ابي الإكسل', 'افتح العرض', 'عدل السعر', 'send it']) assert.ok(WANTS_CARD.test(yes), yes)
+  for (const no of ['وش البنود؟', 'وش طلب؟', 'كم الإجمالي؟', 'مين العميل']) assert.ok(!WANTS_CARD.test(no), no)
 })

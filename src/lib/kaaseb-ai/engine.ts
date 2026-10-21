@@ -51,6 +51,10 @@ export interface TurnInput {
   permissions: string[]
   history: ChatTurn[]
   conversationId: string
+  /** Record cards (by their kind line, e.g. "عرض سعر يدوي #172") already shown in this conversation. */
+  shownKinds: string[]
+  /** The user's message — tells whether they asked for the card itself. */
+  userMessage: string
   onStatus: (text: string) => void
 }
 
@@ -108,10 +112,11 @@ function systemPrompt(profile: Profile, email: string | undefined, permissions: 
 - بعد الفتح يُعاد سؤاله تلقائياً.
 - كل أداة ترجع "card" (ومرات "items_card" أو "files_card" أو "list_card" أو "attachments_card") = مرجع بطاقة. البطاقة تظهر فقط إذا كتبت [[card:المرجع]] في سطر لحاله — ما تظهر تلقائياً.
 - اختر البطاقة حسب السؤال:
-  • يطلب العرض/المشروع نفسه، أو تحميله، أو فتحه، أو تعديله → "card".
-  • يسأل عن البنود/المحتوى/وش طلب → اكتب البنود في النص كنقاط: **الوصف** — الكمية الوحدة — السعر (والتفاصيل المهمة باختصار). لو أكثر من 8 بنود اعرض "items_card" بدل سردها.
+  • يطلب عرض/مشروع (بالاسم أو الرقم) → اعرض بطاقته مباشرة. إذا رجع البحث single_match فهو العرض نفسه.
+  • يسأل عن البنود/المحتوى/وش طلب → اكتب البنود في النص كنقاط: **الوصف** — الكمية الوحدة — السعر (والتفاصيل المهمة باختصار). لو أكثر من 8 بنود ضع "items_card".
   • يسأل عن الملفات → "files_card".
-- لا تعيد بطاقة سجل عرضتها في رد سابق من نفس المحادثة (مذكور في السجل «عُرضت بطاقات: …») إلا إذا طلبها صراحة (تحميل، فتح، تعديل، «أرسلها»).
+- أول مرة يُذكر فيها عرض/مشروع في المحادثة، النظام يضع بطاقته أول الرد تلقائياً — أنت اكتب الجواب بعده مباشرة (بدون «هذي البطاقة»).
+- already_shown_cards = بطاقات عرضتها قبل في نفس المحادثة: لا تضعها مرة ثانية إلا إذا طلب تحميل/فتح/تعديل/إرسال — جاوب بالكلام فقط.
 - أزرار التحميل والتعديل موجودة داخل البطاقات — لا تكتب روابط بنفسك أبداً.
 - ملاحظات الإدارة (admin_notes) والأعمدة المعلّمة «(للإدارة)» مسموحة لهذا المستخدم: أجب عنها عادي إذا سأل، وقل إنها «للإدارة فقط ولا تظهر للعميل».
 - سؤال عن بند معيّن («وش ملاحظة الإدارة على بند…»، «أي عرض فيه…»، «بكم سعّرنا…»): استخدم items_search.
@@ -179,6 +184,9 @@ export async function runTurn(input: TurnInput): Promise<TurnResult> {
         if (out && typeof out === 'object') {
           const refs = CARD_KEYS.map((k) => (out as Record<string, unknown>)[k]).filter((v): v is string => typeof v === 'string')
           if (refs.length) lastCallRefs = refs
+          // Tell the model which of these it already showed in this conversation.
+          const seen = refs.filter((r) => { const c = cards.get(r); return c?.type === 'record' && input.shownKinds.includes(c.kind) })
+          if (seen.length) (out as Record<string, unknown>).already_shown_cards = seen
         }
         // An empty result nudges a second attempt instead of an early "not found".
         if (out && typeof out === 'object' && (out as { count?: unknown }).count === 0) {
@@ -193,17 +201,41 @@ export async function runTurn(input: TurnInput): Promise<TurnResult> {
     },
   })
 
-  return placeCards(text || '', cards, lastCallRefs)
+  return placeCards(text || '', cards, lastCallRefs, { shownKinds: input.shownKinds, wantsCard: WANTS_CARD.test(input.userMessage) })
 }
+
+/** The user asked for the card itself (download / open / edit / send it). */
+export const WANTS_CARD = /(حمل|حمّل|تحميل|نزل|نزّل|ارسل|أرسل|ابعث|افتح|فتح|عدل|عدّل|تعديل|pdf|بي دي اف|اكسل|إكسل|excel|كارد|بطاق|card|download|open|edit|send)/i
 
 /** Keep only cards the model referenced (unknown / repeated markers are
  *  dropped). Nothing is attached on its own unless the reply has no text. */
-export function placeCards(text: string, cards: Map<string, AiCard>, lastCallRefs: string[]): TurnResult {
+export function placeCards(
+  text: string,
+  cards: Map<string, AiCard>,
+  lastCallRefs: string[],
+  opts: { shownKinds?: string[]; wantsCard?: boolean } = {},
+): TurnResult {
+  const shown = new Set(opts.shownKinds || [])
+  const isRecord = (c: AiCard | undefined): c is Extract<AiCard, { type: 'record' }> => c?.type === 'record'
   const used: string[] = []
-  const clean = text.replace(/\[\[\s*card\s*:\s*([\w-]+)\s*\]\]/gi, (_m, ref: string) => {
-    if (cards.has(ref) && !used.includes(ref)) { used.push(ref); return `[[card:${ref}]]` }
-    return ''
+  let clean = text.replace(/\[\[\s*card\s*:\s*([\w-]+)\s*\]\]/gi, (_m, ref: string) => {
+    const c = cards.get(ref)
+    if (!c || used.includes(ref)) return ''
+    // A record card already shown in this conversation is not sent again —
+    // unless the user asked for it (download / open / edit / send).
+    if (isRecord(c) && shown.has(c.kind) && !opts.wantsCard) return ''
+    used.push(ref)
+    return `[[card:${ref}]]`
   }).replace(/\n{3,}/g, '\n\n').trim()
+  // The first time a record comes up in the conversation, its card leads the
+  // reply (then the answer — e.g. its lines). Only when the turn opened exactly
+  // one record, and the model didn't place a record card itself.
+  const fresh = [...new Map([...cards.values()].filter(isRecord).filter((c) => !shown.has(c.kind)).map((c) => [c.kind, c])).values()]
+  const decisionCard = [...cards.values()].some((c) => c.type === 'confirm' || c.type === 'unlock')
+  if (fresh.length === 1 && !decisionCard && !used.some((r) => isRecord(cards.get(r)))) {
+    used.unshift(fresh[0].ref)
+    clean = `[[card:${fresh[0].ref}]]\n${clean}`.trim()
+  }
   // Cards appear only where the model placed them. The old fallback (attach the
   // last call's cards) re-sent the same quote card under every follow-up
   // question; it now only rescues a reply that has no words at all.

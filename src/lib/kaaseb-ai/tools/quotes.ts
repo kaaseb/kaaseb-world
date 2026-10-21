@@ -92,6 +92,12 @@ const manualList: AiTool = {
       inRange(x.createdAt, from, to) &&
       (!q || String(x.number) === q.replace(/^#/, '') || matches(q, x.subject, x.project_name, x.company, x.client_name, x.createdByName, x.email, x.items?.map((i) => i.description).join(' '))),
     )
+    // Exactly one match = the user named a quote → open it (its card + lines),
+    // not a one-row list they must click through.
+    if (hits.length === 1) {
+      const one = (await manualGet.run({ id: hits[0].id }, ctx)) as Record<string, unknown>
+      return { ...one, count: 1, single_match: true }
+    }
     const rows = hits.map((x) => ({ x, t: quoteTotals(x) }))
     const sum = (cur: string) => rows.filter((r) => r.x.currency === cur).reduce((n, r) => n + r.t.total, 0)
     const shown = rows.slice(0, limit)
