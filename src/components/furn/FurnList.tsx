@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
@@ -9,6 +9,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Pagination, usePagination } from '@/components/ui/pagination'
 import { toast } from 'sonner'
 import { useLanguage } from '@/contexts/LanguageContext'
+import { InlineRename, type RenameField } from '@/components/ui/inline-rename'
 import {
   Flame, Plus, Search, Eye, Trash2, FileText, AlertCircle, CheckCircle2, Clock3, Loader2,
 } from 'lucide-react'
@@ -54,7 +55,8 @@ const STATUS_ICONS: Record<FurnStatus, typeof Clock3> = {
 }
 
 export function FurnList({ initialProjects, canCreate, canDelete }: Props) {
-  const { t, isRtl } = useLanguage()
+  const { t, isRtl, lang } = useLanguage()
+  const ar = lang === 'ar'
   const router = useRouter()
   const [projects, setProjects] = useState<FurnProject[]>(initialProjects)
   const [stageFilter, setStageFilter] = useState<FurnStage | ''>('')
@@ -62,6 +64,43 @@ export function FurnList({ initialProjects, canCreate, canDelete }: Props) {
   const [search, setSearch] = useState('')
   const [deleting, setDeleting] = useState<string | null>(null)
   const [page, setPage] = useState(1)
+
+  // Quick rename. The quotation prints the name in ITS language, so both names
+  // are edited together (the same bilingual store the project page uses) —
+  // changing only the row's single value would leave the other PDF stale.
+  const namesCache = useRef<Record<string, { names: Record<string, { ar: string; en: string }>; engineer_phone: string }>>({})
+  async function loadNames(id: string): Promise<RenameField[]> {
+    const r = await fetch(`/api/furn/projects/${id}/names`)
+    const j = await r.json()
+    if (!r.ok) throw new Error(j.error)
+    namesCache.current[id] = j
+    return [
+      { key: 'project_ar', label: ar ? 'اسم المشروع (عربي)' : 'Project name (Arabic)', value: j.names?.project?.ar || '', dir: 'rtl' },
+      { key: 'project_en', label: ar ? 'اسم المشروع (English)' : 'Project name (English)', value: j.names?.project?.en || '', dir: 'ltr' },
+    ]
+  }
+  async function renameProject(id: string, v: Record<string, string>): Promise<string | null> {
+    if (!v.project_ar && !v.project_en) return ar ? 'اكتب الاسم بإحدى اللغتين على الأقل' : 'Enter a name in at least one language'
+    const cur = namesCache.current[id]
+    if (!cur) return ar ? 'أعد فتح التعديل' : 'Reopen the editor'
+    try {
+      const res = await fetch(`/api/furn/projects/${id}/names`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        // Company / engineer / phone are sent back unchanged — the route replaces the whole set.
+        body: JSON.stringify({
+          project_ar: v.project_ar, project_en: v.project_en,
+          company_ar: cur.names.company?.ar || '', company_en: cur.names.company?.en || '',
+          engineer_ar: cur.names.engineer?.ar || '', engineer_en: cur.names.engineer?.en || '',
+          engineer_phone: cur.engineer_phone || '',
+        }),
+      })
+      const j = await res.json().catch(() => ({}))
+      if (!res.ok || !j.project) return j.error || (ar ? 'فشل الحفظ' : 'Save failed')
+      setProjects((l) => l.map((x) => (x.id === id ? { ...x, project_name: j.project.project_name } : x)))
+      toast.success(ar ? 'تم تغيير الاسم ✓' : 'Renamed ✓')
+      return null
+    } catch { return ar ? 'تعذّر الاتصال' : 'Connection failed' }
+  }
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase()
@@ -204,9 +243,19 @@ export function FurnList({ initialProjects, canCreate, canDelete }: Props) {
                           </span>
                         </td>
                         <td className="px-4 py-3 font-medium text-foreground">
-                          <Link href={`/furn/${p.id}`} className="hover:underline">
-                            {p.project_name}
-                          </Link>
+                          <span className="inline-flex items-center gap-1">
+                            <Link href={`/furn/${p.id}`} className="hover:underline">
+                              {p.project_name}
+                            </Link>
+                            {canCreate && (
+                              <InlineRename
+                                ar={ar}
+                                title={ar ? 'تعديل الاسم' : 'Rename'}
+                                load={() => loadNames(p.id)}
+                                onSave={(v) => renameProject(p.id, v)}
+                              />
+                            )}
+                          </span>
                           {p.subject && <p className="text-xs text-muted-foreground mt-0.5">{p.subject}</p>}
                         </td>
                         <td className="px-4 py-3 text-foreground/80">{p.company_name}</td>

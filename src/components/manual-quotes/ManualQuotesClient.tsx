@@ -12,6 +12,7 @@ import { useLanguage } from '@/contexts/LanguageContext'
 import { computeTotals } from '@/lib/quotation/totals'
 import type { ManualQuote } from '@/lib/manual-quotes/store'
 import { DuplicateQuoteButton } from './DuplicateQuoteDialog'
+import { InlineRename } from '@/components/ui/inline-rename'
 
 // Same totals function as the editor and the PDF (delivery line included).
 function quoteTotal(q: ManualQuote): number {
@@ -23,7 +24,7 @@ export function ManualQuotesClient({ initialQuotes }: { initialQuotes: ManualQuo
   const { isRtl, lang } = useLanguage()
   const ar = lang === 'ar'
   const router = useRouter()
-  const quotes = initialQuotes
+  const [quotes, setQuotes] = useState<ManualQuote[]>(initialQuotes)
   const [creating, setCreating] = useState(false)
   const [search, setSearch] = useState('')
 
@@ -43,6 +44,18 @@ export function ManualQuotesClient({ initialQuotes }: { initialQuotes: ManualQuo
       if (!res.ok || !j.quote) { toast.error(j.error || 'فشل الإنشاء'); return }
       router.push(`/manual-quotes/${j.quote.id}`)
     } catch { toast.error('فشل الإنشاء') } finally { setCreating(false) }
+  }
+
+  // Quick rename from the list — the quote's name is its subject (recorded in its history).
+  async function rename(id: string, subject: string): Promise<string | null> {
+    try {
+      const res = await fetch(`/api/manual-quotes/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ subject }) })
+      const j = await res.json().catch(() => ({}))
+      if (!res.ok || !j.quote) return j.error || (ar ? 'فشل الحفظ' : 'Save failed')
+      setQuotes((l) => l.map((x) => (x.id === id ? { ...x, subject: j.quote.subject } : x)))
+      toast.success(ar ? 'تم تغيير الاسم ✓' : 'Renamed ✓')
+      return null
+    } catch { return ar ? 'تعذّر الاتصال' : 'Connection failed' }
   }
 
   const fmt = (iso: string) => { const d = new Date(iso); return Number.isNaN(d.getTime()) ? '' : d.toLocaleDateString(ar ? 'ar-SA' : 'en-GB', { dateStyle: 'medium' }) }
@@ -99,13 +112,26 @@ export function ManualQuotesClient({ initialQuotes }: { initialQuotes: ManualQuo
           {filtered.map((q) => (
             <Card key={q.id} className="hover:bg-muted/30 transition-colors">
               <CardContent className="p-3 flex items-center gap-3">
-                <button onClick={() => router.push(`/manual-quotes/${q.id}`)} className="flex-1 min-w-0 text-start flex items-center gap-3">
+                <div
+                  role="link" tabIndex={0}
+                  onClick={() => router.push(`/manual-quotes/${q.id}`)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') router.push(`/manual-quotes/${q.id}`) }}
+                  className="flex-1 min-w-0 text-start flex items-center gap-3 cursor-pointer"
+                >
                   <span className="inline-flex items-center justify-center min-w-12 h-8 px-2 rounded-lg bg-teal-50 text-teal-700 font-bold text-sm">#{q.number}</span>
                   <span className="min-w-0">
-                    <span className="block text-sm font-medium text-gray-900 truncate">{q.subject || q.company || q.client_name || (ar ? '(بلا اسم)' : '(untitled)')}</span>
+                    <span className="flex items-center gap-1 min-w-0">
+                      <span className="text-sm font-medium text-gray-900 truncate">{q.subject || q.company || q.client_name || (ar ? '(بلا اسم)' : '(untitled)')}</span>
+                      <InlineRename
+                        ar={ar}
+                        title={ar ? 'تعديل الاسم' : 'Rename'}
+                        load={() => [{ key: 'subject', label: ar ? 'اسم العرض' : 'Quote name', value: q.subject || '', placeholder: q.company || q.client_name || '' }]}
+                        onSave={(v) => rename(q.id, v.subject)}
+                      />
+                    </span>
                     <span className="block text-xs text-muted-foreground truncate">{q.items.length} {ar ? 'بند' : 'items'} · {fmt(q.createdAt)}</span>
                   </span>
-                </button>
+                </div>
                 <span className="text-sm font-semibold tabular-nums whitespace-nowrap">
                   {quoteTotal(q).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {q.currency}
                 </span>
