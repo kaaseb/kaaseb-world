@@ -63,15 +63,20 @@ test('downloads offer عربي / English; a missing language is simply not offer
   assert.equal(bilingual('x', 'javascript:alert(1)', null), null)
 })
 
-test('cards: only referenced, known, unique refs are kept; fallback to the last call', () => {
+test('cards: only referenced, known, unique refs are kept; never re-sent on their own', () => {
   const card = (ref: string): AiCard => ({ type: 'record', ref, kind: 'k', title: ref })
   const cards = new Map([['c1', card('c1')], ['c2', card('c2')], ['c3', card('c3')]])
   const a = placeCards('هذا العرض\n[[card:c2]]\n[[card:c9]]\n[[ card : c2 ]]', cards, ['c3'])
   assert.deepEqual(a.cards.map((c) => c.ref), ['c2'])
   assert.ok(!a.text.includes('c9'))
   assert.equal(a.text.match(/\[\[card:c2\]\]/g)?.length, 1)
-  const b = placeCards('تفضل', cards, ['c3', 'c1'])
-  assert.deepEqual(b.cards.map((c) => c.ref), ['c3', 'c1'])
+  // A reply with words but no card marker shows NO card (it used to re-send the
+  // last card under every follow-up question).
+  const b = placeCards('فيه بند واحد: رخام مقدوني يوناني — 100 م² — 300', cards, ['c3', 'c1'])
+  assert.deepEqual(b.cards, [])
+  // Only a reply with no words at all falls back to the last data call.
+  const c = placeCards('', cards, ['c3', 'c1'])
+  assert.deepEqual(c.cards.map((x) => x.ref), ['c3', 'c1'])
 })
 
 test('argument hygiene', () => {

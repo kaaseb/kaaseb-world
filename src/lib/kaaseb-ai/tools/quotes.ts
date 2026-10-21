@@ -142,8 +142,20 @@ const manualGet: AiTool = {
     if (!q) return { error: 'ما لقيت عرض يدوي بهذا الرقم.' }
     const t = quoteTotals(q)
     const ref = ctx.card(quoteCard(q))
+    // The lines themselves — for "وش البنود؟" when there are too many to list in words.
+    const itemsRef = q.items.length
+      ? ctx.card({
+          type: 'list', title: `بنود عرض #${q.number}`, total: q.items.length,
+          rows: q.items.slice(0, 40).map((i, n) => ({
+            title: `${n + 1}. ${i.description || '—'}`,
+            subtitle: [i.details, i.notes].filter(Boolean).join(' · ') || undefined,
+            meta: `${i.quantity} ${i.unit}${i.unit_price != null ? ` × ${i.unit_price}` : ''}`,
+          })),
+          more: q.items.length > 40 ? { label: 'كل البنود في صفحة العرض', href: `/manual-quotes/${q.id}` } : undefined,
+        })
+      : null
     return {
-      card: ref,
+      card: ref, items_card: itemsRef,
       number: q.number, title: quoteTitle(q), project: q.project_name, company: q.company, client: q.client_name,
       email: q.email, phone: q.phone, currency: q.currency, language: q.language,
       totals: t, vat_rate: q.vat_rate, delivery: q.delivery, notes: q.notes?.slice(0, 600),
@@ -283,8 +295,20 @@ const furnGet: AiTool = {
           rows: files.slice(0, 15).map((f) => ({ title: f.name, subtitle: f.kind, href: isAppOwnedUrl(f.url) ? f.url : undefined })),
         })
       : null
+    const itemsRef = its.length
+      ? ctx.card({
+          type: 'list', title: `بنود مشروع الفرن #${p.project_number}`, total: its.length,
+          rows: its.slice(0, 40).map((i, n) => ({
+            title: `${n + 1}. ${i.description || '—'}`,
+            subtitle: i.details ? String(i.details).slice(0, 120) : undefined,
+            meta: `${i.quantity} ${i.unit}${Number(i.unit_price) > 0 ? ` × ${i.unit_price}` : ''}`,
+            badge: Number(i.unit_price) > 0 ? undefined : { label: 'بدون سعر', tone: 'amber' as Tone },
+          })),
+          more: its.length > 40 ? { label: 'كل البنود في صفحة المشروع', href: `/furn/${p.id}` } : undefined,
+        })
+      : null
     return {
-      card: ref, files_card: filesRef,
+      card: ref, items_card: itemsRef, files_card: filesRef,
       number: p.project_number, name: p.project_name, company: p.company_name, engineer: p.engineer_name,
       stage: p.stage, status: p.status, ai_error: p.ai_error ? String(p.ai_error).slice(0, 400) : null,
       items: its.length, priced, unpriced: its.length - priced,

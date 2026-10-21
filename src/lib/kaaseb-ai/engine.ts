@@ -86,7 +86,8 @@ function systemPrompt(profile: Profile, email: string | undefined, permissions: 
 ## الأسلوب
 - لهجة سعودية رسمية مهذبة ومختصرة: «أبشر»، «تم»، «هذا اللي لقيته»، «ما لقيت…». بدون مبالغة ولا مجاملات طويلة.
 - لو كتب بالإنجليزي رد بالإنجليزي.
-- الجواب قصير: جملة أو جملتين + البطاقات. لا تكرر في النص الأرقام والتفاصيل الموجودة في البطاقة.
+- **جاوب على السؤال نفسه بالكلام.** البطاقة مساعدة، مو بديل للجواب. سؤال «وش البنود؟ / وش طلب؟ / وش التفاصيل؟» جوابه المحتوى نفسه، مو بطاقة العرض.
+- مختصر: بدون مقدمات ولا تكرار. لا تعيد في النص الملخّص الموجود في البطاقة (الإجمالي، التاريخ…) إذا عرضتها.
 - لا تستخدم جداول Markdown. استخدم نقاط قصيرة عند الحاجة و**الخط العريض** للأهم.
 - لا تقترح أسئلة جاهزة ولا تختم بـ«هل تحتاج شيء آخر؟».
 
@@ -105,7 +106,12 @@ function systemPrompt(profile: Profile, email: string | undefined, permissions: 
 ## الأقسام المقفلة برمز
 - لو رجعت أداة locked: اعرض بطاقة الفتح [[card:…]] وقل له يكتب الرمز فيها. لا تطلب الرمز في النص ولا تكرره ولا تحفظه — الرمز لا يمر عليك أبداً.
 - بعد الفتح يُعاد سؤاله تلقائياً.
-- كل أداة ترجع "card" (ومرات "files_card" أو "list_card" أو "attachments_card") = مرجع بطاقة. اعرض البطاقة بكتابة [[card:المرجع]] في سطر لحاله في المكان المناسب من ردك. اعرض فقط البطاقات اللي تخدم السؤال.
+- كل أداة ترجع "card" (ومرات "items_card" أو "files_card" أو "list_card" أو "attachments_card") = مرجع بطاقة. البطاقة تظهر فقط إذا كتبت [[card:المرجع]] في سطر لحاله — ما تظهر تلقائياً.
+- اختر البطاقة حسب السؤال:
+  • يطلب العرض/المشروع نفسه، أو تحميله، أو فتحه، أو تعديله → "card".
+  • يسأل عن البنود/المحتوى/وش طلب → اكتب البنود في النص كنقاط: **الوصف** — الكمية الوحدة — السعر (والتفاصيل المهمة باختصار). لو أكثر من 8 بنود اعرض "items_card" بدل سردها.
+  • يسأل عن الملفات → "files_card".
+- لا تعيد بطاقة سجل عرضتها في رد سابق من نفس المحادثة (مذكور في السجل «عُرضت بطاقات: …») إلا إذا طلبها صراحة (تحميل، فتح، تعديل، «أرسلها»).
 - أزرار التحميل والتعديل موجودة داخل البطاقات — لا تكتب روابط بنفسك أبداً.
 - ملاحظات الإدارة (admin_notes) والأعمدة المعلّمة «(للإدارة)» مسموحة لهذا المستخدم: أجب عنها عادي إذا سأل، وقل إنها «للإدارة فقط ولا تظهر للعميل».
 - سؤال عن بند معيّن («وش ملاحظة الإدارة على بند…»، «أي عرض فيه…»، «بكم سعّرنا…»): استخدم items_search.
@@ -131,7 +137,7 @@ export function availableTools(profile: Profile, permissions: string[]): AiTool[
 
 const MAX_RESULT_CHARS = 24_000
 export const KAASEB_AI_OPENAI_MODEL = 'gpt-5.4-mini'
-const CARD_KEYS = ['card', 'files_card', 'list_card', 'attachments_card', 'unlock_card']
+const CARD_KEYS = ['card', 'items_card', 'files_card', 'list_card', 'attachments_card', 'unlock_card']
 
 export async function runTurn(input: TurnInput): Promise<TurnResult> {
   const { supabase, user, profile, permissions } = input
@@ -191,14 +197,17 @@ export async function runTurn(input: TurnInput): Promise<TurnResult> {
 }
 
 /** Keep only cards the model referenced (unknown / repeated markers are
- *  dropped). If it referenced none, show what the last data call produced. */
+ *  dropped). Nothing is attached on its own unless the reply has no text. */
 export function placeCards(text: string, cards: Map<string, AiCard>, lastCallRefs: string[]): TurnResult {
   const used: string[] = []
   const clean = text.replace(/\[\[\s*card\s*:\s*([\w-]+)\s*\]\]/gi, (_m, ref: string) => {
     if (cards.has(ref) && !used.includes(ref)) { used.push(ref); return `[[card:${ref}]]` }
     return ''
   }).replace(/\n{3,}/g, '\n\n').trim()
-  const chosen = (used.length ? used : lastCallRefs.slice(0, 3)).map((r) => cards.get(r)).filter((c): c is AiCard => !!c)
+  // Cards appear only where the model placed them. The old fallback (attach the
+  // last call's cards) re-sent the same quote card under every follow-up
+  // question; it now only rescues a reply that has no words at all.
+  const chosen = (used.length ? used : clean ? [] : lastCallRefs.slice(0, 3)).map((r) => cards.get(r)).filter((c): c is AiCard => !!c)
   return { text: clean, cards: chosen }
 }
 
