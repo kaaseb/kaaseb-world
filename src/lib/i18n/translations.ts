@@ -523,6 +523,7 @@ const translations = {
 
   // ─── AI ──────────────────────────────────────────────────────────────────────
   nav_ghassl_ai: { en: 'Kaaseb AI', ar: 'كاسب AI' },
+  nav_campaign: { en: 'Projects campaign', ar: 'حملة المشاريع' },
   ai_title: { en: 'Kaaseb AI', ar: 'كاسب AI' },
   ai_subtitle: { en: 'Your intelligent admin assistant', ar: 'مساعدك الإداري الذكي' },
   ai_hello: { en: 'Hello', ar: 'أهلاً' },

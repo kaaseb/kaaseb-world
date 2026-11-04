@@ -5,6 +5,7 @@ import { usePathname } from 'next/navigation'
 import { cn } from '@/lib/utils'
 import {
   LayoutDashboard,
+  Send,
   Building2,
   CheckSquare,
   Bell,
@@ -97,6 +98,8 @@ export function Sidebar({ profile, permissions, onLock, drawerOpen = false, onDr
     // ─── Removed entirely (App + Washhouses) ────────────────────────────────
   ]
   const navItems = allItems.filter(item => can(item.perm))
+  // Temporary «حملة المشاريع» — super admin only (it emails companies in our name).
+  if (profile.role === 'super_admin') navItems.splice(Math.min(3, navItems.length), 0, { href: '/campaign', icon: Send, label: t('nav_campaign'), perm: 'page.dashboard' })
 
   async function handleSignOut() {
     await supabase.auth.signOut()
