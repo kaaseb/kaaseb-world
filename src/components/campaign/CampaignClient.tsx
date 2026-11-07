@@ -102,6 +102,28 @@ export function CampaignClient() {
     toast.success(`تم إرسال ${ok} من ${queue.length}`)
   }
 
+  const [copying, setCopying] = useState(false)
+  const missingCopies = data ? Object.values(data.sent).filter((r) => r.to.length > 0 && !r.savedToSent).length : 0
+
+  /** File copies of the earlier sends in info@'s «Sent» — sends nothing to anyone. */
+  async function copyOldToSent() {
+    setCopying(true)
+    let filed = 0
+    try {
+      for (let guard = 0; guard < 10; guard++) {
+        const r = await fetch('/api/campaigns/stone-2026/copy-to-sent', { method: 'POST' })
+        const j = await r.json().catch(() => ({}))
+        if (!r.ok) { toast.error(j.error || 'فشل'); break }
+        filed += j.filed || 0
+        if (j.failed) toast.error(`ما انحفظت ${j.failed} — جرّب مرة ثانية`)
+        if (!j.remaining) break
+      }
+      const s = await fetch('/api/campaigns/stone-2026').then((r) => r.json())
+      if (s.sent) setData((d) => (d ? { ...d, sent: s.sent } : d))
+      if (filed) toast.success(`انحفظت ${filed} رسالة في «المرسل»`)
+    } catch { toast.error('انقطع الاتصال') } finally { setCopying(false) }
+  }
+
   if (!data) return <div className="p-10 flex justify-center"><Loader2 className="w-6 h-6 animate-spin text-muted-foreground" /></div>
 
   return (
@@ -163,6 +185,14 @@ export function CampaignClient() {
       {/* 3. companies */}
       <section className="rounded-2xl border bg-card overflow-hidden">
         <p className="text-xs font-semibold text-muted-foreground px-4 pt-4 pb-2">٣. الشركات — إيميل واحد لكل شركة للإيميلات المعلّمة</p>
+        {missingCopies > 0 && (
+          <div className="mx-4 mb-3 rounded-xl border border-amber-300 bg-amber-50 dark:bg-amber-500/10 p-3 flex flex-wrap items-center gap-3">
+            <p className="text-sm flex-1 min-w-48">{missingCopies} رسالة انرسلت وما لها نسخة في «المرسل».</p>
+            <button type="button" onClick={copyOldToSent} disabled={copying || !!sending} className="h-9 px-4 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-sm font-bold inline-flex items-center gap-2 disabled:opacity-50">
+              {copying ? <Loader2 className="w-4 h-4 animate-spin" /> : <Mail className="w-4 h-4" />}حفظها في «المرسل»
+            </button>
+          </div>
+        )}
         <ul className="divide-y">
           {data.targets.map((t) => {
             const s = data.sent[t.id]
@@ -204,7 +234,9 @@ export function CampaignClient() {
                     <p className="text-[11px] text-muted-foreground">
                       {s.response
                         ? <>✓ قبله خادم البريد {s.savedToSent ? '· 📁 محفوظ في المرسل' : '· لم يُحفظ في المرسل'}{s.rejected?.length ? <span className="text-red-600"> · رفض: <bdi>{s.rejected.join('، ')}</bdi></span> : null}</>
-                        : <>أُرسل قبل تحديث الحفظ في «المرسل» — قبله الخادم بدون خطأ، لكن ما فيه نسخة في صندوق المرسل</>}
+                        : s.savedToSent
+                          ? <>✓ قبله الخادم بدون خطأ · 📁 نسخته محفوظة في المرسل</>
+                          : <>✓ قبله الخادم بدون خطأ · ما له نسخة في المرسل بعد</>}
                     </p>
                   )}
                 </div>

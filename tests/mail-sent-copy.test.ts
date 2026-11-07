@@ -6,7 +6,7 @@ import MailComposer from 'nodemailer/lib/mail-composer'
 import { pickSentFolder } from '@/lib/outreach/transport'
 
 test('the Sent folder is found by its server flag, else by its usual name', () => {
-  assert.equal(pickSentFolder([{ path: 'INBOX', name: 'INBOX' }, { path: 'Sent Items', name: 'Sent Items', specialUse: '\Sent' }]), 'Sent Items')
+  assert.equal(pickSentFolder([{ path: 'INBOX', name: 'INBOX' }, { path: 'Sent Items', name: 'Sent Items', specialUse: '\\Sent' }]), 'Sent Items')
   assert.equal(pickSentFolder([{ path: 'INBOX', name: 'INBOX' }, { path: 'Sent', name: 'Sent' }]), 'Sent')
   assert.equal(pickSentFolder([{ path: 'INBOX', name: 'INBOX' }, { path: 'Drafts', name: 'Drafts' }]), null)
 })

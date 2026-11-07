@@ -8,6 +8,8 @@ export interface SentRecord {
   at: string; by: string; to: string[]; attached: boolean
   /** Proof from the mail server (absent on records from before this was kept). */
   response?: string; rejected?: string[]; messageId?: string; savedToSent?: boolean
+  /** The Sent copy was filed later (rebuilt from the saved campaign message). */
+  copiedLater?: string
 }
 export interface FailRecord { at: string; error: string }
 
@@ -46,6 +48,21 @@ export async function claimTarget(id: string, by: string): Promise<boolean> {
 
 export async function finishTarget(id: string, rec: SentRecord): Promise<void> {
   await mutateJson<CampaignState>(KEY, EMPTY, (cur) => ({ ...EMPTY, ...cur, sent: { ...(cur?.sent || {}), [id]: rec } }))
+}
+
+/** Old sends with no copy in «Sent» (finished ones only — `to` empty = still sending). */
+export function missingSentCopies(s: CampaignState): string[] {
+  return Object.entries(s.sent).filter(([, r]) => r.to.length > 0 && !r.savedToSent).map(([id]) => id)
+}
+
+export async function markCopied(ids: string[]): Promise<void> {
+  if (!ids.length) return
+  const at = new Date().toISOString()
+  await mutateJson<CampaignState>(KEY, EMPTY, (cur) => {
+    const sent = { ...(cur?.sent || {}) }
+    for (const id of ids) if (sent[id]) sent[id] = { ...sent[id], savedToSent: true, copiedLater: at }
+    return { ...EMPTY, ...cur, sent }
+  })
 }
 
 /** The send failed: release the claim and remember why (it can be retried). */

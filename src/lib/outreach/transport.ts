@@ -127,20 +127,48 @@ export function pickSentFolder(boxes: Array<{ path: string; name: string; specia
   return named ? named.path : null
 }
 
-async function appendToSent(imap: { host: string; port: number; user: string; pass: string }, raw: Buffer): Promise<boolean> {
+type ImapLogin = { host: string; port: number; user: string; pass: string }
+
+/** File raw messages in Sent over ONE connection; true/false per message, in order. */
+async function appendToSent(imap: ImapLogin, items: Array<{ raw: Buffer; date: Date }>): Promise<boolean[]> {
   const client = new ImapFlow({
     host: imap.host, port: imap.port, secure: true,
     auth: { user: imap.user, pass: imap.pass }, logger: false,
     greetingTimeout: 15_000, socketTimeout: 30_000,
   })
+  const out = items.map(() => false)
   try {
     await client.connect()
     const folder = pickSentFolder(await client.list())
-    if (!folder) { console.error('[mail] no Sent folder found — copy not saved'); return false }
-    return !!(await client.append(folder, raw, ['\\Seen'], new Date()))
+    if (!folder) { console.error('[mail] no Sent folder found — copy not saved'); return out }
+    for (let i = 0; i < items.length; i++) {
+      try { out[i] = !!(await client.append(folder, items[i].raw, ['\\Seen'], items[i].date)) }
+      catch (e) { console.error('[mail] Sent append failed:', e instanceof Error ? e.message : e) }
+    }
+    return out
   } finally {
     await client.logout().catch(() => {})
   }
+}
+
+/** Titan login for IMAP, or null when Titan isn't the sending mailbox. */
+async function titanImap(): Promise<(ImapLogin & { from: string }) | null> {
+  const titan = await getTitanSettings()
+  const pass = titan.enabled && titan.email ? decryptTitanPassword(titan) : null
+  if (!titan.enabled || !titan.email || !pass) return null
+  return { host: titan.host, port: titan.port, user: titan.email, pass, from: `"KAASEB" <${titan.email}>` }
+}
+
+/**
+ * File copies of messages that were ALREADY delivered (before copies were kept)
+ * in «Sent», each with its original date. Sends nothing to anyone.
+ */
+export async function fileCopiesInSent(build: (from: string) => Promise<Array<nodemailer.SendMailOptions & { date: Date }>>): Promise<boolean[]> {
+  const imap = await titanImap()
+  if (!imap) throw new Error('بريد Titan غير مفعّل — ما فيه صندوق «مرسل» نحفظ فيه')
+  const msgs = await build(imap.from)
+  const items = await Promise.all(msgs.map(async (m) => ({ raw: await new MailComposer(m).compile().build(), date: m.date })))
+  return appendToSent(imap, items)
 }
 
 export interface SentInfo extends SMTPTransport.SentMessageInfo {
@@ -148,7 +176,7 @@ export interface SentInfo extends SMTPTransport.SentMessageInfo {
   savedToSent?: boolean
 }
 
-function withSentCopy(t: MailTransport, imap: { host: string; port: number; user: string; pass: string }): MailTransport {
+function withSentCopy(t: MailTransport, imap: ImapLogin): MailTransport {
   const domain = imap.user.split('@')[1] || 'kaaseb.sa'
   return {
     verify: t.verify,
@@ -160,7 +188,7 @@ function withSentCopy(t: MailTransport, imap: { host: string; port: number; user
       try {
         const raw = await new MailComposer(m).compile().build()
         info.savedToSent = await Promise.race([
-          appendToSent(imap, raw),
+          appendToSent(imap, [{ raw, date: m.date as Date }]).then((r) => r[0]),
           new Promise<boolean>((r) => setTimeout(() => r(false), 25_000)),
         ])
       } catch (e) {

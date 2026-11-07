@@ -78,28 +78,25 @@ export interface OutreachResult {
   savedToSent: boolean
 }
 
+/** The profile as an attachment, or [] — a missing profile never blocks a message. */
+export async function profileAttachment(url?: string | null, name?: string | null): Promise<Array<{ filename: string; content: Buffer }>> {
+  if (!url) return []
+  try {
+    const res = await fetchAppOwned(url)
+    if (!res.ok) return []
+    const buf = Buffer.from(await res.arrayBuffer())
+    if (buf.byteLength > 0 && buf.byteLength <= MAX_ATTACHMENT_BYTES) return [{ filename: name || 'Company-Profile.pdf', content: buf }]
+  } catch {
+    // reported back as `attached: false` so the UI can warn
+  }
+  return []
+}
+
 export async function sendOutreachEmail(input: SendOutreachInput): Promise<OutreachResult> {
   const recipients = normalizeRecipients(input.to)
   if (recipients.length === 0) throw new Error('ما فيه عنوان بريد صالح')
 
-  const attachments: Array<{ filename: string; content: Buffer }> = []
-  if (input.profileUrl) {
-    try {
-      const res = await fetchAppOwned(input.profileUrl)
-      if (res.ok) {
-        const buf = Buffer.from(await res.arrayBuffer())
-        if (buf.byteLength > 0 && buf.byteLength <= MAX_ATTACHMENT_BYTES) {
-          attachments.push({
-            filename: input.profileName || 'Company-Profile.pdf',
-            content: buf,
-          })
-        }
-      }
-    } catch {
-      // A missing profile must not block the message — we report `attached`
-      // back so the UI can warn instead of silently sending a bare email.
-    }
-  }
+  const attachments = await profileAttachment(input.profileUrl, input.profileName)
 
   const mailer = await resolveMailer()
   const info = await mailer.transport.sendMail({

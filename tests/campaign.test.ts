@@ -4,6 +4,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { TARGETS, DEFAULT_SUBJECT, DEFAULT_BODY, varsFor, fill, hasUnfilled } from '@/lib/campaigns/stone-2026'
 import { isEmail } from '@/lib/outreach/send'
+import { missingSentCopies } from '@/lib/campaigns/store'
 
 test('every address is valid and no company appears twice', () => {
   const ids = new Set<string>()
@@ -40,4 +41,18 @@ test('the message says KAASEB belongs to Abraj Al-Asima and that its profile is 
 test('an unknown placeholder is left visible so the send is refused', () => {
   const out = fill('Hi {{nme}}', varsFor(TARGETS[0]))
   assert.ok(hasUnfilled(out))
+})
+
+test('only finished old sends are filed in «Sent» — never one still sending, never twice', () => {
+  const at = '2026-11-01T10:00:00Z'
+  const s = {
+    subject: null, body: null, failed: {},
+    sent: {
+      old: { at, by: 'x', to: ['a@b.com'], attached: true },
+      sending: { at, by: 'x', to: [], attached: false },
+      copied: { at, by: 'x', to: ['c@d.com'], attached: true, savedToSent: true },
+      fresh: { at, by: 'x', to: ['e@f.com'], attached: true, response: '250 ok', savedToSent: false },
+    },
+  }
+  assert.deepEqual(missingSentCopies(s).sort(), ['fresh', 'old'])
 })
