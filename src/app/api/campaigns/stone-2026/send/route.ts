@@ -15,7 +15,7 @@ import { getCampaignState, claimTarget, finishTarget, failTarget } from '@/lib/c
 import { TARGETS, DEFAULT_SUBJECT, DEFAULT_BODY, varsFor, fill, hasUnfilled } from '@/lib/campaigns/stone-2026'
 import { getOutreachTemplate } from '@/lib/outreach/store'
 import { sendOutreachEmail } from '@/lib/outreach/send'
-import { explainMailError } from '@/lib/outreach/transport'
+import { explainMailError, resolveMailer } from '@/lib/outreach/transport'
 import { fetchAppOwned } from '@/lib/s3'
 
 export const runtime = 'nodejs'
@@ -27,7 +27,7 @@ export async function POST(request: Request) {
   const a = await campaignAccess()
   if ('error' in a) return a.error
 
-  let body: { targetId?: unknown; emails?: unknown }
+  let body: { targetId?: unknown; emails?: unknown; test?: unknown }
   try { body = await request.json() } catch { return NextResponse.json({ error: 'Bad JSON' }, { status: 400 }) }
   const target = TARGETS.find((t) => t.id === body.targetId)
   if (!target) return NextResponse.json({ error: 'شركة غير موجودة في الحملة' }, { status: 404 })
@@ -39,7 +39,6 @@ export async function POST(request: Request) {
   if (!to.length) return NextResponse.json({ error: 'اختر إيميل واحد على الأقل لهذه الشركة' }, { status: 400 })
 
   const [state, tpl] = await Promise.all([getCampaignState(), getOutreachTemplate()])
-  if (state.sent[target.id]) return NextResponse.json({ error: 'تم الإرسال لهذه الشركة من قبل', alreadySent: true }, { status: 409 })
 
   if (!tpl.profileUrl) return NextResponse.json({ error: 'البروفايل غير مرفوع — ارفعه من الإعدادات ← التواصل' }, { status: 400 })
   try {
@@ -55,12 +54,36 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'في الرسالة متغيّر غير معروف بين {{ }} — صحّحه قبل الإرسال' }, { status: 400 })
   }
 
+  // «نسخة لبريدنا»: the exact email this company gets, to our own mailbox only.
+  // Never marks the company as sent.
+  if (body.test === true) {
+    try {
+      const mailer = await resolveMailer()
+      const self = mailer.replyToDefault
+      if (!self) return NextResponse.json({ error: 'بريد الشركة غير مضبوط (Titan)' }, { status: 400 })
+      const res = await sendOutreachEmail({ to: [self], subject: `[نسخة تجريبية] ${subject}`, body: text, profileUrl: tpl.profileUrl, profileName: tpl.profileName })
+      return NextResponse.json({ ok: true, test: true, to: self, response: res.response, savedToSent: res.savedToSent })
+    } catch (e) {
+      return NextResponse.json({ error: `تعذّر الإرسال: ${explainMailError(e)}` }, { status: 502 })
+    }
+  }
+
+  if (state.sent[target.id]) return NextResponse.json({ error: 'تم الإرسال لهذه الشركة من قبل', alreadySent: true }, { status: 409 })
   if (!(await claimTarget(target.id, a.name))) {
     return NextResponse.json({ error: 'تم الإرسال لهذه الشركة من قبل', alreadySent: true }, { status: 409 })
   }
   try {
     const res = await sendOutreachEmail({ to, subject, body: text, profileUrl: tpl.profileUrl, profileName: tpl.profileName, replyTo: a.email })
-    const rec = { at: new Date().toISOString(), by: a.name, to, attached: res.attached }
+    // The server answered but refused every address → not sent (can be retried).
+    if (res.accepted.length === 0 && res.rejected.length > 0) {
+      const why = `خادم البريد رفض العناوين: ${res.rejected.join('، ')} (${res.response})`
+      await failTarget(target.id, why)
+      return NextResponse.json({ error: why }, { status: 502 })
+    }
+    const rec = {
+      at: new Date().toISOString(), by: a.name, to, attached: res.attached,
+      response: res.response.slice(0, 200), rejected: res.rejected, messageId: res.messageId, savedToSent: res.savedToSent,
+    }
     await finishTarget(target.id, rec)
     const supabase = await createClient()
     await serverAudit({ user: { id: a.userId, email: a.email ?? undefined }, supabase, action: 'edit', objectType: 'campaign', objectName: `حملة المشاريع → ${target.company_ar} (${to.join('، ')})`, objectId: target.id }).catch(() => {})

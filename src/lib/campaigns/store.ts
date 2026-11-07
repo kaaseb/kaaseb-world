@@ -4,7 +4,11 @@
 import { readJson, mutateJson } from '@/lib/s3'
 import { CAMPAIGN_ID } from './stone-2026'
 
-export interface SentRecord { at: string; by: string; to: string[]; attached: boolean }
+export interface SentRecord {
+  at: string; by: string; to: string[]; attached: boolean
+  /** Proof from the mail server (absent on records from before this was kept). */
+  response?: string; rejected?: string[]; messageId?: string; savedToSent?: boolean
+}
 export interface FailRecord { at: string; error: string }
 
 export interface CampaignState {

@@ -68,7 +68,17 @@ export interface SendOutreachInput {
   replyTo?: string | null
 }
 
-export async function sendOutreachEmail(input: SendOutreachInput): Promise<{ attached: boolean }> {
+export interface OutreachResult {
+  attached: boolean
+  /** The mail server's own answer, e.g. "250 2.0.0 Ok: queued" — proof it was accepted. */
+  response: string
+  accepted: string[]
+  rejected: string[]
+  messageId: string
+  savedToSent: boolean
+}
+
+export async function sendOutreachEmail(input: SendOutreachInput): Promise<OutreachResult> {
   const recipients = normalizeRecipients(input.to)
   if (recipients.length === 0) throw new Error('ما فيه عنوان بريد صالح')
 
@@ -92,7 +102,7 @@ export async function sendOutreachEmail(input: SendOutreachInput): Promise<{ att
   }
 
   const mailer = await resolveMailer()
-  await mailer.transport.sendMail({
+  const info = await mailer.transport.sendMail({
     from: mailer.from,
     // All recipients belong to the SAME record (one company's desks), so a
     // shared To: is expected here and doesn't leak anyone to a stranger.
@@ -104,5 +114,13 @@ export async function sendOutreachEmail(input: SendOutreachInput): Promise<{ att
     attachments,
   })
 
-  return { attached: attachments.length > 0 }
+  const list = (v: unknown) => (Array.isArray(v) ? v.map((x) => (typeof x === 'string' ? x : String((x as { address?: string })?.address || ''))).filter(Boolean) : [])
+  return {
+    attached: attachments.length > 0,
+    response: String(info.response || ''),
+    accepted: list(info.accepted),
+    rejected: list(info.rejected),
+    messageId: String(info.messageId || ''),
+    savedToSent: !!info.savedToSent,
+  }
 }

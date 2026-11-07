@@ -28,6 +28,19 @@ export function CampaignClient() {
   const [picked, setPicked] = useState<Record<string, string[]>>({})
   const [previewId, setPreviewId] = useState<string>('')
   const [sending, setSending] = useState<{ done: number; total: number; current: string } | null>(null)
+  const [testing, setTesting] = useState<string | null>(null)
+
+  /** The exact email this company gets, to our own mailbox — not counted as sent. */
+  async function sendTest(t: CampaignTarget) {
+    setTesting(t.id)
+    try {
+      await saveText(subject, body)
+      const r = await fetch('/api/campaigns/stone-2026/send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ targetId: t.id, emails: t.emails.map((e) => e.email), test: true }) })
+      const j = await r.json().catch(() => ({}))
+      if (r.ok) toast.success(`وصلت نسخة على ${j.to}${j.savedToSent ? ' وانحفظت في المرسل' : ''}`)
+      else toast.error(j.error || 'فشل')
+    } catch { toast.error('انقطع الاتصال') } finally { setTesting(null) }
+  }
 
   useEffect(() => {
     fetch('/api/campaigns/stone-2026').then((r) => r.json()).then((j: Data & { error?: string }) => {
@@ -167,6 +180,9 @@ export function CampaignClient() {
                     <span className="text-[11px] font-semibold rounded-full px-2 py-0.5 bg-red-50 text-red-700 dark:bg-red-500/10 dark:text-red-300" title={f.error}>فشل</span>
                   ) : null}
                   <button type="button" onClick={() => { setPreviewId(t.id); window.scrollTo({ top: 0, behavior: 'smooth' }) }} className="text-[11px] text-blue-600 hover:underline whitespace-nowrap">معاينة</button>
+                  <button type="button" onClick={() => sendTest(t)} disabled={!!testing || !!sending || !data.profile.ok} className="text-[11px] text-blue-600 hover:underline whitespace-nowrap disabled:opacity-40">
+                    {testing === t.id ? 'يرسل…' : 'نسخة لبريدنا'}
+                  </button>
                 </div>
                 <div className="mt-2 flex flex-col gap-1.5">
                   {t.emails.map((e) => {
@@ -183,6 +199,14 @@ export function CampaignClient() {
                     )
                   })}
                   {f && !s && <p className="text-[11px] text-red-600">{f.error}</p>}
+                  {s && (
+                    // Proof: what the mail server answered, and whether a copy is in «Sent».
+                    <p className="text-[11px] text-muted-foreground">
+                      {s.response
+                        ? <>✓ قبله خادم البريد {s.savedToSent ? '· 📁 محفوظ في المرسل' : '· لم يُحفظ في المرسل'}{s.rejected?.length ? <span className="text-red-600"> · رفض: <bdi>{s.rejected.join('، ')}</bdi></span> : null}</>
+                        : <>أُرسل قبل تحديث الحفظ في «المرسل» — قبله الخادم بدون خطأ، لكن ما فيه نسخة في صندوق المرسل</>}
+                    </p>
+                  )}
                 </div>
               </li>
             )

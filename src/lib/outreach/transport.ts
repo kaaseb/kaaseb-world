@@ -25,6 +25,9 @@
 //   3. neither → a clear Arabic error telling the owner exactly what to set.
 
 import nodemailer from 'nodemailer'
+import MailComposer from 'nodemailer/lib/mail-composer'
+import { ImapFlow } from 'imapflow'
+import { randomBytes } from 'node:crypto'
 import type SMTPTransport from 'nodemailer/lib/smtp-transport'
 import { getTransport as getEnvTransport, getFromAddress as getEnvFrom } from '@/lib/email/client'
 import { getTitanSettings, decryptTitanPassword } from '@/lib/integrations/titan'
@@ -38,7 +41,7 @@ function titanSmtpHost(imapHost: string): string {
 
 /** The narrow surface every caller uses. */
 export interface MailTransport {
-  sendMail: (msg: nodemailer.SendMailOptions) => Promise<SMTPTransport.SentMessageInfo>
+  sendMail: (msg: nodemailer.SendMailOptions) => Promise<SentInfo>
   verify: () => Promise<true>
 }
 
@@ -110,6 +113,65 @@ function robust(primary: nodemailer.Transporter, fallback: nodemailer.Transporte
   }
 }
 
+// ── a copy in the mailbox's «Sent» folder ───────────────────────────────────
+// SMTP only DELIVERS a message; it never files a copy. Without this, everything
+// the platform sent (campaign, replies, quotations) was invisible in Titan's
+// Sent folder — "nothing was sent" — even when it had been delivered. Every
+// Titan send now appends the exact same message (same Message-ID) to Sent.
+
+/** The Sent folder: the server's \Sent flag first, then the usual names. */
+export function pickSentFolder(boxes: Array<{ path: string; name: string; specialUse?: string }>): string | null {
+  const flagged = boxes.find((b) => b.specialUse === '\\Sent')
+  if (flagged) return flagged.path
+  const named = boxes.find((b) => /^(sent|sent items|sent messages|sent mail|المرسل|البريد المرسل)$/i.test(b.name))
+  return named ? named.path : null
+}
+
+async function appendToSent(imap: { host: string; port: number; user: string; pass: string }, raw: Buffer): Promise<boolean> {
+  const client = new ImapFlow({
+    host: imap.host, port: imap.port, secure: true,
+    auth: { user: imap.user, pass: imap.pass }, logger: false,
+    greetingTimeout: 15_000, socketTimeout: 30_000,
+  })
+  try {
+    await client.connect()
+    const folder = pickSentFolder(await client.list())
+    if (!folder) { console.error('[mail] no Sent folder found — copy not saved'); return false }
+    return !!(await client.append(folder, raw, ['\\Seen'], new Date()))
+  } finally {
+    await client.logout().catch(() => {})
+  }
+}
+
+export interface SentInfo extends SMTPTransport.SentMessageInfo {
+  /** A copy was filed in the mailbox's Sent folder. */
+  savedToSent?: boolean
+}
+
+function withSentCopy(t: MailTransport, imap: { host: string; port: number; user: string; pass: string }): MailTransport {
+  const domain = imap.user.split('@')[1] || 'kaaseb.sa'
+  return {
+    verify: t.verify,
+    sendMail: async (msg) => {
+      // One fixed Message-ID + Date for the delivered message AND its Sent copy.
+      const m: nodemailer.SendMailOptions = { ...msg, messageId: msg.messageId || `<${randomBytes(12).toString('hex')}@${domain}>`, date: msg.date || new Date() }
+      const info: SentInfo = await t.sendMail(m)
+      // Delivery already succeeded: a failed copy must never turn it into an error.
+      try {
+        const raw = await new MailComposer(m).compile().build()
+        info.savedToSent = await Promise.race([
+          appendToSent(imap, raw),
+          new Promise<boolean>((r) => setTimeout(() => r(false), 25_000)),
+        ])
+      } catch (e) {
+        console.error('[mail] saving the Sent copy failed:', e instanceof Error ? e.message : e)
+        info.savedToSent = false
+      }
+      return info
+    },
+  }
+}
+
 export async function resolveMailer(): Promise<ResolvedMailer> {
   const titan = await getTitanSettings()
   const pass = titan.enabled && titan.email ? decryptTitanPassword(titan) : null
@@ -128,7 +190,7 @@ export async function resolveMailer(): Promise<ResolvedMailer> {
       }
     }
     return {
-      transport: robust(cached.primary, cached.fallback),
+      transport: withSentCopy(robust(cached.primary, cached.fallback), { host: titan.host, port: titan.port, user: titan.email, pass }),
       // From MUST be the authenticated mailbox or Titan rejects the send.
       from: `"KAASEB" <${titan.email}>`,
       replyToDefault: titan.email,
