@@ -16,6 +16,8 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { verifyOrigin } from '@/lib/csrf'
+import { hasPermission } from '@/lib/permissions'
+import { getProfileOrFallback, getEffectivePermissions } from '@/lib/profile'
 import { applyMarbleToScene } from '@/lib/ai/image'
 import { getProductImages } from '@/lib/tannoor/product-images'
 import { uploadBufferToS3 } from '@/lib/s3'
@@ -85,6 +87,12 @@ export async function POST(request: Request) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
+  // The tunnel's permission is the gate (renders cost money) — same check as the page.
+  const me = await getProfileOrFallback(supabase, user)
+  if (!hasPermission(me, await getEffectivePermissions(supabase, me), 'page.visualize')) {
+    return NextResponse.json({ error: 'ما عندك صلاحية النفق السحري' }, { status: 403 })
+  }
+
   let body: {
     sceneUrl?: string
     mode?: 'surface' | 'place'
@@ -115,15 +123,10 @@ export async function POST(request: Request) {
       ? body.quality
       : 'high'
 
-  // Cost gate — the REAL one. OpenAI image generation is super-admin only; this
-  // is enforced here on the server, so a direct API call with provider:'openai'
-  // can't bypass it (the client lock is only a matching UI hint). Everyone else
-  // uses the free Gemini default.
+  // OpenAI is open to everyone who can use the tunnel (owner's decision,
+  // 2026-11-09) — access to the tunnel itself is the gate.
   const { data: profile } = await supabase
     .from('profiles').select('full_name, role').eq('id', user.id).maybeSingle()
-  if (provider === 'openai' && profile?.role !== 'super_admin') {
-    return NextResponse.json({ error: 'محرك OpenAI متاح للمدير فقط (تحكّم بالتكلفة) — استخدم Gemini.' }, { status: 403 })
-  }
 
   // Resolve the product image up-front (catalog URL / quick upload / productId).
   let productUrl = body.productImageUrl || ''

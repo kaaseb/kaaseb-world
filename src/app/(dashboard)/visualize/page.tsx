@@ -29,7 +29,5 @@ export default async function VisualizePage() {
     topProductIds(5),
   ])
 
-  const isSuperAdmin = profile.role === 'super_admin'
-
-  return <VisualizeClient products={products || []} images={images} topProductIds={topIds} isSuperAdmin={isSuperAdmin} />
+  return <VisualizeClient products={products || []} images={images} topProductIds={topIds} />
 }

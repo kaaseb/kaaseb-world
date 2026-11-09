@@ -43,7 +43,6 @@ interface Props {
   topProductIds: string[]
   // OpenAI (paid) engine is gated to the super admin — this drives the UI; the
   // server enforces the same rule so it can't be bypassed.
-  isSuperAdmin: boolean
 }
 
 const SURFACES = [
@@ -64,7 +63,7 @@ function pick(en: string | null, ar: string | null, isRtl: boolean): string {
 
 const TOP_N = 5
 
-export function VisualizeClient({ products, images, topProductIds, isSuperAdmin }: Props) {
+export function VisualizeClient({ products, images, topProductIds }: Props) {
   const { isRtl, lang } = useLanguage()
   const ar = lang === 'ar'
 
@@ -90,22 +89,13 @@ export function VisualizeClient({ products, images, topProductIds, isSuperAdmin 
   const [notes, setNotes] = useState('')
 
   // Engine (per render) — provider/model/quality, to control cost.
-  // OpenAI (paid, gpt-image-2.6-sunburst) is the default for whoever may use it;
-  // everyone else starts on Gemini.
-  const startProvider: ImageProvider = isSuperAdmin ? 'openai' : DEFAULT_PROVIDER
-  const [provider, setProvider] = useState<ImageProvider>(startProvider)
-  const [model, setModel] = useState<string>(defaultModelFor(startProvider))
+  const [provider, setProvider] = useState<ImageProvider>(DEFAULT_PROVIDER)
+  const [model, setModel] = useState<string>(defaultModelFor(DEFAULT_PROVIDER))
   const [quality, setQuality] = useState<'low' | 'medium' | 'high'>('high')
   const [imageModels, setImageModels] = useState<{ openai: string[]; gemini: string[] }>({ openai: [], gemini: [] })
   const providerInfo = IMAGE_PROVIDERS[provider]
 
   function changeProvider(p: ImageProvider) {
-    // OpenAI (paid) is super-admin only — enforced on the server; this is just
-    // the matching UI. Gemini stays the free default for everyone.
-    if (p === 'openai' && !isSuperAdmin) {
-      toast.error(ar ? 'محرك OpenAI متاح للمدير فقط' : 'OpenAI is available to the admin only')
-      return
-    }
     setProvider(p)
     setModel(defaultModelFor(p)) // reset to that provider's default model
   }
@@ -445,7 +435,7 @@ export function VisualizeClient({ products, images, topProductIds, isSuperAdmin 
                 {(Object.keys(IMAGE_PROVIDERS) as ImageProvider[]).map(p => (
                   <button key={p} type="button" onClick={() => changeProvider(p)}
                     className={['flex-1 px-2.5 py-1.5 rounded-md transition', provider === p ? 'bg-indigo-600 text-white' : 'text-muted-foreground hover:bg-muted'].join(' ')}>
-                    {IMAGE_PROVIDERS[p].label}{p === 'openai' && !isSuperAdmin ? ' 🔒' : ''}
+                    {IMAGE_PROVIDERS[p].label}
                   </button>
                 ))}
               </div>
@@ -457,11 +447,6 @@ export function VisualizeClient({ products, images, topProductIds, isSuperAdmin 
               </select>
             </div>
 
-            {!isSuperAdmin && (
-              <p className="text-xs text-muted-foreground">
-                {ar ? '🔒 محرك OpenAI متاح للمدير فقط — Gemini مجاني للجميع.' : '🔒 OpenAI engine is admin-only — Gemini is free for everyone.'}
-              </p>
-            )}
             {providerInfo.qualities.length > 0 && (
               <select value={quality} onChange={e => setQuality(e.target.value as 'low' | 'medium' | 'high')}
                 className="w-full h-9 bg-background border border-input rounded-md text-sm px-2">

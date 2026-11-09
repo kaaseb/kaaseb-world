@@ -46,8 +46,9 @@ export const IMAGE_PROVIDERS: Record<ImageProvider, ImageProviderInfo> = {
   },
 }
 
-// Cheapest default everywhere — the owner wants the tunnel to lean on Gemini.
-export const DEFAULT_PROVIDER: ImageProvider = 'gemini'
+// Owner's choice (2026-11-09): OpenAI gpt-image-2.6-sunburst for everyone who
+// can use the tunnel; Gemini stays selectable.
+export const DEFAULT_PROVIDER: ImageProvider = 'openai'
 
 export function isValidProvider(p: unknown): p is ImageProvider {
   return p === 'openai' || p === 'gemini'
