@@ -34,12 +34,15 @@ export const IMAGE_PROVIDERS: Record<ImageProvider, ImageProviderInfo> = {
     label: 'OpenAI',
     note: '',
     models: [
+      // 2.6 Sunburst = the detailed variant (closest to Nano Banana Pro); Flare = faster, same price.
+      { id: 'gpt-image-2.6-sunburst', label: 'gpt-image-2.6-sunburst' },
+      { id: 'gpt-image-2.6-flare', label: 'gpt-image-2.6-flare' },
       { id: 'gpt-image-2', label: 'gpt-image-2' },
       { id: 'gpt-image-1.5', label: 'gpt-image-1.5' },
       { id: 'gpt-image-1', label: 'gpt-image-1' },
     ],
     qualities: ['low', 'medium', 'high'],
-    defaultModel: 'gpt-image-1',
+    defaultModel: 'gpt-image-2.6-sunburst',
   },
 }
 

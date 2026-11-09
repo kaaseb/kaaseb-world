@@ -15,7 +15,7 @@ import { GoogleGenAI } from '@google/genai'
 import { getOpenAiKey, getGeminiKey } from './config'
 import type { ImageProvider, ImageQuality } from './image-models'
 
-const OPENAI_DEFAULT_MODEL = process.env.OPENAI_IMAGE_MODEL || 'gpt-image-1'
+const OPENAI_DEFAULT_MODEL = process.env.OPENAI_IMAGE_MODEL || 'gpt-image-2.6-sunburst'
 
 // Only gpt-image-1 / gpt-image-1.5 accept input_fidelity (gpt-image-2 rejects it
 // — it is high-fidelity by default). Gate it, and retry without it on reject.
