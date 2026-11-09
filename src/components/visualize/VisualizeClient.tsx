@@ -90,8 +90,11 @@ export function VisualizeClient({ products, images, topProductIds, isSuperAdmin 
   const [notes, setNotes] = useState('')
 
   // Engine (per render) — provider/model/quality, to control cost.
-  const [provider, setProvider] = useState<ImageProvider>(DEFAULT_PROVIDER)
-  const [model, setModel] = useState<string>(defaultModelFor(DEFAULT_PROVIDER))
+  // OpenAI (paid, gpt-image-2.6-sunburst) is the default for whoever may use it;
+  // everyone else starts on Gemini.
+  const startProvider: ImageProvider = isSuperAdmin ? 'openai' : DEFAULT_PROVIDER
+  const [provider, setProvider] = useState<ImageProvider>(startProvider)
+  const [model, setModel] = useState<string>(defaultModelFor(startProvider))
   const [quality, setQuality] = useState<'low' | 'medium' | 'high'>('high')
   const [imageModels, setImageModels] = useState<{ openai: string[]; gemini: string[] }>({ openai: [], gemini: [] })
   const providerInfo = IMAGE_PROVIDERS[provider]
